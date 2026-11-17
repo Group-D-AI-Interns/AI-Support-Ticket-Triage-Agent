@@ -929,7 +929,7 @@ Phases are ordered by dependency. Within a phase, the five owners can work in pa
 - Assignment/team scope and ticket history/audit integration.
 
 **Implementation steps:**
-1. Define ticket DTOs and status/priority values from approved project requirements; do not invent unsupported status transitions.
+1. Define ticket DTOs and take internal status values, allowed transitions and role restrictions from tenant workflow configuration; require organisation-admin approval before activation and never infer transitions.
 2. Implement ticket creation with title, description and supported requester/product/service fields.
 3. Derive organisation from authenticated tenant context.
 4. Verify requester permission and team/resource scope.

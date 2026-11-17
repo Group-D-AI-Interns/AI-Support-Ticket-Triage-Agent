@@ -55,11 +55,17 @@
 | GET/POST | `/sla-policies` | List/create SLA policies |
 | POST | `/sla-policies/:id/activate` | Activate approved SLA version |
 | GET | `/sla/evaluations` | Query SLA evaluations |
+| GET/POST | `/ticket-workflows` | List tenant workflows / create a draft workflow configuration |
+| GET | `/ticket-workflows/active` | Read the active tenant ticket workflow |
+| POST | `/ticket-workflows/:workflowId/approve` | Approve and activate a draft ticket workflow |
 | POST | `/tickets` | Create ticket |
 | POST | `/tickets/ingest/jira/{webhookSecret}` | Ingest Jira Cloud issue-created/issue-updated webhooks |
 | GET | `/tickets` | Search/filter/paginate tickets |
 | GET | `/tickets/:id` | Ticket details |
 | PATCH | `/tickets/:id` | Update permitted ticket fields |
+| PATCH | `/tickets/:id/status` | Apply an approved tenant workflow transition |
+| POST | `/tickets/:id/reopen-requests` | Request reopening of an eligible resolved ticket |
+| POST | `/tickets/:id/reopen-requests/:requestId/approve` | Approve a pending reopen request |
 | POST | `/tickets/:id/comments` | Add comment |
 | GET | `/tickets/:id/comments` | Retrieve comments visible to the caller |
 | POST | `/tickets/:id/analyze` | Start AI triage |
@@ -117,7 +123,7 @@ The server derives both organisation and requester from the authenticated contex
 
 ## 4. Jira Cloud webhook ingestion
 
-The Jira Cloud webhook endpoint is `POST /api/v1/tickets/ingest/jira/{webhookSecret}`. For this initial implementation, configure a Jira issue-created and issue-updated webhook and use a high-entropy per-organisation secret in the HTTPS URL path. Jira's standard admin webhook does not send a configurable custom header. Redact the secret path from gateway and application access logs, rotate it if exposed, and do not enable Uvicorn access logging in production.
+The Jira Cloud webhook endpoint is `POST /api/v1/tickets/ingest/jira/{webhookSecret}`. For this initial implementation, configure a Jira issue-created and issue-updated webhook and use a high-entropy per-organisation secret in the HTTPS URL path. Jira's standard admin webhook does not send a configurable custom header. Redact the secret path from gateway and application access logs and rotate it if exposed.
 
 The endpoint resolves the organisation using the configured Jira project-key mapping, then verifies the URL secret and resolves the reporter using the configured Jira `accountId` mapping. It ignores any organisation ID supplied in the webhook body. Until admin configuration APIs are available, configure these mappings through `JIRA_TENANT_CONFIG`. The mapped requester ID is trusted configuration.
 
@@ -137,16 +143,17 @@ The endpoint resolves the organisation using the configured Jira project-key map
 }
 ```
 
-For a local Postman run from PowerShell, set the configuration and start the API from the repository root:
+For a local Postman run from PowerShell at the repository root, set the configuration and start the Node.js API:
 
 ```powershell
 $env:JIRA_TENANT_CONFIG = '{"projectMappings":{"SUP":"org_support"},"organisations":{"org_support":{"webhookSecret":"replace-with-a-random-secret-at-least-32-characters","reporterMappings":{"jira-account-abc":"user_123"}}}}'
 $env:DATA_DIRECTORY = ".local-data"
-python -m pip install -r backend/requirements.txt
-python -m uvicorn src.main:app --app-dir backend --port 8000 --no-access-log
+Set-Location (Join-Path (git rev-parse --show-toplevel) "backend")
+npm install
 ```
 
 Replace the example secret and reporter account mapping with values from the Jira tenant. Keep the secret out of source control and redact it from all request-path logs.
+From this `backend` directory, run `npm start` to test Jira ingestion. To use the authenticated ticket endpoints below, stop the server with `Ctrl+C`, configure the development principal, then restart it.
 
 ### Postman request
 
@@ -215,10 +222,10 @@ Jira status and priority are retained verbatim in source metadata; they are not 
 
 The approved identity and tenant middleware is not yet in this repository. Ticket create/read/update, comments, and audit endpoints are therefore enabled only with a **development-only configured principal**. Never configure this adapter outside local development; startup fails if `TICKET_DEV_PRINCIPAL` is set while `APP_ENV` is not `development`. The Jira webhook continues to use its per-organisation URL secret.
 
-Keep the existing `JIRA_TENANT_CONFIG` set in the API process. In the same PowerShell window that will start Uvicorn, generate a separate development bearer token and configure the local principal:
+Keep the existing `JIRA_TENANT_CONFIG` set in the API process. In the same PowerShell window that will start Node, generate a separate development bearer token and configure the local principal:
 
 ```powershell
-$devToken = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$devToken = node -e "console.log(require('node:crypto').randomBytes(32).toString('hex'))"
 $devConfig = @{
   bearerToken = $devToken
   organisationId = "org_support"
@@ -230,9 +237,13 @@ $devConfig = @{
 $env:APP_ENV = "development"
 $env:TICKET_DEV_PRINCIPAL = $devConfig
 Write-Host $devToken
+Set-Location (Join-Path (git rev-parse --show-toplevel) "backend")
+npm start
 ```
 
-Use the printed value as the Postman `devToken` variable, then start/restart the API from this same PowerShell process. The organisation and user IDs must match the configured Jira mapping when accessing imported tickets. `teamIds` are trusted development fixtures, not a substitute for the Phase 1/2 team-membership service. Do not send sensitive data through a publicly exposed development tunnel.
+The development adapter accepts `requester`, `support_agent`, `support_lead`, and `organisation_admin`. For workflow configuration/approval, restart the API with a principal whose roles include `organisation_admin`; use separate configured principals when testing requester, agent, and supervisor actions.
+
+Use the printed value as the Postman `devToken` variable. The organisation and user IDs must match the configured Jira mapping when accessing imported tickets. `teamIds` are trusted development fixtures, not a substitute for the Phase 1/2 team-membership service. Do not send sensitive data through a publicly exposed development tunnel.
 
 ### Create a ticket
 
@@ -271,7 +282,7 @@ Expected response — `201 Created`:
 }
 ```
 
-The API assigns tenant and requester from the configured principal and sets initial status to `new` (as in the API draft).
+The API assigns tenant and requester from the configured principal. Without an active tenant workflow, the existing draft behavior starts tickets at `new`; after workflow approval, new manual and Jira-ingested tickets start at the configured initial status.
 
 ### Search and paginate
 
@@ -297,7 +308,164 @@ Content-Type: application/json
 }
 ```
 
-Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured development `teamIds`. Status and priority changes are not accepted: approved internal values/transitions are not defined. Jira status/priority remain source metadata.
+Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured development `teamIds`. Status changes use the tenant's approved ticket workflow; priority changes remain unavailable. Jira status/priority remain source metadata and are not overwritten by internal workflow changes.
+
+### Configure and approve a tenant ticket workflow
+
+The workflow values are sourced from the tenant's workflow document. During this Phase 3 implementation, an organisation administrator submits the document-derived configuration as structured JSON; automatic parsing of uploaded policy documents is not included. The submitted configuration remains a draft until an organisation administrator approves it. A draft does not affect ticket creation or status updates.
+
+The document role names map to the API's development roles as follows: Customer -> `requester`, Agent -> `support_agent`, Supervisor -> `support_lead`, Administrator -> `organisation_admin`. `organisation_admin` is available only through the development principal in this implementation.
+
+```http
+POST http://localhost:8000/api/v1/ticket-workflows
+Authorization: Bearer {{adminToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "config": {
+    "sourceReference": "Tenant Ticket Workflow Policy v1",
+    "initialStatus": "NEW",
+    "reopenStatus": "REOPENED",
+    "statuses": [
+      "NEW",
+      "OPEN",
+      "IN_PROGRESS",
+      "PENDING",
+      "RESOLVED",
+      "CLOSED",
+      "REOPENED"
+    ],
+    "transitions": {
+      "NEW": ["OPEN"],
+      "OPEN": ["IN_PROGRESS", "PENDING", "RESOLVED"],
+      "IN_PROGRESS": ["PENDING", "RESOLVED", "OPEN"],
+      "PENDING": ["IN_PROGRESS", "OPEN"],
+      "RESOLVED": ["CLOSED", "REOPENED"],
+      "CLOSED": ["REOPENED"],
+      "REOPENED": ["OPEN", "IN_PROGRESS"]
+    },
+    "requestableReopenFrom": ["RESOLVED"],
+    "restrictedReopenFrom": ["CLOSED"],
+    "permissions": {
+      "directStatusChangeRoles": ["support_agent", "support_lead"],
+      "closedReopenRoles": ["support_lead", "organisation_admin"],
+      "reopenRequestRoles": ["requester"],
+      "reopenApprovalRoles": ["support_lead", "organisation_admin"],
+      "administratorOverrideRoles": ["organisation_admin"]
+    }
+  }
+}
+```
+
+Expected response — `201 Created` (the draft is not active):
+
+```json
+{
+  "data": {
+    "id": "workflow_<generated-id>",
+    "organisationId": "org_support",
+    "sourceReference": "Tenant Ticket Workflow Policy v1",
+    "initialStatus": "NEW",
+    "reopenStatus": "REOPENED",
+    "statuses": ["NEW", "OPEN", "IN_PROGRESS", "PENDING", "RESOLVED", "CLOSED", "REOPENED"],
+    "transitions": {
+      "NEW": ["OPEN"],
+      "OPEN": ["IN_PROGRESS", "PENDING", "RESOLVED"],
+      "IN_PROGRESS": ["PENDING", "RESOLVED", "OPEN"],
+      "PENDING": ["IN_PROGRESS", "OPEN"],
+      "RESOLVED": ["CLOSED", "REOPENED"],
+      "CLOSED": ["REOPENED"],
+      "REOPENED": ["OPEN", "IN_PROGRESS"]
+    },
+    "requestableReopenFrom": ["RESOLVED"],
+    "restrictedReopenFrom": ["CLOSED"],
+    "permissions": {
+      "directStatusChangeRoles": ["support_agent", "support_lead"],
+      "closedReopenRoles": ["support_lead", "organisation_admin"],
+      "reopenRequestRoles": ["requester"],
+      "reopenApprovalRoles": ["support_lead", "organisation_admin"],
+      "administratorOverrideRoles": ["organisation_admin"]
+    },
+    "status": "draft",
+    "createdBy": "user_admin",
+    "createdAt": "<UTC timestamp>",
+    "updatedAt": "<UTC timestamp>"
+  },
+  "requestId": "req_<generated-id>"
+}
+```
+
+Approve the draft using the organisation-admin principal:
+
+```http
+POST http://localhost:8000/api/v1/ticket-workflows/{{workflowId}}/approve
+Authorization: Bearer {{adminToken}}
+```
+
+Expected response — `200 OK`, with `"status": "active"`, `approvedBy`, and `approvedAt`. Reapproval of a non-draft workflow returns `409 WORKFLOW_CONFLICT`. Only one workflow is active per tenant; activating a replacement archives the previous version. `GET /api/v1/ticket-workflows/active` returns the active tenant workflow to authenticated tenant users.
+
+Tickets created after activation start at the configured initial status. Existing `new` tickets can use the active workflow if their current value matches a configured status case-insensitively. Status is changed separately from the general ticket `PATCH` route.
+
+### Change status and handle reopen requests
+
+Use the configured status code exactly. For example, an assigned support agent can move `NEW` to `OPEN`:
+
+```http
+PATCH http://localhost:8000/api/v1/tickets/{{ticketId}}/status
+Authorization: Bearer {{agentToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "status": "OPEN"
+}
+```
+
+Expected response — `200 OK`:
+
+```json
+{
+  "data": {
+    "id": "ticket_<generated-id>",
+    "organisationId": "org_support",
+    "requesterId": "user_requester",
+    "title": "Unable to access the billing portal",
+    "description": "The portal returns an access denied message.",
+    "status": "OPEN",
+    "createdAt": "<UTC timestamp>",
+    "updatedAt": "<UTC timestamp>"
+  },
+  "requestId": "req_<generated-id>"
+}
+```
+
+An unlisted transition returns `409 INVALID_STATUS_TRANSITION`; a role restriction returns `403 FORBIDDEN`. A requester cannot directly change status. Customers may request reopening from `RESOLVED`, with a reason:
+
+```http
+POST http://localhost:8000/api/v1/tickets/{{ticketId}}/reopen-requests
+Authorization: Bearer {{requesterToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "reason": "The issue is still occurring."
+}
+```
+
+Expected response — `201 Created`, with a pending request and generated `id`. The ticket remains `RESOLVED` until a supervisor or administrator approves it:
+
+```http
+POST http://localhost:8000/api/v1/tickets/{{ticketId}}/reopen-requests/{{requestId}}/approve
+Authorization: Bearer {{supervisorToken}}
+```
+
+Approval returns `200 OK`, updates the ticket to `REOPENED`, and atomically records the decision and reason in ticket history. Reopening from `CLOSED` is restricted to supervisors and administrators and always requires a reason. Administrators may override role restrictions, but never perform a transition absent from the approved transition map.
+
+This workflow API accepts structured document-derived configuration; it does not extract rules from uploaded files. SLA and priority policy extraction—including the attached P1-P4 policy—remains outside this Phase 3 change.
 
 ### Add and read comments
 
@@ -316,7 +484,38 @@ Content-Type: application/json
 
 `visibility` must be `public` or `internal`. Requesters may add public comments only to their own tickets. Support staff may add either visibility to tickets in their scope. `GET /api/v1/tickets/{{ticketId}}/comments` returns public comments to requesters and both kinds to support staff. `GET /api/v1/tickets/{{ticketId}}/audit` is support-staff-only.
 
-Comments and history are currently stored in each ticket JSON record so a ticket update and its audit event are written atomically. Ticket attachment upload/download is deferred until the shared private file-storage contract is available; no attachment endpoint is exposed yet.
+Comments, attachment metadata and history are currently stored in each ticket JSON record so a ticket change and its audit event are written atomically. Attachment bytes use the shared private-storage adapter under tenant-specific directories; storage keys are never returned by the API.
+
+### Upload and download ticket attachments
+
+These routes are available only with the local development bearer principal. They accept PDF, TXT, DOC, DOCX, PNG, JPEG (`.jpg`/`.jpeg`) and WebP files up to 25 MB. Image uploads must have a matching extension, MIME type and file signature. PDF files must begin with the PDF signature. This prototype does **not** scan uploads for malware and is not approved for production or sensitive files.
+
+```http
+POST http://localhost:8000/api/v1/tickets/{{ticketId}}/attachments
+Authorization: Bearer {{devToken}}
+Content-Type: multipart/form-data
+```
+
+In Postman, choose **Body → form-data**, add a key named `file`, change its type to **File**, and select the attachment. Postman supplies the multipart boundary.
+
+Expected response — `201 Created`:
+
+```json
+{
+  "data": {
+    "id": "attachment_<generated-id>",
+    "fileName": "screenshot.png",
+    "mimeType": "image/png",
+    "checksumSha256": "<sha256>",
+    "fileSizeBytes": 1234,
+    "uploadedBy": "user_123",
+    "createdAt": "<UTC timestamp>"
+  },
+  "requestId": "req_<generated-id>"
+}
+```
+
+The private storage key is intentionally omitted. To download, send an authenticated `GET http://localhost:8000/api/v1/tickets/{{ticketId}}/attachments/{{attachmentId}}`. The caller must still have access to the ticket; the response is the file bytes with `Content-Disposition: attachment`. Requesters can access their own ticket attachments, and support staff can access attachments only for tickets in their configured team scope (support leads may also access unassigned tickets).
 
 ## 6. Example asynchronous triage
 
@@ -441,6 +640,101 @@ info:
 servers:
   - url: /api/v1
 paths:
+  /ticket-workflows:
+    get:
+      summary: List tenant ticket workflow versions
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Workflows belonging to the authenticated tenant (organisation administrator only)
+    post:
+      summary: Create a draft ticket workflow configuration
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [config]
+              properties:
+                config:
+                  type: object
+                  required:
+                    - sourceReference
+                    - initialStatus
+                    - reopenStatus
+                    - statuses
+                    - transitions
+                    - requestableReopenFrom
+                    - restrictedReopenFrom
+                    - permissions
+                  properties:
+                    sourceReference:
+                      type: string
+                    initialStatus:
+                      type: string
+                    reopenStatus:
+                      type: string
+                    statuses:
+                      type: array
+                      items:
+                        type: string
+                    transitions:
+                      type: object
+                      additionalProperties:
+                        type: array
+                        items:
+                          type: string
+                    requestableReopenFrom:
+                      type: array
+                      items:
+                        type: string
+                    restrictedReopenFrom:
+                      type: array
+                      items:
+                        type: string
+                    permissions:
+                      type: object
+      responses:
+        "201":
+          description: Draft created; it does not affect tickets until approved
+        "400":
+          description: Invalid workflow configuration
+        "403":
+          description: Organisation administrator only
+  /ticket-workflows/active:
+    get:
+      summary: Retrieve the active ticket workflow for the authenticated tenant
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Active workflow configuration
+        "404":
+          description: No active workflow
+  /ticket-workflows/{workflowId}/approve:
+    post:
+      summary: Approve and activate a draft ticket workflow
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: workflowId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Workflow activated; a prior active version is archived
+        "403":
+          description: Organisation administrator only
+        "404":
+          description: Workflow not found
+        "409":
+          description: Workflow is not a draft
   /tickets:
     post:
       summary: Create a support ticket
@@ -467,12 +761,379 @@ paths:
       responses:
         "201":
           description: Ticket created
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketResponse"
         "400":
           description: Validation error
         "401":
           description: Unauthenticated
         "403":
           description: Forbidden
+    get:
+      summary: Search, filter and paginate accessible tickets
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: query
+          name: q
+          schema:
+            type: string
+        - in: query
+          name: status
+          schema:
+            type: string
+        - in: query
+          name: priority
+          schema:
+            type: string
+        - in: query
+          name: teamId
+          schema:
+            type: string
+        - in: query
+          name: requesterId
+          schema:
+            type: string
+        - in: query
+          name: limit
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - in: query
+          name: offset
+          schema:
+            type: integer
+            minimum: 0
+            default: 0
+      responses:
+        "200":
+          description: A tenant- and role-scoped page of tickets
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketListResponse"
+        "401":
+          description: Unauthenticated
+  /tickets/ingest/jira/{webhookSecret}:
+    post:
+      summary: Ingest a Jira Cloud issue-created or issue-updated webhook
+      description: Jira project and reporter mappings are resolved from server configuration. The secret is supplied in the URL path.
+      parameters:
+        - in: path
+          name: webhookSecret
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [webhookEvent, issue]
+              properties:
+                webhookEvent:
+                  type: string
+                  enum: [jira:issue_created, jira:issue_updated]
+                issue:
+                  type: object
+      responses:
+        "200":
+          description: Jira issue updated or duplicate delivery ignored
+        "201":
+          description: Jira issue ingested
+        "400":
+          description: Invalid or unsupported Jira webhook
+        "401":
+          description: Jira webhook authentication failed
+        "403":
+          description: Jira reporter has no configured internal user mapping
+  /tickets/{ticketId}:
+    parameters:
+      - in: path
+        name: ticketId
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Retrieve an accessible ticket
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Ticket details, permitted comments and attachment metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TicketResponse"
+        "401":
+          description: Unauthenticated
+        "404":
+          description: Ticket not found or not accessible
+    patch:
+      summary: Update permitted ticket fields
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              minProperties: 1
+              additionalProperties: false
+              properties:
+                title:
+                  type: string
+                  minLength: 1
+                description:
+                  type: string
+                  minLength: 1
+                  nullable: true
+                product:
+                  type: string
+                  nullable: true
+                affectedService:
+                  type: string
+                  nullable: true
+                teamId:
+                  type: string
+                  nullable: true
+      responses:
+        "200":
+          description: Ticket updated
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthenticated
+        "403":
+          description: Forbidden or requested team outside scope
+        "404":
+          description: Ticket not found or not accessible
+  /tickets/{ticketId}/status:
+    patch:
+      summary: Apply an approved tenant workflow transition
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              additionalProperties: false
+              properties:
+                status:
+                  type: string
+                reason:
+                  type: string
+      responses:
+        "200":
+          description: Ticket updated and status change recorded in audit history
+        "400":
+          description: Validation error
+        "403":
+          description: Role is not permitted to change status
+        "404":
+          description: Ticket not found or not accessible
+        "409":
+          description: Workflow is inactive or transition is not permitted
+  /tickets/{ticketId}/reopen-requests:
+    post:
+      summary: Request reopening of an eligible ticket
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [reason]
+              additionalProperties: false
+              properties:
+                reason:
+                  type: string
+      responses:
+        "201":
+          description: Reopen request created in pending state
+        "403":
+          description: Requester role required
+        "404":
+          description: Ticket not found or not accessible
+        "409":
+          description: Ticket status does not allow reopening
+  /tickets/{ticketId}/reopen-requests/{requestId}/approve:
+    post:
+      summary: Approve a pending ticket reopen request
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: requestId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reopen request approved and ticket status changed
+        "403":
+          description: Supervisor or administrator role required
+        "404":
+          description: Ticket or request not found
+        "409":
+          description: Reopen is not valid for the current ticket status
+  /tickets/{ticketId}/comments:
+    parameters:
+      - in: path
+        name: ticketId
+        required: true
+        schema:
+          type: string
+    post:
+      summary: Add a ticket comment
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [body, visibility]
+              additionalProperties: false
+              properties:
+                body:
+                  type: string
+                  minLength: 1
+                visibility:
+                  type: string
+                  enum: [internal, public]
+      responses:
+        "201":
+          description: Comment added
+        "400":
+          description: Validation error
+        "401":
+          description: Unauthenticated
+        "403":
+          description: Forbidden
+        "404":
+          description: Ticket not found or not accessible
+    get:
+      summary: List comments visible to the caller
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Visible ticket comments
+        "401":
+          description: Unauthenticated
+        "404":
+          description: Ticket not found or not accessible
+  /tickets/{ticketId}/audit:
+    get:
+      summary: Retrieve ticket audit history
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Ticket audit events
+        "401":
+          description: Unauthenticated
+        "403":
+          description: Support staff only
+        "404":
+          description: Ticket not found or not accessible
+  /tickets/{ticketId}/attachments:
+    post:
+      summary: Upload a private ticket attachment
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              required: [file]
+              properties:
+                file:
+                  type: string
+                  format: binary
+      responses:
+        "201":
+          description: Attachment uploaded
+        "400":
+          description: Unsupported type or invalid file content
+        "401":
+          description: Unauthenticated
+        "404":
+          description: Ticket not found or not accessible
+        "413":
+          description: File exceeds 25 MB
+  /tickets/{ticketId}/attachments/{attachmentId}:
+    get:
+      summary: Download a private ticket attachment
+      security:
+        - bearerAuth: []
+      parameters:
+        - in: path
+          name: ticketId
+          required: true
+          schema:
+            type: string
+        - in: path
+          name: attachmentId
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Attachment file bytes
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "401":
+          description: Unauthenticated
+        "404":
+          description: Ticket or attachment not found or not accessible
   /tickets/{ticketId}/analyze:
     post:
       summary: Start ticket triage workflow
@@ -503,6 +1164,114 @@ components:
         Production JWT authentication remains subject to identity-provider approval.
         The local development ticket principal uses an opaque bearer token and is not
         suitable for deployment.
+  schemas:
+    Ticket:
+      type: object
+      required: [id, organisationId, requesterId, title, createdAt, updatedAt]
+      properties:
+        id:
+          type: string
+        organisationId:
+          type: string
+        requesterId:
+          type: string
+        teamId:
+          type: string
+          nullable: true
+        title:
+          type: string
+        description:
+          description: The original Jira rich-text value or a manually entered string.
+        product:
+          type: string
+          nullable: true
+        affectedService:
+          type: string
+          nullable: true
+        status:
+          type: string
+        priority:
+          type: string
+        source:
+          type: object
+          additionalProperties: true
+        createdAt:
+          type: string
+          format: date-time
+        updatedAt:
+          type: string
+          format: date-time
+        comments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketComment"
+        attachments:
+          type: array
+          items:
+            $ref: "#/components/schemas/TicketAttachmentMetadata"
+    TicketComment:
+      type: object
+      required: [id, authorId, body, visibility, createdAt]
+      properties:
+        id:
+          type: string
+        authorId:
+          type: string
+        body:
+          type: string
+        visibility:
+          type: string
+          enum: [internal, public]
+        createdAt:
+          type: string
+          format: date-time
+    TicketAttachmentMetadata:
+      type: object
+      required: [id, fileName, mimeType, checksumSha256, fileSizeBytes, uploadedBy, createdAt]
+      properties:
+        id:
+          type: string
+        fileName:
+          type: string
+        mimeType:
+          type: string
+        checksumSha256:
+          type: string
+        fileSizeBytes:
+          type: integer
+        uploadedBy:
+          type: string
+        createdAt:
+          type: string
+          format: date-time
+    TicketResponse:
+      type: object
+      required: [data, requestId]
+      properties:
+        data:
+          $ref: "#/components/schemas/Ticket"
+        requestId:
+          type: string
+    TicketListResponse:
+      type: object
+      required: [data, pagination, requestId]
+      properties:
+        data:
+          type: array
+          items:
+            $ref: "#/components/schemas/Ticket"
+        pagination:
+          type: object
+          required: [limit, offset, total]
+          properties:
+            limit:
+              type: integer
+            offset:
+              type: integer
+            total:
+              type: integer
+        requestId:
+          type: string
 ```
 
 This excerpt is intentionally a draft; expand every endpoint, schema, response, permission and error case before implementation.

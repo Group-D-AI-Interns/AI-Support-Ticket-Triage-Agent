@@ -56,6 +56,18 @@ test('rejects unsupported file types and oversized uploads', async () => {
       /Unsupported file extension|Unsupported MIME type/,
     );
 
+    await assert.rejects(
+      service.uploadDocument({
+        tenant: tenantA,
+        title: 'image remains unsupported for documents',
+        fileName: 'photo.png',
+        mimeType: 'image/png',
+        content: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+        createdBy: tenantA.userId,
+      }),
+      /Unsupported file extension/,
+    );
+
     const oversized = Buffer.alloc(26 * 1024 * 1024, 'x');
     await assert.rejects(
       service.uploadDocument({
