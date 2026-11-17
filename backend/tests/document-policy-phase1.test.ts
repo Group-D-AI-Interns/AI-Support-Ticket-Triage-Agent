@@ -77,11 +77,70 @@ test('policy repository enforces version lifecycle and tenant isolation', async 
       updatedAt: new Date('2026-02-01T00:00:00Z').toISOString()
     }, tenantA);
 
-    const active = await repo.transitionVersionStatus(version.id, 'approved', tenantA);
-    assert.equal(active.status, 'approved');
+    await repo.transitionVersionStatus(tenantA, version.id, 'pending_approval');
+    const decision = await repo.addApproval({
+      id: 'approval-1',
+      organisationId: tenantA.organisationId,
+      policyVersionId: version.id,
+      reviewerId: tenantA.userId,
+      decision: 'approved',
+      reason: 'Reviewed and accepted.',
+      createdAt: new Date('2026-02-02T00:00:00Z').toISOString()
+    }, tenantA);
+    assert.equal(decision.decision, 'approved');
+    const approved = await repo.getVersionById(tenantA, version.id);
+    assert.equal(approved?.status, 'approved');
+    const active = await repo.transitionVersionStatus(tenantA, version.id, 'active');
+    assert.equal(active?.status, 'active');
 
     const crossTenant = await repo.getPolicyById(tenantB, created.id);
     assert.equal(crossTenant, null);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('policy version cannot be activated without an approved review and effective date', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'policy-approval-'));
+  try {
+    const store = createJsonTenantStore(root);
+    const repo = new JsonPolicyRepository(store);
+    const created = await repo.createPolicy({
+      id: 'policy-approval-1',
+      organisationId: tenantA.organisationId,
+      policyType: 'sla',
+      ownerId: tenantA.userId,
+      status: 'draft',
+      createdAt: new Date('2026-02-01T00:00:00Z').toISOString(),
+      updatedAt: new Date('2026-02-01T00:00:00Z').toISOString(),
+      version: 1,
+      description: 'Approval guard test'
+    }, tenantA);
+    const version = await repo.createVersion(created.id, {
+      id: 'policy-approval-version-1',
+      organisationId: tenantA.organisationId,
+      policyId: created.id,
+      version: 1,
+      status: 'draft',
+      effectiveFrom: new Date(Date.now() + 60_000).toISOString(),
+      effectiveTo: null,
+      payload: { rule: 'response-within-2h' },
+      createdAt: new Date('2026-02-01T00:00:00Z').toISOString(),
+      updatedAt: new Date('2026-02-01T00:00:00Z').toISOString()
+    }, tenantA);
+
+    await assert.rejects(repo.transitionVersionStatus(tenantA, version.id, 'active'), /transition|approval/i);
+    await repo.transitionVersionStatus(tenantA, version.id, 'pending_approval');
+    await repo.addApproval({
+      id: 'approval-future-1',
+      organisationId: tenantA.organisationId,
+      policyVersionId: version.id,
+      reviewerId: tenantA.userId,
+      decision: 'approved',
+      reason: 'Reviewed for future effectivity.',
+      createdAt: new Date().toISOString()
+    }, tenantA);
+    await assert.rejects(repo.transitionVersionStatus(tenantA, version.id, 'active'), /effective-from/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -40,7 +40,7 @@ export type ExtractedRuleRecord = {
   payload: Record<string, unknown>;
   evidence: Array<Record<string, unknown>>;
   confidence: number | null;
-  ambigous: boolean;
+  ambiguous: boolean;
   createdAt: string;
 };
 

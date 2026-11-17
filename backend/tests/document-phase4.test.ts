@@ -50,7 +50,7 @@ test('validates extraction output and persists candidate rules with provenance',
     assert.equal(stored.ruleType, 'response_time');
     assert.equal(stored.evidence[0].sourceId, 'doc-42');
     assert.equal(stored.confidence, 0.91);
-    assert.equal(stored.ambigous, false);
+    assert.equal(stored.ambiguous, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

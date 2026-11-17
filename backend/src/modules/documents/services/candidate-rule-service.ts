@@ -27,7 +27,7 @@ export class CandidateRuleService {
       payload: normalized.payload,
       evidence: normalized.evidence as Array<Record<string, unknown>>,
       confidence: normalized.confidence,
-      ambigous: normalized.ambiguity,
+      ambiguous: normalized.ambiguity,
       createdAt: timestamp,
     };
 
