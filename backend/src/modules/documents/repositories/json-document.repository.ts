@@ -28,6 +28,15 @@ export class JsonDocumentRepository implements DocumentRepository {
     return assertTenantAccess(tenant, record) ?? null;
   }
 
+  async getVersionById(
+    tenant: TenantContext,
+    versionId: string,
+  ): Promise<DocumentVersionRecord | null> {
+    const versions = await this.store.readCollection<DocumentVersionRecord>('documentVersions');
+    const record = versions.find((item) => item.id === versionId);
+    return assertTenantAccess(tenant, record) ?? null;
+  }
+
   async list(tenant: TenantContext, filters?: { status?: string }): Promise<DocumentRecord[]> {
     const documents = await this.store.readCollection<DocumentRecord>('documents');
     return documents

@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "dev:tickets": "tsx ./src/modules/tickets/server.ts",
     "test": "node --test --import tsx ./tests/**/*.test.ts"
   },
   "devDependencies": {

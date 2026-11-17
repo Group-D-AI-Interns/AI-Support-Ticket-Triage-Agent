@@ -117,7 +117,7 @@ The server derives both organisation and requester from the authenticated contex
 
 ## 4. Jira Cloud webhook ingestion
 
-The Jira Cloud webhook endpoint is `POST /api/v1/tickets/ingest/jira/{webhookSecret}`. For this initial implementation, configure a Jira issue-created and issue-updated webhook and use a high-entropy per-organisation secret in the HTTPS URL path. Jira's standard admin webhook does not send a configurable custom header. Redact the secret path from gateway and application access logs, rotate it if exposed, and do not enable Uvicorn access logging in production.
+The Jira Cloud webhook endpoint is `POST /api/v1/tickets/ingest/jira/{webhookSecret}`. For this initial implementation, configure a Jira issue-created and issue-updated webhook and use a high-entropy per-organisation secret in the HTTPS URL path. Jira's standard admin webhook does not send a configurable custom header. Redact the secret path from gateway and application access logs and rotate it if exposed.
 
 The endpoint resolves the organisation using the configured Jira project-key mapping, then verifies the URL secret and resolves the reporter using the configured Jira `accountId` mapping. It ignores any organisation ID supplied in the webhook body. Until admin configuration APIs are available, configure these mappings through `JIRA_TENANT_CONFIG`. The mapped requester ID is trusted configuration.
 
@@ -137,13 +137,13 @@ The endpoint resolves the organisation using the configured Jira project-key map
 }
 ```
 
-For a local Postman run from PowerShell, set the configuration and start the API from the repository root:
+For a local Postman run from PowerShell, set the configuration and start the TypeScript ticket API from the repository root. Install backend npm dependencies first if needed:
 
 ```powershell
+npm --prefix backend ci
 $env:JIRA_TENANT_CONFIG = '{"projectMappings":{"SUP":"org_support"},"organisations":{"org_support":{"webhookSecret":"replace-with-a-random-secret-at-least-32-characters","reporterMappings":{"jira-account-abc":"user_123"}}}}'
 $env:DATA_DIRECTORY = ".local-data"
-python -m pip install -r backend/requirements.txt
-python -m uvicorn src.main:app --app-dir backend --port 8000 --no-access-log
+npm --prefix backend run dev:tickets
 ```
 
 Replace the example secret and reporter account mapping with values from the Jira tenant. Keep the secret out of source control and redact it from all request-path logs.
@@ -215,7 +215,7 @@ Jira status and priority are retained verbatim in source metadata; they are not 
 
 The approved identity and tenant middleware is not yet in this repository. Ticket create/read/update, comments, and audit endpoints are therefore enabled only with a **development-only configured principal**. Never configure this adapter outside local development; startup fails if `TICKET_DEV_PRINCIPAL` is set while `APP_ENV` is not `development`. The Jira webhook continues to use its per-organisation URL secret.
 
-Keep the existing `JIRA_TENANT_CONFIG` set in the API process. In the same PowerShell window that will start Uvicorn, generate a separate development bearer token and configure the local principal:
+Keep the existing `JIRA_TENANT_CONFIG` set in the API process. In the same PowerShell window that will start the TypeScript ticket API, generate a separate development bearer token and configure the local principal:
 
 ```powershell
 $devToken = python -c "import secrets; print(secrets.token_urlsafe(32))"

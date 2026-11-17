@@ -190,9 +190,9 @@ The source documents support the following direction, but do not identify a full
 
 | Concern | Recommendation / source position | Status |
 |---|---|---|
-| Backend language | Python | Approved by the repository owner for Fhulu's ticket API implementation; confirm wider service integration before other modules adopt it |
-| Runtime | Python | Required by the selected FastAPI framework |
-| HTTP framework | FastAPI | Approved by the repository owner for Fhulu's ticket API implementation |
+| Backend language | TypeScript | Fhulu's ticket API has been migrated to TypeScript; confirm wider service integration before other modules adopt it |
+| Runtime | Node.js | Runs the TypeScript backend modules |
+| HTTP framework | Node.js built-in `http` module | Used by the TypeScript ticket API without introducing another web-framework dependency |
 | Request validation | Zod is recommended in the capstone specification; use existing equivalent if established | Recommended |
 | API style | Versioned REST API, JSON; multipart for file upload | Defined |
 | Frontend | React web UI is shown in Component Design; verify repository | Documented direction |

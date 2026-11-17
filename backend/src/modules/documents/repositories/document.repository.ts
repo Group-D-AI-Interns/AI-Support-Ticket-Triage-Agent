@@ -4,6 +4,7 @@ import type { DocumentRecord, DocumentVersionRecord } from '../domain/document.j
 export interface DocumentRepository {
   create(document: DocumentRecord, tenant: TenantContext): Promise<DocumentRecord>;
   getById(tenant: TenantContext, documentId: string): Promise<DocumentRecord | null>;
+  getVersionById(tenant: TenantContext, versionId: string): Promise<DocumentVersionRecord | null>;
   list(tenant: TenantContext, filters?: { status?: string }): Promise<DocumentRecord[]>;
   updateStatus(
     tenant: TenantContext,
