@@ -1,0 +1,13 @@
+# Writable runtime records stay local; only synthetic seed data is versioned.
+/.local-data/
+
+# Dependencies and generated output
+node_modules/
+/dist/
+/coverage/
+*.log
+
+# Local environment configuration and secrets
+.env
+.env.*
+!.env.example
