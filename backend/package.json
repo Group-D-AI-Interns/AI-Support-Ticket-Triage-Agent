@@ -1,12 +1,24 @@
+
 {
-  "name": "ai-support-ticket-triage-agent-backend",
+  "name": "ai-support-ticket-triage-backend",
+  "version": "0.1.0",
   "private": true,
+  "description": "Backend foundation for the AI Support Ticket Triage Agent",
   "type": "module",
-  "scripts": {
-    "test": "node --test --import tsx ./tests/**/*.test.ts"
+  "engines": {
+    "node": ">=20"
   },
+  "scripts": {
+    "dev": "node --env-file=.env --watch --experimental-strip-types src/server.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file=.env dist/server.js",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "node --import tsx --test"
+  },
+  "dependencies": {},
   "devDependencies": {
+    "@types/node": "^22.0.0",
     "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+    "typescript": "^5.7.0"
   }
 }
