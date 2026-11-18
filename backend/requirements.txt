@@ -1,4 +1,0 @@
-fastapi==0.115.0
-pydantic==2.12.4
-portalocker==4.4.1
-uvicorn==0.31.0

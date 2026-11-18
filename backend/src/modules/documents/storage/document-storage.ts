@@ -1,5 +1,5 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { mkdir, readFile, unlink, writeFile } from 'node:fs/promises';
+import { join, relative, resolve, sep } from 'node:path';
 import { randomUUID } from 'node:crypto';
 
 import type { TenantContext } from '../../../shared/tenant.js';
@@ -13,6 +13,7 @@ export interface DocumentStorageAdapter {
     mimeType: string,
   ): Promise<{ storageKey: string; fileSizeBytes: number; checksumSha256: string }>;
   getDocument(tenant: TenantContext, storageKey: string): Promise<Buffer | null>;
+  deleteDocument(tenant: TenantContext, storageKey: string): Promise<void>;
   createDownloadToken(tenant: TenantContext, documentId: string, storageKey: string): Promise<string>;
   validateDownloadToken(tenant: TenantContext, token: string): Promise<{ documentId: string; storageKey: string } | null>;
 }
@@ -38,15 +39,31 @@ export function createLocalPrivateStorageAdapter(rootDir: string): DocumentStora
       };
     },
     async getDocument(tenant, storageKey) {
-      const expectedPrefix = `private/${tenant.organisationId}/`;
-      if (!storageKey.startsWith(expectedPrefix)) {
+      const filePath = resolveStoragePath(rootDir, tenant, storageKey);
+      if (!filePath) {
         return null;
       }
 
       try {
-        return await readFile(join(rootDir, storageKey));
-      } catch {
-        return null;
+        return await readFile(filePath);
+      } catch (error) {
+        if (isNodeError(error) && error.code === 'ENOENT') {
+          return null;
+        }
+        throw error;
+      }
+    },
+    async deleteDocument(tenant, storageKey) {
+      const filePath = resolveStoragePath(rootDir, tenant, storageKey);
+      if (!filePath) {
+        throw new Error('Storage key is outside the tenant private storage directory.');
+      }
+      try {
+        await unlink(filePath);
+      } catch (error) {
+        if (!isNodeError(error) || error.code !== 'ENOENT') {
+          throw error;
+        }
       }
     },
     async createDownloadToken(tenant, documentId, storageKey) {
@@ -83,7 +100,31 @@ export function createLocalPrivateStorageAdapter(rootDir: string): DocumentStora
   };
 }
 
+function resolveStoragePath(
+  rootDir: string,
+  tenant: TenantContext,
+  storageKey: string,
+): string | null {
+  const tenantDirectory = resolve(rootDir, 'private', tenant.organisationId);
+  const filePath = resolve(rootDir, storageKey);
+  const fromTenantDirectory = relative(tenantDirectory, filePath);
+  if (
+    !storageKey.startsWith(`private/${tenant.organisationId}/`) ||
+    !fromTenantDirectory ||
+    fromTenantDirectory === '..' ||
+    fromTenantDirectory.startsWith(`..${sep}`) ||
+    resolve(tenantDirectory, fromTenantDirectory) !== filePath
+  ) {
+    return null;
+  }
+  return filePath;
+}
+
 async function hashBuffer(buffer: Buffer): Promise<string> {
   const { createHash } = await import('node:crypto');
   return createHash('sha256').update(buffer).digest('hex');
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && 'code' in error;
 }
