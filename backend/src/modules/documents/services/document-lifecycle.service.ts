@@ -87,6 +87,15 @@ export class DocumentLifecycleService {
     return this.repository.getById(tenant, documentId);
   }
 
+  async updateProcessingStatus(
+    tenant: TenantContext,
+    documentId: string,
+    status: DocumentRecord['status'],
+    processingStatus: DocumentRecord['processingStatus'],
+  ): Promise<DocumentRecord | null> {
+    return this.repository.updateStatus(tenant, documentId, status, processingStatus);
+  }
+
   async createDownloadToken(tenant: TenantContext, documentId: string): Promise<string | null> {
     const document = await this.repository.getById(tenant, documentId);
     if (!document) {
