@@ -18,6 +18,8 @@ import {
 } from '../src/modules/tickets/development-auth.js';
 import { createLocalPrivateStorageAdapter } from '../src/modules/documents/storage/document-storage.js';
 import { JsonTicketStore } from '../src/modules/tickets/repositories/json-ticket.store.js';
+import { createJsonTenantStore } from '../src/infrastructure/persistence/json/json-store.js';
+import { JsonPolicyRepository } from '../src/modules/policies/repositories/json-policy.repository.js';
 
 const JIRA_SECRET = 'local-test-secret-with-at-least-32-characters';
 const DEV_TOKEN = 'local-development-token-with-at-least-32-characters';
@@ -1154,4 +1156,90 @@ test('environment configuration rejects invalid Jira and non-development princip
       }),
     DevelopmentAuthConfigurationError,
   );
+});
+
+test('candidate-rule review routes enforce organisation-admin scope and immutable decisions', async () => {
+  const adminPrincipal: DevelopmentPrincipal = {
+    bearerToken: 'admin-development-token-with-at-least-32-characters',
+    organisationId: 'org_support',
+    userId: 'admin_user_1',
+    roles: ['organisation_admin'],
+    teamIds: [],
+  };
+  const fixture = await createFixture({ principal: adminPrincipal });
+  try {
+    const tenantStore = createJsonTenantStore(fixture.root);
+    const policyRepository = new JsonPolicyRepository(tenantStore);
+
+    await policyRepository.createPolicy({
+      id: 'policy-review-api',
+      organisationId: 'org_support',
+      policyType: 'sla',
+      ownerId: 'user_requester_1',
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      description: 'API candidate policy',
+    }, {
+      organisationId: 'org_support',
+      userId: 'user_requester_1',
+      roles: ['organisation_admin'],
+    });
+
+    await policyRepository.createVersion('policy-review-api', {
+      id: 'policy-review-api-v1',
+      organisationId: 'org_support',
+      policyId: 'policy-review-api',
+      version: 1,
+      status: 'draft',
+      effectiveFrom: null,
+      effectiveTo: null,
+      payload: { responseWithinHours: 2 },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }, {
+      organisationId: 'org_support',
+      userId: 'user_requester_1',
+      roles: ['organisation_admin'],
+    });
+
+    await policyRepository.createExtractedRule({
+      id: 'candidate-api-1',
+      organisationId: 'org_support',
+      policyVersionId: 'policy-review-api-v1',
+      ruleType: 'response_time',
+      payload: { targetHours: 2 },
+      evidence: [{ sourceType: 'document', sourceId: 'doc-1', versionId: 'doc-version-1' }],
+      confidence: 0.91,
+      ambiguous: false,
+      createdAt: new Date().toISOString(),
+      reviewStatus: 'pending_review',
+    }, {
+      organisationId: 'org_support',
+      userId: 'user_requester_1',
+      roles: ['organisation_admin'],
+    });
+
+    const listResponse = await fetch(`${fixture.url}/api/v1/extracted-rules`, {
+      headers: { Authorization: `Bearer ${adminPrincipal.bearerToken}` },
+    });
+    assert.equal(listResponse.status, 200);
+
+    const approveResponse = await fetch(`${fixture.url}/api/v1/extracted-rules/candidate-api-1/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminPrincipal.bearerToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'Verified against the source document.' }),
+    });
+    assert.equal(approveResponse.status, 200);
+
+    const repeatResponse = await fetch(`${fixture.url}/api/v1/extracted-rules/candidate-api-1/reject`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminPrincipal.bearerToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'Changed my mind.' }),
+    });
+    assert.equal(repeatResponse.status, 409);
+  } finally {
+    await fixture.close();
+  }
 });

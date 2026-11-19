@@ -1586,6 +1586,93 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     },
   );
 
+  app.get('/api/v1/extracted-rules', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const policyVersionId = typeof request.query.policyVersionId === 'string'
+      ? request.query.policyVersionId
+      : undefined;
+    const rules = await policyRepository.listExtractedRules(
+      authenticated,
+      policyVersionId,
+    );
+    response.json({ data: rules, requestId: requestId(response) });
+  });
+
+  app.get('/api/v1/extracted-rules/:ruleId', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const rule = await policyRepository.getExtractedRuleById(
+      authenticated,
+      routeParam(request, 'ruleId'),
+    );
+    if (!rule) {
+      throw new ApiError(404, 'NOT_FOUND', 'Extracted rule not found.');
+    }
+    response.json({ data: rule, requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/approve', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason', 'effectiveFrom']);
+    const reason = requiredText(body, 'reason');
+    const effectiveFrom = optionalText(body, 'effectiveFrom');
+    if (effectiveFrom && Number.isNaN(Date.parse(effectiveFrom))) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'effectiveFrom must be a valid timestamp.', [
+        { field: 'effectiveFrom', message: 'effectiveFrom must be a valid timestamp.' },
+      ]);
+    }
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'approved',
+        reason,
+        effectiveFrom ?? undefined,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/reject', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason']);
+    const reason = requiredText(body, 'reason');
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'rejected',
+        reason,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/request-changes', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason']);
+    const reason = requiredText(body, 'reason');
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'changes_requested',
+        reason,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
   app.use((request, response) => {
     response.status(404).json({
       error: {
@@ -2340,4 +2427,20 @@ function requireTicketPrincipal(
       next(error);
     }
   };
+}
+
+function mapCandidateReviewError(error: unknown): ApiError {
+  if (!(error instanceof Error)) {
+    return new ApiError(500, 'INTERNAL_ERROR', 'The request could not be completed.');
+  }
+  if (/does not exist|not found/i.test(error.message)) {
+    return new ApiError(404, 'NOT_FOUND', error.message);
+  }
+  if (/immutable|already exists/i.test(error.message)) {
+    return new ApiError(409, 'CONFLICT', error.message);
+  }
+  if (/reason|timestamp|review/i.test(error.message)) {
+    return new ApiError(400, 'VALIDATION_ERROR', error.message);
+  }
+  return new ApiError(500, 'INTERNAL_ERROR', 'The request could not be completed.');
 }
