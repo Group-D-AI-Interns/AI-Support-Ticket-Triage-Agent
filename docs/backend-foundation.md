@@ -2,6 +2,8 @@
 
 This guide documents the shared Thuto-owned contracts currently implemented in `backend/src`. The API uses `/api/v1`, Node's built-in HTTP server and TypeScript source. Runtime dependencies are intentionally empty.
 
+For the current multi-module deployment status, local runbook, storage operations and handover gates, see `docs/operations/Deployment-and-Handover.md` and `docs/api/Integration-Verification.md`.
+
 ## Start and verify
 
 Use Node.js 22 or newer.
@@ -16,9 +18,9 @@ npm run build
 npm test
 ```
 
-Runtime dependencies are empty. TypeScript and Node type declarations are pinned by `package-lock.json` for reproducible build/type-check commands. The development server can also run with Node's built-in TypeScript stripping.
+There are no Node runtime dependencies. The current `package.json` and `package-lock.json` are out of sync, so `npm ci` fails until the lockfile is regenerated. The integrated TypeScript build also currently reports errors in document/policy modules; see `docs/operations/Deployment-and-Handover.md`. The development server can run with Node's built-in TypeScript stripping.
 
-Copy `.env.example` to a local environment file as needed. For Keycloak, set `AUTH_MODE=keycloak`, `AUTH_ISSUER` to the realm issuer URL, and `AUTH_AUDIENCE` to the API client audience. Configure the Keycloak access token so its `aud` claim includes that API audience. The verifier uses the realm OIDC discovery document for JWKS unless `AUTH_JWKS_URI` is configured. The web client obtains tokens through the selected OIDC client flow and sends the access token as a bearer token; this API does not implement a password login endpoint. User invitations/profile updates additionally require `KEYCLOAK_ADMIN_CLIENT_ID` and `KEYCLOAK_ADMIN_CLIENT_SECRET` for a confidential service account with least-privilege realm user-management access. Do not commit runtime data or secrets. Health endpoints are `GET /health/live`, `GET /health/ready`, and `GET /api/v1/health`.
+Copy `.env.example` to a local environment file as needed. For Keycloak, set `AUTH_MODE=keycloak`, `AUTH_ISSUER` to the realm issuer URL, and `AUTH_AUDIENCE` to the API client audience. Configure the Keycloak access token so its `aud` claim includes that API audience. The verifier uses the realm OIDC discovery document for JWKS unless `AUTH_JWKS_URI` is configured. The web client obtains tokens through the selected OIDC client flow and sends the access token as a bearer token; this API does not implement a password login endpoint. User invitations/profile updates additionally require `KEYCLOAK_ADMIN_CLIENT_ID` and `KEYCLOAK_ADMIN_CLIENT_SECRET` for a confidential service account with least-privilege realm user-management access. Do not commit runtime data or secrets. `GET /health/live` reports process liveness. `GET /health/ready` verifies that the configured JSON data directory is readable and writable, returning 503 on storage failure; it does not contact Keycloak or validate every collection. `GET /api/v1/health` reports API version only.
 
 ## Authentication and tenant context
 
@@ -90,9 +92,9 @@ Every error uses `{ "error": { "code", "message", "requestId", "fields"? } }`. U
 
 ## JSON records and persistence
 
-Runtime collection files live under `DATA_DIRECTORY`, separate from versioned synthetic seeds. Files use `{ "schemaVersion": 1, "records": [] }`. The shared store validates loaded envelopes, distinguishes missing files from malformed/unreadable files, writes through a same-directory temporary file and atomic rename, serializes updates in-process, and uses an exclusive lock file to prevent concurrent processes from overwriting each other. `JSON_WRITE_LOCK_TIMEOUT_MS` controls how long a writer waits (default 5000 ms). A stale lock produces a typed storage error after the timeout; operators must inspect/remove it only after confirming no writer is active.
+Runtime collection files live under `DATA_DIRECTORY` (default `./.local-data`, relative to the backend process working directory), separate from versioned synthetic seeds. Files use `{ "schemaVersion": 1, "records": [] }`. The shared store validates loaded envelopes, distinguishes missing files from malformed/unreadable files, writes through a same-directory temporary file and atomic rename, serializes updates in-process, and uses an exclusive lock file to prevent concurrent processes on a shared local filesystem from overwriting each other. `JSON_WRITE_LOCK_TIMEOUT_MS` controls how long a writer waits (default 5000 ms). A stale lock produces a typed storage error after the timeout; operators must inspect/remove it only after confirming no writer is active.
 
-Current identity/organisation/team collections are `users.json`, `memberships.json`, `organisations.json`, `departments.json`, `teams.json`, and `team-memberships.json`. Stored IDs must be unique, timestamps are preserved on edits, and updates set `updatedAt`. Multi-file changes are not transactional.
+Current identity/organisation/team collections are `users.json`, `memberships.json`, `organisations.json`, `departments.json`, `teams.json`, and `team-memberships.json`. Stored IDs must be unique, timestamps are preserved on edits, and updates set `updatedAt`. Multi-file changes are not transactional. Keep the Node API on one host with persistent local storage; this adapter is not a shared multi-host datastore. Back up the whole data directory while the API is stopped or from a consistent filesystem snapshot. Inspect collection JSON before restoring service. Do not commit runtime data or secrets.
 
 ## Integration rules for module owners
 
@@ -103,6 +105,6 @@ Current identity/organisation/team collections are `users.json`, `memberships.js
 - Background jobs and events must carry `organisationId`, actor/provenance where relevant, and a stable request/correlation ID. Define payloads as versioned shared DTOs before publishing them.
 - Add cross-tenant negative tests to each module's repository/service tests.
 
-## Decisions still required
+## Operational caveats
 
-The repository still needs Keycloak realm/client configuration, active-organisation selection rules, review of role-assignment constraints, and a decision on whether JSON writes are limited to one API process. Keycloak invitations require email delivery to be configured in the realm. Team membership stores one operational role per user/team; confirm whether multiple operational roles per team are needed before relying on it.
+The local Keycloak development stack is documented in `deploy/keycloak/README.md`. Its HTTP issuer at `http://localhost:8081/realms/ai-support` is for local development only. A hosted deployment requires a stable HTTPS issuer and platform secret management. Invitations require a least-privilege Keycloak service account and configured realm SMTP. Team membership stores one operational role per user/team; confirm whether multiple operational roles per team are needed before relying on it.

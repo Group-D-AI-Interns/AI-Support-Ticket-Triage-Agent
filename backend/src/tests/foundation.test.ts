@@ -369,4 +369,20 @@ describe("HTTP foundation", () => {
     assert.equal(body.error.code, "AUTH_PROVIDER_UNAVAILABLE");
     assert.doesNotMatch(body.error.message, /upstream detail/);
   });
+
+  it("returns 503 from readiness when the JSON data directory is not writable", async () => {
+    const parent = await makeDirectory();
+    const dataPath = `${parent}/not-a-directory`;
+    await writeFile(dataPath, "file prevents a directory from being created");
+    const server = createApp(loadEnvironment({ NODE_ENV: "test", DATA_DIRECTORY: dataPath, PORT: "0" }));
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const response = await fetch(`http://127.0.0.1:${address.port}/health/ready`);
+    assert.equal(response.status, 503);
+    const body = await response.json() as { error: { code: string; requestId: string } };
+    assert.equal(body.error.code, "STORAGE_IO_ERROR");
+    assert.equal(response.headers.get("x-request-id"), body.error.requestId);
+  });
 });

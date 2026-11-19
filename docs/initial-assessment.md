@@ -36,7 +36,7 @@ Implemented since the baseline: a Node HTTP/TypeScript bootstrap; Keycloak OIDC 
 
 The JSON adapter validates envelopes and IDs, uses atomic replacement, serializes read-modify-write operations and uses a lock file to prevent overlapping process writes. Tests use Node's built-in test runner without external packages.
 
-`npm test` passes 22 tests. `npm run typecheck` and `npm run build` both pass after installing the locked TypeScript and Node type dependencies. The compiled server starts and both liveness and readiness endpoints return success on Node 22.
+At the current integration snapshot, the shared foundation source suite passes 23 tests when run directly with Node 22's built-in TypeScript support, and the Python ticket suite passes 15 tests. `npm ci` fails because the package and lock files are out of sync; TypeScript typecheck/build fail on document and policy module type errors. The Node server was previously smoke-checked; the current readiness handler also checks local JSON directory read/write access.
 
 ## 5. Remaining decisions and follow-up
 

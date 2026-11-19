@@ -62,6 +62,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       if (method === "GET" && path === "/health/live") {
         sendJson(response, 200, { data: { status: "ok" }, requestId });
       } else if (method === "GET" && path === "/health/ready") {
+        await store.checkReady();
         sendJson(response, 200, { data: { status: "ready" }, requestId });
       } else if (method === "GET" && path === "/api/v1/health") {
         sendJson(response, 200, { data: { status: "ok", version: "v1" }, requestId });
