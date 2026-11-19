@@ -1,0 +1,11 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/ingest/jira/{{jiraWebhookSecret}}
+method: POST
+headers:
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"webhookEvent":"jira:issue_created","issue":{"id":"10042","key":"{{jiraProjectKey}}-42","fields":{"project":{"key":"{{jiraProjectKey}}"},"summary":"Postman Jira test ticket","description":{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"Testing Jira webhook ingestion."}]}]},"reporter":{"accountId":"{{jiraReporterAccountId}}"},"status":{"name":"Open"},"priority":{"name":"High"}}}}'
+auth:
+  type: noauth
+order: 1000

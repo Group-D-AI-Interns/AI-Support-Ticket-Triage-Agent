@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/organisations
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"name":"Support Test Organisation"}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 1000

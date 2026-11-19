@@ -1,0 +1,13 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/reports?from=2026-01-01T00:00:00.000Z&to=2027-01-01T00:00:00.000Z
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+queryParams:
+  from: 2026-01-01T00:00:00.000Z
+  to: 2027-01-01T00:00:00.000Z
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 8000

@@ -9,7 +9,7 @@ Suggested lifecycle: Draft → Pending Approval → Approved → Active → Expi
 ## 2. Rule model
 
 A structured rule should retain:
-- Organisation and source document/version.
+- Organisation and, when applicable, source document/version.
 - Rule type and structured payload.
 - Source page/section or text evidence.
 - Extraction method/model/config version.
@@ -20,14 +20,15 @@ A structured rule should retain:
 
 ## 3. SLA configuration
 
-Support configurable first response, average response and resolution targets; priority-based policies; department/team scope; business hours; working calendars; public holidays; pause conditions where approved; escalation rules and notification settings.
+Support configurable first response, average response and resolution targets; priority-based policies; department/team scope; business hours; working calendars; public holidays; pause conditions where approved; escalation rules and notification settings. Each tenant's organisation administrator supplies its SLA configuration through the tenant-scoped API; uploading a policy document is not required.
 
-Do not invent targets. All targets must originate from approved organisation configuration.
+Do not invent targets. All targets must be supplied by the tenant and approved through the policy lifecycle.
 
 The SLA evaluator consumes a normalized payload from an active, approved `sla`
-policy version. The document extraction and approval workflow remains the
-source of that version; extracted text is not evaluated directly. The initial
-payload contract is:
+policy version. Tenant administrators provide configuration values directly;
+the API binds the policy to the authenticated organisation, validates the
+payload, and requires review and activation before evaluation. No cross-tenant
+or application-default values are applied. The initial payload contract is:
 
 The current API accepts tenant-scoped document uploads and records document
 versions. Processing supports UTF-8 plain-text (`.txt`) sources only; PDF and

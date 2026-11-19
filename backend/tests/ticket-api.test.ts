@@ -899,13 +899,122 @@ test('uploads private ticket attachments and enforces ticket scope on download',
   }
 });
 
-test('uploads, processes, inspects, and downloads a tenant SLA source document', async () => {
+test('creates, approves, and activates tenant-configured SLA policy versions without documents', async () => {
+  const fixture = await createFixture({
+    principal: principal('user_admin', ['organisation_admin']),
+  });
+  const payload = {
+    calendar: {
+      timeZone: 'Africa/Johannesburg',
+      weeklySchedule: {
+        monday: [{ startMinute: 540, endMinute: 1020 }],
+        tuesday: [{ startMinute: 540, endMinute: 1020 }],
+      },
+      holidays: [],
+    },
+    targetsByPriority: {
+      high: { firstResponseMinutes: 60, resolutionMinutes: 240 },
+    },
+    pausedStatuses: ['PENDING'],
+    resolvedStatuses: ['RESOLVED', 'CLOSED'],
+    riskAtPercent: 75,
+  };
+  try {
+    const created = await fixture.request('/api/v1/sla-policies', {
+      method: 'POST',
+      body: JSON.stringify({
+        description: 'Tenant-configured support SLA',
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        payload,
+      }),
+    });
+    const createdResult = await created.json();
+    const policyId = createdResult.data.policy.id as string;
+    const firstVersionId = createdResult.data.version.id as string;
+
+    assert.equal(created.status, 201);
+    assert.equal(createdResult.data.policy.organisationId, 'org_support');
+    assert.equal(createdResult.data.version.status, 'pending_approval');
+    assert.equal('sourceDocumentId' in createdResult.data.version, false);
+
+    const approval = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${firstVersionId}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Reviewed by the tenant administrator.' }),
+      },
+    );
+    const approvalResult = await approval.json();
+    assert.equal(approval.status, 200);
+    assert.equal(approvalResult.data.version.status, 'approved');
+    assert.equal(approvalResult.data.approval.organisationId, 'org_support');
+
+    const activation = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${firstVersionId}/activate`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    const activationResult = await activation.json();
+    assert.equal(activation.status, 200);
+    assert.equal(activationResult.data.version.status, 'active');
+
+    const revised = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          effectiveFrom: '2027-01-01T00:00:00.000Z',
+          effectiveTo: null,
+          payload,
+        }),
+      },
+    );
+    const revisedResult = await revised.json();
+    const revisedVersionId = revisedResult.data.version.id as string;
+    assert.equal(revised.status, 201);
+    assert.equal(revisedResult.data.version.version, 2);
+    assert.equal('sourceDocumentVersionId' in revisedResult.data.version, false);
+
+    const revisedApproval = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${revisedVersionId}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Reviewed updated tenant targets.' }),
+      },
+    );
+    assert.equal(revisedApproval.status, 200);
+    const revisedActivation = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${revisedVersionId}/activate`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    assert.equal(revisedActivation.status, 200);
+    assert.equal(
+      (await revisedActivation.json()).data.version.status,
+      'active',
+    );
+
+    const listed = await fixture.request('/api/v1/sla-policies');
+    const listedResult = await listed.json();
+    assert.equal(listed.status, 200);
+    assert.equal(listedResult.data.length, 1);
+    assert.deepEqual(
+      listedResult.data[0].versions.map(
+        (version: { status: string }) => version.status,
+      ),
+      ['archived', 'active'],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('uploads, processes, inspects, and downloads a tenant document', async () => {
   const fixture = await createFixture({
     principal: principal('user_admin', ['organisation_admin']),
   });
   try {
     const form = new FormData();
-    form.append('title', 'Support SLA source');
+    form.append('title', 'Support policy evidence');
     form.append(
       'file',
       new Blob(

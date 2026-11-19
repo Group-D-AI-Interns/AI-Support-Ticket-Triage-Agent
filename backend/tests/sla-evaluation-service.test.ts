@@ -41,7 +41,7 @@ const payload = {
   riskAtPercent: 75,
 };
 
-test('evaluates a tenant ticket against its active uploaded-policy version and persists input', async () => {
+test('evaluates a tenant ticket against its active policy version and persists input', async () => {
   const root = mkdtempSync(join(tmpdir(), 'sla-service-'));
   try {
     const policyRepository = new JsonPolicyRepository(

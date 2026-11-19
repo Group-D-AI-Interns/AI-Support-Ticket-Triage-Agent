@@ -532,52 +532,11 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     requireOrganisationAdmin(authenticated, authorization);
     const body = parseObjectBody(request.body, [
       'description',
-      'sourceDocumentId',
-      'sourceDocumentVersionId',
       'effectiveFrom',
       'effectiveTo',
       'payload',
     ]);
     const description = requiredText(body, 'description');
-    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
-    const sourceDocumentVersionId = requiredText(
-      body,
-      'sourceDocumentVersionId',
-    );
-    const sourceDocument = await documentRepository.getById(
-      authenticated,
-      sourceDocumentId,
-    );
-    if (
-      !sourceDocument ||
-      sourceDocument.status !== 'processed' ||
-      sourceDocument.processingStatus !== 'completed'
-    ) {
-      throw new ApiError(
-        422,
-        'SOURCE_DOCUMENT_NOT_READY',
-        'The source document must be processed and belong to this organisation.',
-      );
-    }
-    const sourceVersions =
-      await tenantStore.readCollection<{
-        id: string;
-        documentId: string;
-        organisationId: string;
-        version: number;
-      }>('documentVersions');
-    const sourceVersion = sourceVersions.find(
-      (version) =>
-        version.id === sourceDocumentVersionId &&
-        version.documentId === sourceDocumentId &&
-        version.organisationId === authenticated.organisationId,
-    );
-    if (!sourceVersion) {
-      throw validationError(
-        'sourceDocumentVersionId',
-        'The source version must belong to the selected tenant document.',
-      );
-    }
     const effectiveFrom = requiredText(body, 'effectiveFrom');
     const effectiveTo =
       body.effectiveTo === undefined || body.effectiveTo === null
@@ -636,8 +595,6 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         effectiveFrom,
         effectiveTo,
         payload: policyPayload,
-        sourceDocumentId,
-        sourceDocumentVersionId,
         createdAt: now,
         updatedAt: now,
       },
@@ -649,126 +606,86 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     });
   });
 
-  app.post('/api/v1/sla-policies/:policyId/versions', async (request, response) => {
-    const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated, authorization);
-    const policy = await policyRepository.getPolicyById(
-      authenticated,
-      routeParam(request, 'policyId'),
-    );
-    if (!policy || policy.policyType !== 'sla') {
-      throw new ApiError(404, 'NOT_FOUND', 'SLA policy not found.');
-    }
-    const body = parseObjectBody(request.body, [
-      'sourceDocumentId',
-      'sourceDocumentVersionId',
-      'effectiveFrom',
-      'effectiveTo',
-      'payload',
-    ]);
-    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
-    const sourceDocumentVersionId = requiredText(
-      body,
-      'sourceDocumentVersionId',
-    );
-    const document = await documentRepository.getById(
-      authenticated,
-      sourceDocumentId,
-    );
-    if (
-      !document ||
-      document.status !== 'processed' ||
-      document.processingStatus !== 'completed'
-    ) {
-      throw new ApiError(
-        422,
-        'SOURCE_DOCUMENT_NOT_READY',
-        'The source document must be processed and belong to this organisation.',
+  app.post(
+    '/api/v1/sla-policies/:policyId/versions',
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireOrganisationAdmin(authenticated, authorization);
+      const policy = await policyRepository.getPolicyById(
+        authenticated,
+        routeParam(request, 'policyId'),
       );
-    }
-    const documentVersions =
-      await tenantStore.readCollection<{
-        id: string;
-        documentId: string;
-        organisationId: string;
-      }>('documentVersions');
-    if (
-      !documentVersions.some(
-        (version) =>
-          version.id === sourceDocumentVersionId &&
-          version.documentId === sourceDocumentId &&
-          version.organisationId === authenticated.organisationId,
-      )
-    ) {
-      throw validationError(
-        'sourceDocumentVersionId',
-        'The source version must belong to the selected tenant document.',
-      );
-    }
-    const effectiveFrom = requiredText(body, 'effectiveFrom');
-    const effectiveTo =
-      body.effectiveTo === undefined || body.effectiveTo === null
-        ? null
-        : requiredText(body, 'effectiveTo');
-    const versions = await policyRepository.listVersionsForPolicy(
-      authenticated,
-      policy.id,
-    );
-    const versionNumber =
-      versions.reduce(
-        (maximum, version) => Math.max(maximum, version.version),
-        0,
-      ) + 1;
-    const versionId = `policy_version_${randomUUID().replace(/-/g, '')}`;
-    let payload: ReturnType<typeof parseSlaPolicy>;
-    try {
-      payload = parseSlaPolicy(body.payload, {
-        id: policy.id,
-        versionId,
-        version: versionNumber,
-        organisationId: authenticated.organisationId,
-        effectiveFrom,
-        effectiveTo,
-      });
-    } catch (error) {
-      if (error instanceof SlaPolicyValidationError) {
-        throw validationError(error.field, error.message);
+      if (!policy || policy.policyType !== 'sla') {
+        throw new ApiError(404, 'NOT_FOUND', 'SLA policy not found.');
       }
-      throw error;
-    }
-    const {
-      id: _policyId,
-      versionId: _versionId,
-      version: _version,
-      organisationId: _organisationId,
-      effectiveFrom: _effectiveFrom,
-      effectiveTo: _effectiveTo,
-      ...policyPayload
-    } = payload;
-    const now = new Date().toISOString();
-    const version = await policyRepository.createVersion(
-      policy.id,
-      {
-        id: versionId,
-        organisationId: authenticated.organisationId,
-        policyId: policy.id,
-        version: versionNumber,
-        status: 'pending_approval',
-        effectiveFrom,
-        effectiveTo,
-        payload: policyPayload,
-        sourceDocumentId,
-        sourceDocumentVersionId,
-        createdAt: now,
-        updatedAt: now,
-      },
-      authenticated,
-    );
-    response.status(201).json({
-      data: { policy, version },
-      requestId: requestId(response),
-    });
-  });
+      const body = parseObjectBody(request.body, [
+        'effectiveFrom',
+        'effectiveTo',
+        'payload',
+      ]);
+      const effectiveFrom = requiredText(body, 'effectiveFrom');
+      const effectiveTo =
+        body.effectiveTo === undefined || body.effectiveTo === null
+          ? null
+          : requiredText(body, 'effectiveTo');
+      const versions = await policyRepository.listVersionsForPolicy(
+        authenticated,
+        policy.id,
+      );
+      const versionNumber =
+        versions.reduce(
+          (maximum, version) => Math.max(maximum, version.version),
+          0,
+        ) + 1;
+      const versionId = `policy_version_${randomUUID().replace(/-/g, '')}`;
+      let payload: ReturnType<typeof parseSlaPolicy>;
+      try {
+        payload = parseSlaPolicy(body.payload, {
+          id: policy.id,
+          versionId,
+          version: versionNumber,
+          organisationId: authenticated.organisationId,
+          effectiveFrom,
+          effectiveTo,
+        });
+      } catch (error) {
+        if (error instanceof SlaPolicyValidationError) {
+          throw validationError(error.field, error.message);
+        }
+        throw error;
+      }
+      const {
+        id: _policyId,
+        versionId: _versionId,
+        version: _version,
+        organisationId: _organisationId,
+        effectiveFrom: _effectiveFrom,
+        effectiveTo: _effectiveTo,
+        ...policyPayload
+      } = payload;
+      const now = new Date().toISOString();
+      const version = await policyRepository.createVersion(
+        policy.id,
+        {
+          id: versionId,
+          organisationId: authenticated.organisationId,
+          policyId: policy.id,
+          version: versionNumber,
+          status: 'pending_approval',
+          effectiveFrom,
+          effectiveTo,
+          payload: policyPayload,
+          createdAt: now,
+          updatedAt: now,
+        },
+        authenticated,
+      );
+      response.status(201).json({
+        data: { policy, version },
+        requestId: requestId(response),
+      });
+    },
+  );
 
   app.post(
     '/api/v1/sla-policies/:policyId/versions/:versionId/approve',
@@ -792,51 +709,6 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         version.policyId !== policy.id
       ) {
         throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
-      }
-      if (
-        version.sourceDocumentId === undefined ||
-        version.sourceDocumentVersionId === undefined
-      ) {
-        throw new ApiError(
-          409,
-          'POLICY_SOURCE_REQUIRED',
-          'SLA policy version must reference a source document and version.',
-        );
-      }
-      const sourceVersions =
-        await tenantStore.readCollection<{
-          id: string;
-          documentId: string;
-          organisationId: string;
-        }>('documentVersions');
-      if (
-        !sourceVersions.some(
-          (sourceVersion) =>
-            sourceVersion.id === version.sourceDocumentVersionId &&
-            sourceVersion.documentId === version.sourceDocumentId &&
-            sourceVersion.organisationId === authenticated.organisationId,
-        )
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
-          'The referenced source document version is no longer available.',
-        );
-      }
-      const document = await documentRepository.getById(
-        authenticated,
-        version.sourceDocumentId,
-      );
-      if (
-        !document ||
-        document.status !== 'processed' ||
-        document.processingStatus !== 'completed'
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_NOT_READY',
-          'The SLA source document must remain processed and tenant-scoped.',
-        );
       }
       const approvalRecords =
         await tenantStore.readCollection<{
@@ -959,45 +831,6 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           409,
           'POLICY_APPROVAL_REQUIRED',
           'An approval record is required before activation.',
-        );
-      }
-      const sourceDocument = version.sourceDocumentId
-        ? await documentRepository.getById(
-            authenticated,
-            version.sourceDocumentId,
-          )
-        : null;
-      if (
-        !sourceDocument ||
-        sourceDocument.status !== 'processed' ||
-        sourceDocument.processingStatus !== 'completed'
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_NOT_READY',
-          'The SLA source document must remain processed and tenant-scoped.',
-        );
-      }
-      const sourceVersions =
-        await tenantStore.readCollection<{
-          id: string;
-          documentId: string;
-          organisationId: string;
-        }>('documentVersions');
-      if (
-        !version.sourceDocumentId ||
-        !version.sourceDocumentVersionId ||
-        !sourceVersions.some(
-          (sourceVersion) =>
-            sourceVersion.id === version.sourceDocumentVersionId &&
-            sourceVersion.documentId === version.sourceDocumentId &&
-            sourceVersion.organisationId === authenticated.organisationId,
-        )
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
-          'The referenced source document version is no longer available.',
         );
       }
       const activeVersion = await policyRepository.activateVersion(

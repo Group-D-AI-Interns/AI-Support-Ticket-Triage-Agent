@@ -1,0 +1,13 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/users?page=1&pageSize=50
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+queryParams:
+  page: "1"
+  pageSize: "50"
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 4000

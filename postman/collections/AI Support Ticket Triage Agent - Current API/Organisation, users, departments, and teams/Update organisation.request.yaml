@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/organisations/{{organisationId}}
+method: PATCH
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"name":"Support Test Organisation Updated"}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 3000

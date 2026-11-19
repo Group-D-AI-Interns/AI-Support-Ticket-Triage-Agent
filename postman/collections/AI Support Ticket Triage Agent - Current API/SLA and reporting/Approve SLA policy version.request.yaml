@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/sla-policies/{{slaPolicyId}}/versions/{{slaVersionId}}/approve
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"reason":"Reviewed tenant-configured SLA targets."}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 4000

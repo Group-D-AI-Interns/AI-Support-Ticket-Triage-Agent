@@ -1,0 +1,12 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/sla/evaluations?ticketId={{ticketId}}
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+queryParams:
+  ticketId: "{{ticketId}}"
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 7000

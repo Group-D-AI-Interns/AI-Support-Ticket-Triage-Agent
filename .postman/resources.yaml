@@ -1,0 +1,15 @@
+# Use this workspace to collaborate
+workspace:
+  id: 9f52e11d-366b-4fed-84e4-cd92504b13c9
+
+# Each entry here maps a local resource to one or more corresponding objects in Postman Cloud
+
+cloudResources:
+  collections:
+    ../postman/collections/AI Support Ticket Triage Agent - Current API: d2661de7-4b52-4025-bf82-bf16104fb2ce
+
+# All resources in the `postman/` folder are automatically registered in Local View.
+# Point to additional files outside the `postman/` folder to register them individually. Example:
+#localResources:
+#  collections:
+#    - ../tests/E2E Test Collection/
