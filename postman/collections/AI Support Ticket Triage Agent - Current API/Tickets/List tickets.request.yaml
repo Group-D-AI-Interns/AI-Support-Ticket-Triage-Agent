@@ -1,0 +1,10 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets?limit=20&offset=0&q=Postman
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+queryParams:
+  limit: "20"
+  offset: "0"
+  q: Postman
+order: 2000

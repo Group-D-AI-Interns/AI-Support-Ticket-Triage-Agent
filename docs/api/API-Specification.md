@@ -54,8 +54,8 @@
 | GET | `/policies/:id/versions` | List policy versions |
 | POST | `/policies/:id/activate` | Activate approved version |
 | GET/POST | `/sla-policies` | List/create SLA policies |
-| POST | `/sla-policies/:policyId/versions` | Add a document-derived SLA policy version |
-| POST | `/sla-policies/:policyId/versions/:versionId/approve` | Approve a document-derived SLA version |
+| POST | `/sla-policies/:policyId/versions` | Add a tenant-configured SLA policy version |
+| POST | `/sla-policies/:policyId/versions/:versionId/approve` | Approve a tenant-configured SLA version |
 | POST | `/sla-policies/:policyId/versions/:versionId/activate` | Activate an approved SLA version |
 | GET | `/sla/evaluations` | Query SLA evaluations |
 | POST | `/sla/evaluations/run` | Evaluate current tenant tickets using active policies |
@@ -462,11 +462,11 @@ Authorization: Bearer {{supervisorToken}}
 
 Approval returns `200 OK`, updates the ticket to `REOPENED`, and atomically records the decision and reason in ticket history. Reopening from `CLOSED` is restricted to supervisors and administrators and always requires a reason. Administrators may override role restrictions, but never perform a transition absent from the approved transition map.
 
-This workflow API accepts structured document-derived configuration; it does not extract workflow rules from uploaded files. For SLA source documents, the API can upload and process UTF-8 plain-text files. PDF, DOC, and DOCX uploads may be stored, but processing those formats is not yet supported. The provisional text extractor only produces a candidate response-time observation; it does not construct or activate an SLA policy. Administrators must verify the source document, supply the complete tenant-specific policy configuration, and explicitly approve it before activation.
+This workflow API accepts structured configuration; it does not extract workflow rules from uploaded files. The separate document API can store tenant documents and process UTF-8 plain-text files for candidate evidence. That document flow is not required for SLA configuration and does not create or activate SLA policies.
 
-#### Upload and process an SLA source
+#### Upload and process a tenant document
 
-Document upload, processing, inspection, and download-token routes require an organisation administrator and are scoped to that administrator's tenant. The upload is multipart form data with a `title` field and one `file` field. The upload response includes the document and its first version IDs; use both IDs as the source references when creating an SLA policy.
+Document upload, processing, inspection, and download-token routes require an organisation administrator and are scoped to that administrator's tenant. The upload is multipart form data with a `title` field and one `file` field. This feature is independent of the tenant-specific SLA configuration API below.
 
 ```http
 POST /api/v1/documents
@@ -484,13 +484,13 @@ Content-Type: application/json
 {}
 ```
 
-The response contains the document's completed processing status and a version-bound extraction record. A missing or ambiguous target remains marked for human review; extracted values are evidence only and are never silently used as SLA defaults. Unsupported document formats return `422` and are not marked processed. `GET /api/v1/documents/{documentId}` returns the document metadata, tenant-scoped versions, and latest extraction. To retrieve the source file, first call `POST /api/v1/documents/{documentId}/download-token`, then use its short-lived path with `GET /api/v1/documents/download/{token}`.
+The response contains the document's completed processing status and a version-bound extraction record. A missing or ambiguous target remains marked for human review; extracted values are not automatically used as SLA configuration. Unsupported document formats return `422` and are not marked processed. `GET /api/v1/documents/{documentId}` returns the document metadata, tenant-scoped versions, and latest extraction. To retrieve the source file, first call `POST /api/v1/documents/{documentId}/download-token`, then use its short-lived path with `GET /api/v1/documents/download/{token}`.
 
-### Configure document-derived SLA policies
+### Configure tenant-specific SLA policies
 
-Only an organisation administrator may manage SLA policies, evaluations, or reports. `POST /sla-policies` accepts a normalized policy payload, not a document upload or raw extracted text. The referenced source document must belong to the authenticated tenant and be processed; its document version must belong to that same document and tenant. New policy versions are pending approval and are not used in calculations.
+Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar, statuses, and optional team scope through the API; no policy document upload is required. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
 
-The following target values are illustrative examples only. They are not defaults or recommendations; each tenant's approved document supplies the actual targets, schedule, timezone, holidays, paused statuses, resolved statuses, team scope and risk threshold. Missing priority targets do not fall back to another tenant or an invented value.
+The following values are illustrative test data only, not defaults or recommendations. Replace them with values chosen by the tenant administrator. Missing priority targets do not fall back to another tenant or an invented value.
 
 ```http
 POST /api/v1/sla-policies
@@ -500,9 +500,7 @@ Content-Type: application/json
 
 ```json
 {
-  "description": "Example targets transcribed from the tenant's approved support policy",
-  "sourceDocumentId": "document_123",
-  "sourceDocumentVersionId": "document_version_1",
+  "description": "Tenant-configured support SLA",
   "effectiveFrom": "2026-01-01T00:00:00.000Z",
   "effectiveTo": null,
   "payload": {
@@ -537,7 +535,7 @@ Content-Type: application/json
 
 `startMinute` and `endMinute` are minutes after midnight in the configured IANA timezone. `teamIds` is optional: when omitted, the policy applies organisation-wide; when present, it applies only to those teams and takes precedence over a matching organisation-wide policy. A policy version is activated only after an administrator approves it and the API records that approval. Activating a later version archives the prior active version for that policy.
 
-Subsequent document revisions create a new pending version without changing historical ticket evaluations:
+Policy changes create a new pending version without changing historical ticket evaluations:
 
 ```http
 POST /api/v1/sla-policies/{policyId}/versions
@@ -545,14 +543,14 @@ Authorization: Bearer <organisation-admin-token>
 Content-Type: application/json
 ```
 
-The request contains `sourceDocumentId`, `sourceDocumentVersionId`, `effectiveFrom`, optional `effectiveTo`, and a full `payload` in the same schema as above. Versions must be activated in increasing effective-date order. The prior version remains available for tickets whose creation time falls within its effective period.
+The request contains `effectiveFrom`, optional `effectiveTo`, and a full `payload` in the same schema as above. Versions must be activated in increasing effective-date order. The prior version remains available for tickets whose creation time falls within its effective period.
 
 ```http
 POST /api/v1/sla-policies/{policyId}/versions/{versionId}/approve
 Authorization: Bearer <organisation-admin-token>
 Content-Type: application/json
 
-{"reason": "Reviewed against the referenced tenant policy document."}
+{"reason": "Reviewed the tenant-configured SLA targets."}
 ```
 
 ```http

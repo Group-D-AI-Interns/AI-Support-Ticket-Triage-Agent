@@ -1,0 +1,18 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"title":"Postman test ticket","description":"Testing the ticket workflow through the shared API.","product":"Customer Portal","affectedService":"Authentication"}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{requesterToken}}"
+scripts:
+  - type: afterResponse
+    code: if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('ticketId', result.data.id); }
+    language: text/javascript
+order: 1000

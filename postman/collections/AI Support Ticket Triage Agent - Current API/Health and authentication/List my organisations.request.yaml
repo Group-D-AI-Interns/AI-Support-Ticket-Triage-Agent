@@ -1,0 +1,7 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/organisations?page=1&pageSize=50
+method: GET
+queryParams:
+  page: "1"
+  pageSize: "50"
+order: 6000

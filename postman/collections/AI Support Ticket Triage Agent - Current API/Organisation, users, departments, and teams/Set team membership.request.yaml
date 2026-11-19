@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/teams/{{teamId}}/members
+method: PUT
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"userId":"{{userId}}","role":"support_agent","status":"active"}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 15000

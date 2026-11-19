@@ -1,0 +1,38 @@
+$kind: collection
+description: "Postman requests for the HTTP functionality wired in the current development branch: health, Keycloak-authenticated identity/tenant and ticket APIs, document evidence, ticket workflows, tenant-configured SLA and reports, plus Jira webhook intake. Set the blank variables before running. For login, use Postman OAuth 2.0 Authorization Code (With PKCE): Auth URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/auth; Access Token URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/token; Client ID support-web; scope openid; S256; no client secret. Add Postman's callback URI to the support-web client's valid redirect URIs in Keycloak. After Postman receives a token, copy it into accessToken and the relevant role variable(s); use separate tokens for distinct users/roles. The API also requires an active local user and membership; X-Organisation-ID selects a tenant but does not grant access. Jira ingestion uses the configured secret in the URL, not a bearer token. For Jira, configure JIRA_TENANT_CONFIG in backend/.env. This is a local-development test collection: do not export real tokens or secrets. AI analysis components, generic extracted-rule review, and generic policy routes are not exposed as HTTP routes in the current backend and are intentionally not included."
+variables:
+  baseUrl: http://localhost:3000
+  keycloakBaseUrl: http://localhost:8081
+  realm: ai-support
+  accessToken: ""
+  adminToken: ""
+  requesterToken: ""
+  agentToken: ""
+  supervisorToken: ""
+  organisationId: ""
+  userId: ""
+  departmentId: ""
+  teamId: ""
+  ticketId: ""
+  ticketStatus: OPEN
+  reopenRequestId: ""
+  attachmentId: ""
+  workflowId: ""
+  documentId: ""
+  documentVersionId: ""
+  documentDownloadToken: ""
+  slaPolicyId: ""
+  slaVersionId: ""
+  jiraWebhookSecret: ""
+  jiraProjectKey: SUP
+  jiraReporterAccountId: ""
+  baseHost: localhost
+  basePort: "3000"
+  keycloakHost: localhost
+  keycloakPort: "8081"
+auth:
+  - id: e85d2e90-ae34-47bd-abcb-caa0d3a4d9a1
+    type: bearer
+    name: bearer auth
+    credentials:
+      token: "{{accessToken}}"

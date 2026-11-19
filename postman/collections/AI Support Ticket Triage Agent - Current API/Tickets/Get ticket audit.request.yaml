@@ -1,0 +1,10 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/audit
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+auth:
+  type: bearer
+  credentials:
+    token: "{{supervisorToken}}"
+order: 10000

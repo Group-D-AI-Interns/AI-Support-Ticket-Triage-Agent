@@ -1,0 +1,6 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/comments
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+order: 9000

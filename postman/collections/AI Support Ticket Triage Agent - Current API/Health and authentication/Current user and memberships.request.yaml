@@ -1,0 +1,4 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/me
+method: GET
+order: 5000
