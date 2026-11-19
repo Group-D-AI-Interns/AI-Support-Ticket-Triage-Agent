@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, open, readFile, rename, rm } from "node:fs/promises";
+import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
@@ -24,6 +24,21 @@ export class JsonFileStore {
   constructor(directory: string, lockTimeoutMs = 5000) {
     this.root = resolve(directory);
     this.lockTimeoutMs = lockTimeoutMs;
+  }
+
+  /** Verifies the configured data directory is readable and writable without touching application records. */
+  async checkReady(): Promise<void> {
+    const probePath = join(this.root, `.readiness-${randomUUID()}.tmp`);
+    try {
+      await mkdir(this.root, { recursive: true });
+      await readdir(this.root);
+      const probe = await open(probePath, "wx", 0o600);
+      await probe.close();
+      await rm(probePath);
+    } catch (error) {
+      await rm(probePath, { force: true }).catch(() => undefined);
+      throw new JsonStorageError("STORAGE_IO_ERROR", "The JSON data directory is not ready.", { cause: error });
+    }
   }
 
   async read<T>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>): Promise<JsonEnvelope<T>> {
