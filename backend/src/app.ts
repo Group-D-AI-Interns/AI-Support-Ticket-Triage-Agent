@@ -6,6 +6,7 @@ import { createLogger } from "./config/logger.ts";
 import type { AuthenticationProvider, IdentityProvisioningProvider, TenantResolver, TenantContext } from "./shared/auth/authentication.ts";
 import { applicationAuthorization, describeRoleCapabilities, requirePermission, ROLE_IDS, type RolePermissionPolicy } from "./shared/auth/authorization.ts";
 import { JsonFileStore, JsonStorageError } from "./infrastructure/persistence/json/json-file-store.ts";
+import { createJsonTenantStore } from "./infrastructure/persistence/json/json-store.ts";
 import { JsonIdentityRepository } from "./modules/identity/repositories.ts";
 import { IdentityService } from "./modules/identity/service.ts";
 import { JsonOrganisationRepository } from "./modules/organisations/repositories.ts";
@@ -37,6 +38,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
     : { dataDirectory: environment.dataDirectory, projectMappings: {}, organisations: {} };
   const ticketApp = createTicketApp({
     settings: ticketSettings,
+    tenantStore: createJsonTenantStore(store),
     ...(dependencies.authenticator ? { authenticator: dependencies.authenticator } : {}),
     tenantResolver: dependencies.tenantResolver ?? identity,
     listTeamIdsForUser: (tenant, userId) => teams.listTeamIdsForUser(tenant, userId),

@@ -1,5 +1,4 @@
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
+import { JsonFileStore, JsonStorageError, type JsonEnvelope } from './json-file-store.js';
 
 export type JsonCollectionName =
   | 'documents'
@@ -16,35 +15,60 @@ export type JsonCollectionName =
 export interface JsonTenantStore {
   readCollection<T>(collection: JsonCollectionName): Promise<T[]>;
   writeCollection<T>(collection: JsonCollectionName, records: T[]): Promise<void>;
+  updateCollection<T, R>(collection: JsonCollectionName, mutate: (records: T[]) => R | Promise<R>): Promise<R>;
   rootDir: string;
 }
 
-export function createJsonTenantStore(rootDir: string): JsonTenantStore {
-  const store: JsonTenantStore = {
-    rootDir,
+type TenantRecord = { id: string; organisationId: string };
+
+export function createJsonTenantStore(storeOrRootDir: JsonFileStore | string, lockTimeoutMs = 5000): JsonTenantStore {
+  const fileStore = typeof storeOrRootDir === 'string'
+    ? new JsonFileStore(storeOrRootDir, lockTimeoutMs)
+    : storeOrRootDir;
+
+  return {
+    rootDir: fileStore.rootDir,
     async readCollection<T>(collection: JsonCollectionName): Promise<T[]> {
-      const filePath = join(rootDir, `${collection}.json`);
-      try {
-        const text = await readFile(filePath, 'utf8');
-        if (!text.trim()) {
-          return [] as T[];
-        }
-        const parsed = JSON.parse(text) as { records?: T[] } | T[];
-        return Array.isArray(parsed) ? parsed : (parsed.records ?? []);
-      } catch {
-        return [] as T[];
-      }
+      const envelope = await fileStore.read<TenantRecord>(
+        `${collection}.json`,
+        isTenantEnvelope,
+        migrateLegacyArray,
+      );
+      return envelope.records as T[];
     },
     async writeCollection<T>(collection: JsonCollectionName, records: T[]): Promise<void> {
-      await mkdir(rootDir, { recursive: true });
-      const filePath = join(rootDir, `${collection}.json`);
-      const payload = {
-        schemaVersion: 1,
-        records,
-      };
-      await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, 'utf8');
+      const envelope: JsonEnvelope<T> = { schemaVersion: 1, records };
+      if (!isTenantEnvelope(envelope)) {
+        throw new JsonStorageError("STORAGE_INVALID_SCHEMA", `Collection ${collection} contains invalid tenant records.`);
+      }
+      await fileStore.write(`${collection}.json`, envelope);
+    },
+    async updateCollection<T, R>(collection: JsonCollectionName, mutate: (records: T[]) => R | Promise<R>): Promise<R> {
+      return fileStore.update<TenantRecord, R>(
+        `${collection}.json`,
+        isTenantEnvelope,
+        (envelope) => mutate(envelope.records as T[]),
+        migrateLegacyArray,
+      );
     },
   };
+}
 
-  return store;
+function isTenantRecord(value: unknown): value is TenantRecord {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.id === 'string' && record.id.length > 0 &&
+    typeof record.organisationId === 'string' && record.organisationId.length > 0;
+}
+
+function isTenantEnvelope(value: unknown): value is JsonEnvelope<TenantRecord> {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
+  const envelope = value as { schemaVersion?: unknown; records?: unknown };
+  return envelope.schemaVersion === 1 && Array.isArray(envelope.records) && envelope.records.every(isTenantRecord);
+}
+
+function migrateLegacyArray(value: unknown): JsonEnvelope<TenantRecord> | null {
+  return Array.isArray(value) && value.every(isTenantRecord)
+    ? { schemaVersion: 1, records: value }
+    : null;
 }

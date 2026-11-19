@@ -4,6 +4,7 @@ import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 export type JsonEnvelope<T> = { schemaVersion: 1; records: T[] };
+export type JsonEnvelopeMigration<T> = (value: unknown) => JsonEnvelope<T> | null;
 
 export class JsonStorageError extends Error {
   public readonly code: "STORAGE_IO_ERROR" | "STORAGE_INVALID_JSON" | "STORAGE_INVALID_SCHEMA";
@@ -26,6 +27,10 @@ export class JsonFileStore {
     this.lockTimeoutMs = lockTimeoutMs;
   }
 
+  get rootDir(): string {
+    return this.root;
+  }
+
   /** Verifies the configured data directory is readable and writable without touching application records. */
   async checkReady(): Promise<void> {
     const probePath = join(this.root, `.readiness-${randomUUID()}.tmp`);
@@ -41,7 +46,11 @@ export class JsonFileStore {
     }
   }
 
-  async read<T>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>): Promise<JsonEnvelope<T>> {
+  async read<T>(
+    name: string,
+    validate: (value: unknown) => value is JsonEnvelope<T>,
+    migrate?: JsonEnvelopeMigration<T>,
+  ): Promise<JsonEnvelope<T>> {
     const path = this.pathFor(name);
     let contents: string;
     try {
@@ -57,8 +66,9 @@ export class JsonFileStore {
     } catch (error) {
       throw new JsonStorageError("STORAGE_INVALID_JSON", `Stored file ${name} contains invalid JSON.`, { cause: error });
     }
-    if (!validate(parsed)) throw new JsonStorageError("STORAGE_INVALID_SCHEMA", `Stored file ${name} does not match its schema.`);
-    const records = (parsed as JsonEnvelope<unknown>).records;
+    const envelope = validate(parsed) ? parsed : migrate?.(parsed);
+    if (!envelope || !validate(envelope)) throw new JsonStorageError("STORAGE_INVALID_SCHEMA", `Stored file ${name} does not match its schema.`);
+    const records = envelope.records;
     const ids = new Set<string>();
     for (const record of records) {
       if (typeof record !== "object" || record === null || !("id" in record)) continue;
@@ -68,17 +78,27 @@ export class JsonFileStore {
       }
       ids.add(id);
     }
-    return parsed;
+    return envelope;
   }
 
   async write<T>(name: string, envelope: JsonEnvelope<T>): Promise<void> {
-    await this.withLock(name, async () => this.writeUnlocked(name, envelope));
+    await this.withLock(name, async () => {
+      assertUniqueRecordIds(name, envelope.records);
+      await this.writeUnlocked(name, envelope);
+    });
   }
 
-  async update<T, R>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>, mutate: (envelope: JsonEnvelope<T>) => R | Promise<R>): Promise<R> {
+  async update<T, R>(
+    name: string,
+    validate: (value: unknown) => value is JsonEnvelope<T>,
+    mutate: (envelope: JsonEnvelope<T>) => R | Promise<R>,
+    migrate?: JsonEnvelopeMigration<T>,
+  ): Promise<R> {
     return this.withLock(name, async () => {
-      const envelope = await this.read(name, validate);
+      const envelope = await this.read(name, validate, migrate);
       const result = await mutate(envelope);
+      if (!validate(envelope)) throw new JsonStorageError("STORAGE_INVALID_SCHEMA", `Updated file ${name} does not match its schema.`);
+      assertUniqueRecordIds(name, envelope.records);
       await this.writeUnlocked(name, envelope);
       return result;
     });
@@ -140,11 +160,23 @@ export class JsonFileStore {
   }
 
   private pathFor(name: string): string {
-    if (!/^[a-z][a-z0-9-]*\.json$/.test(name)) throw new Error("Invalid JSON store filename.");
+    if (!/^[a-z][A-Za-z0-9-]*\.json$/.test(name)) throw new Error("Invalid JSON store filename.");
     const path = resolve(this.root, name);
     if (!path.startsWith(`${this.root}/`) && !path.startsWith(`${this.root}\\`)) {
       throw new Error("JSON store path escaped configured directory.");
     }
     return path;
+  }
+}
+
+function assertUniqueRecordIds(name: string, records: unknown[]): void {
+  const ids = new Set<string>();
+  for (const record of records) {
+    if (typeof record !== "object" || record === null || !("id" in record)) continue;
+    const id = (record as { id?: unknown }).id;
+    if (typeof id !== "string" || id.length === 0 || ids.has(id)) {
+      throw new JsonStorageError("STORAGE_INVALID_SCHEMA", `Stored file ${name} contains a missing or duplicate record ID.`);
+    }
+    ids.add(id);
   }
 }

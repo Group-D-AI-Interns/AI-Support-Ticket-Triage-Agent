@@ -11,15 +11,13 @@ export class JsonDocumentRepository implements DocumentRepository {
       throw new Error('Document organisation does not match tenant context.');
     }
 
-    const documents = await this.store.readCollection<DocumentRecord>('documents');
-    const existing = documents.find((item) => item.id === document.id);
-    if (existing) {
-      throw new Error(`Document ${document.id} already exists.`);
-    }
-
-    documents.push(document);
-    await this.store.writeCollection('documents', documents);
-    return document;
+    return this.store.updateCollection<DocumentRecord, DocumentRecord>('documents', (documents) => {
+      if (documents.some((item) => item.id === document.id)) {
+        throw new Error(`Document ${document.id} already exists.`);
+      }
+      documents.push(document);
+      return document;
+    });
   }
 
   async getById(tenant: TenantContext, documentId: string): Promise<DocumentRecord | null> {
@@ -50,23 +48,21 @@ export class JsonDocumentRepository implements DocumentRepository {
     status: DocumentRecord['status'],
     processingStatus?: DocumentRecord['processingStatus'],
   ): Promise<DocumentRecord | null> {
-    const documents = await this.store.readCollection<DocumentRecord>('documents');
-    const index = documents.findIndex((item) => item.id === documentId && item.organisationId === tenant.organisationId);
-    const current = documents[index];
-    if (index === -1 || !current) {
-      return null;
-    }
+    return this.store.updateCollection<DocumentRecord, DocumentRecord | null>('documents', (documents) => {
+      const index = documents.findIndex((item) => item.id === documentId && item.organisationId === tenant.organisationId);
+      const current = documents[index];
+      if (index === -1 || !current) return null;
 
-    const updated = {
-      ...current,
-      status,
-      processingStatus: processingStatus ?? current.processingStatus,
-      updatedAt: new Date().toISOString(),
-    };
+      const updated = {
+        ...current,
+        status,
+        processingStatus: processingStatus ?? current.processingStatus,
+        updatedAt: new Date().toISOString(),
+      };
 
-    documents[index] = updated;
-    await this.store.writeCollection('documents', documents);
-    return updated;
+      documents[index] = updated;
+      return updated;
+    });
   }
 
   async addVersion(version: DocumentVersionRecord, tenant: TenantContext): Promise<DocumentVersionRecord> {
@@ -74,13 +70,12 @@ export class JsonDocumentRepository implements DocumentRepository {
       throw new Error('Version organisation does not match tenant context.');
     }
 
-    const versions = await this.store.readCollection<DocumentVersionRecord>('documentVersions');
-    if (versions.some((item) => item.id === version.id)) {
-      throw new Error(`Document version ${version.id} already exists.`);
-    }
-
-    versions.push(version);
-    await this.store.writeCollection('documentVersions', versions);
-    return version;
+    return this.store.updateCollection<DocumentVersionRecord, DocumentVersionRecord>('documentVersions', (versions) => {
+      if (versions.some((item) => item.id === version.id)) {
+        throw new Error(`Document version ${version.id} already exists.`);
+      }
+      versions.push(version);
+      return version;
+    });
   }
 }

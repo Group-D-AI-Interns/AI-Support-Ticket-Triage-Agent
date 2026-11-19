@@ -11,14 +11,13 @@ export class JsonPolicyRepository implements PolicyRepository {
       throw new Error('Policy organisation does not match tenant context.');
     }
 
-    const policies = await this.store.readCollection<PolicyRecord>('policies');
-    if (policies.some((item) => item.id === policy.id)) {
-      throw new Error(`Policy ${policy.id} already exists.`);
-    }
-
-    policies.push(policy);
-    await this.store.writeCollection('policies', policies);
-    return policy;
+    return this.store.updateCollection<PolicyRecord, PolicyRecord>('policies', (policies) => {
+      if (policies.some((item) => item.id === policy.id)) {
+        throw new Error(`Policy ${policy.id} already exists.`);
+      }
+      policies.push(policy);
+      return policy;
+    });
   }
 
   async getPolicyById(tenant: TenantContext, policyId: string): Promise<PolicyRecord | null> {
@@ -52,15 +51,14 @@ export class JsonPolicyRepository implements PolicyRepository {
       policyId,
     };
 
-    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
-    const versionExists = versions.some((item) => item.policyId === policyId && item.version === normalizedVersion.version);
-    if (versionExists) {
-      throw new Error(`Policy version ${normalizedVersion.version} for ${policyId} already exists.`);
-    }
-
-    versions.push(normalizedVersion);
-    await this.store.writeCollection('policyVersions', versions);
-    return normalizedVersion;
+    return this.store.updateCollection<PolicyVersionRecord, PolicyVersionRecord>('policyVersions', (versions) => {
+      const versionExists = versions.some((item) => item.policyId === policyId && item.version === normalizedVersion.version);
+      if (versionExists) {
+        throw new Error(`Policy version ${normalizedVersion.version} for ${policyId} already exists.`);
+      }
+      versions.push(normalizedVersion);
+      return normalizedVersion;
+    });
   }
 
   async getVersionById(tenant: TenantContext, versionId: string): Promise<PolicyVersionRecord | null> {
@@ -104,26 +102,20 @@ export class JsonPolicyRepository implements PolicyRepository {
       status = maybeStatusOrTenant as PolicyVersionRecord['status'];
     }
 
-    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
-    const index = versions.findIndex((item) => item.id === versionId && item.organisationId === tenant.organisationId);
-    if (index === -1) {
-      return null;
-    }
+    return this.store.updateCollection<PolicyVersionRecord, PolicyVersionRecord | null>('policyVersions', (versions) => {
+      const index = versions.findIndex((item) => item.id === versionId && item.organisationId === tenant.organisationId);
+      const existing = versions[index];
+      if (index === -1 || !existing) return null;
 
-    const existing = versions[index];
-    if (!existing) {
-      return null;
-    }
+      const updated: PolicyVersionRecord = {
+        ...existing,
+        status,
+        updatedAt: new Date().toISOString(),
+      };
 
-    const updated: PolicyVersionRecord = {
-      ...existing,
-      status,
-      updatedAt: new Date().toISOString(),
-    };
-
-    versions[index] = updated;
-    await this.store.writeCollection('policyVersions', versions);
-    return updated;
+      versions[index] = updated;
+      return updated;
+    });
   }
 
   async activateVersion(
@@ -131,63 +123,54 @@ export class JsonPolicyRepository implements PolicyRepository {
     policyId: string,
     versionId: string,
   ): Promise<PolicyVersionRecord | null> {
-    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
-    const target = versions.find(
-      (item) =>
-        item.id === versionId &&
-        item.policyId === policyId &&
-        item.organisationId === tenant.organisationId,
-    );
-    if (
-      !target ||
-      target.status !== 'approved' ||
-      target.effectiveFrom === null
-    ) {
-      return null;
-    }
+    return this.store.updateCollection<PolicyVersionRecord, PolicyVersionRecord | null>('policyVersions', (versions) => {
+      const target = versions.find(
+        (item) =>
+          item.id === versionId &&
+          item.policyId === policyId &&
+          item.organisationId === tenant.organisationId,
+      );
+      if (!target || target.status !== 'approved' || target.effectiveFrom === null) return null;
 
-    const targetEffectiveFrom = target.effectiveFrom;
-    const now = new Date().toISOString();
-    const updated: PolicyVersionRecord = { ...target, status: 'active', updatedAt: now };
-    const activeVersions = versions.filter(
-      (item) =>
-        item.organisationId === tenant.organisationId &&
-        item.policyId === policyId &&
-        item.status === 'active',
-    );
-    if (
-      activeVersions.some(
+      const targetEffectiveFrom = target.effectiveFrom;
+      const now = new Date().toISOString();
+      const updated: PolicyVersionRecord = { ...target, status: 'active', updatedAt: now };
+      const activeVersions = versions.filter(
+        (item) =>
+          item.organisationId === tenant.organisationId &&
+          item.policyId === policyId &&
+          item.status === 'active',
+      );
+      if (activeVersions.some(
         (item) =>
           item.effectiveFrom === null ||
           Date.parse(targetEffectiveFrom) <= Date.parse(item.effectiveFrom),
-      )
-    ) {
-      return null;
-    }
-    const next = versions.map((item) =>
-      item.organisationId === tenant.organisationId &&
-      item.policyId === policyId &&
-      item.status === 'active'
-        ? {
-            ...item,
-            status: 'archived' as const,
-            effectiveTo:
-              item.effectiveTo === null ||
-              Date.parse(targetEffectiveFrom) <
-                Date.parse(item.effectiveTo)
-                ? targetEffectiveFrom
-                : item.effectiveTo,
-            updatedAt: now,
-          }
-        : item,
-    );
-    const targetIndex = next.findIndex((item) => item.id === versionId);
-    if (targetIndex === -1) {
-      return null;
-    }
-    next[targetIndex] = updated;
-    await this.store.writeCollection('policyVersions', next);
-    return updated;
+      )) return null;
+
+      const targetIndex = versions.findIndex((item) => item.id === versionId);
+      if (targetIndex === -1) return null;
+      const next = versions.map((item) =>
+        item.organisationId === tenant.organisationId &&
+        item.policyId === policyId &&
+        item.status === 'active'
+          ? {
+              ...item,
+              status: 'archived' as const,
+              effectiveTo:
+                item.effectiveTo === null ||
+                Date.parse(targetEffectiveFrom) < Date.parse(item.effectiveTo)
+                  ? targetEffectiveFrom
+                  : item.effectiveTo,
+              updatedAt: now,
+            }
+          : item,
+      );
+      next[targetIndex] = updated;
+      for (let index = 0; index < next.length; index += 1) {
+        versions[index] = next[index]!;
+      }
+      return updated;
+    });
   }
 
   async createExtractedRule(rule: ExtractedRuleRecord, tenant: TenantContext): Promise<ExtractedRuleRecord> {
@@ -216,30 +199,29 @@ export class JsonPolicyRepository implements PolicyRepository {
       throw new Error('Extracted rule references a policy version outside the tenant scope.');
     }
 
-    const rules = await this.store.readCollection<ExtractedRuleRecord>('extractedRules');
-    const existingById = new Map(rules.map((rule) => [rule.id, rule]));
-    const additions: ExtractedRuleRecord[] = [];
-    const result: ExtractedRuleRecord[] = [];
+    return this.store.updateCollection<ExtractedRuleRecord, ExtractedRuleRecord[]>('extractedRules', (rules) => {
+      const existingById = new Map(rules.map((rule) => [rule.id, rule]));
+      const additions: ExtractedRuleRecord[] = [];
+      const result: ExtractedRuleRecord[] = [];
 
-    for (const candidate of incoming) {
-      const existing = existingById.get(candidate.id);
-      if (existing) {
-        if (!sameCandidateContent(existing, candidate)) {
-          throw new Error('Extraction execution produced conflicting candidate rule content.');
+      for (const candidate of incoming) {
+        const existing = existingById.get(candidate.id);
+        if (existing) {
+          if (!sameCandidateContent(existing, candidate)) {
+            throw new Error('Extraction execution produced conflicting candidate rule content.');
+          }
+          result.push(existing);
+          continue;
         }
-        result.push(existing);
-        continue;
+
+        existingById.set(candidate.id, candidate);
+        additions.push(candidate);
+        result.push(candidate);
       }
 
-      existingById.set(candidate.id, candidate);
-      additions.push(candidate);
-      result.push(candidate);
-    }
-
-    if (additions.length > 0) {
-      await this.store.writeCollection('extractedRules', [...rules, ...additions]);
-    }
-    return result;
+      rules.push(...additions);
+      return result;
+    });
   }
 
   async addApproval(approval: PolicyApprovalRecord, tenant: TenantContext): Promise<PolicyApprovalRecord> {
@@ -247,10 +229,10 @@ export class JsonPolicyRepository implements PolicyRepository {
       throw new Error('Approval organisation does not match tenant context.');
     }
 
-    const approvals = await this.store.readCollection<PolicyApprovalRecord>('policyApprovals');
-    approvals.push(approval);
-    await this.store.writeCollection('policyApprovals', approvals);
-    return approval;
+    return this.store.updateCollection<PolicyApprovalRecord, PolicyApprovalRecord>('policyApprovals', (approvals) => {
+      approvals.push(approval);
+      return approval;
+    });
   }
 }
 

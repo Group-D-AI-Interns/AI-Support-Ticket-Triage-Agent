@@ -7,46 +7,36 @@ export class InMemoryExtractionQueue implements ExtractionJobQueue {
   constructor(private readonly store: JsonTenantStore) {}
 
   async enqueue(job: ExtractionJobRecord): Promise<ExtractionJobRecord> {
-    const jobs = await this.store.readCollection<ExtractionJobRecord>('extractionJobs');
-    if (jobs.some((item) => item.id === job.id)) {
-      throw new Error(`Extraction job ${job.id} already exists.`);
-    }
-
-    jobs.push(job);
-    await this.store.writeCollection('extractionJobs', jobs);
-    return job;
+    return this.store.updateCollection<ExtractionJobRecord, ExtractionJobRecord>('extractionJobs', (jobs) => {
+      if (jobs.some((item) => item.id === job.id)) {
+        throw new Error(`Extraction job ${job.id} already exists.`);
+      }
+      jobs.push(job);
+      return job;
+    });
   }
 
   async claimNext(tenant: TenantContext): Promise<ExtractionJobRecord | null> {
-    const jobs = await this.store.readCollection<ExtractionJobRecord>('extractionJobs');
-    const queuedJobs = jobs
-      .filter((job) => job.organisationId === tenant.organisationId)
-      .filter((job) => job.status === 'queued' || job.status === 'retrying')
-      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    return this.store.updateCollection<ExtractionJobRecord, ExtractionJobRecord | null>('extractionJobs', (jobs) => {
+      const target = jobs
+        .filter((job) => job.organisationId === tenant.organisationId)
+        .filter((job) => job.status === 'queued' || job.status === 'retrying')
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
+      if (!target) return null;
 
-    if (queuedJobs.length === 0) {
-      return null;
-    }
+      const index = jobs.findIndex((job) => job.id === target.id);
+      if (index < 0) return null;
+      const nextVersion: ExtractionJobRecord = {
+        ...target,
+        attempts: target.attempts + 1,
+        status: 'processing',
+        claimedAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      };
 
-    const target = queuedJobs[0];
-    if (!target) {
-      return null;
-    }
-    const index = jobs.findIndex((job) => job.id === target.id);
-    if (index < 0) {
-      return null;
-    }
-    const nextVersion: ExtractionJobRecord = {
-      ...target,
-      attempts: target.attempts + 1,
-      status: 'processing',
-      claimedAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-
-    jobs[index] = nextVersion;
-    await this.store.writeCollection('extractionJobs', jobs);
-    return nextVersion;
+      jobs[index] = nextVersion;
+      return nextVersion;
+    });
   }
 
   async getById(tenant: TenantContext, jobId: string): Promise<ExtractionJobRecord | null> {
@@ -56,21 +46,19 @@ export class InMemoryExtractionQueue implements ExtractionJobQueue {
   }
 
   async update(jobId: string, updates: Partial<ExtractionJobRecord>): Promise<ExtractionJobRecord | null> {
-    const jobs = await this.store.readCollection<ExtractionJobRecord>('extractionJobs');
-    const index = jobs.findIndex((job) => job.id === jobId);
-    const current = jobs[index];
-    if (index === -1 || !current) {
-      return null;
-    }
+    return this.store.updateCollection<ExtractionJobRecord, ExtractionJobRecord | null>('extractionJobs', (jobs) => {
+      const index = jobs.findIndex((job) => job.id === jobId);
+      const current = jobs[index];
+      if (index === -1 || !current) return null;
 
-    const updated: ExtractionJobRecord = {
-      ...current,
-      ...updates,
-      updatedAt: new Date().toISOString(),
-    };
+      const updated: ExtractionJobRecord = {
+        ...current,
+        ...updates,
+        updatedAt: new Date().toISOString(),
+      };
 
-    jobs[index] = updated;
-    await this.store.writeCollection('extractionJobs', jobs);
-    return updated;
+      jobs[index] = updated;
+      return updated;
+    });
   }
 }

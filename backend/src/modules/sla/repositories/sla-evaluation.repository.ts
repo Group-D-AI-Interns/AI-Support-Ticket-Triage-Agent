@@ -23,13 +23,12 @@ export class JsonSlaEvaluationRepository implements SlaEvaluationRepository {
     if (evaluation.organisationId !== tenant.organisationId) {
       throw new Error('SLA evaluation organisation does not match tenant.');
     }
-    const records =
-      await this.store.readCollection<SlaEvaluationRecord>('slaEvaluations');
-    if (records.some((record) => record.id === evaluation.id)) {
-      throw new Error(`SLA evaluation ${evaluation.id} already exists.`);
-    }
-    records.push(evaluation);
-    await this.store.writeCollection('slaEvaluations', records);
+    await this.store.updateCollection<SlaEvaluationRecord, void>('slaEvaluations', (records) => {
+      if (records.some((record) => record.id === evaluation.id)) {
+        throw new Error(`SLA evaluation ${evaluation.id} already exists.`);
+      }
+      records.push(evaluation);
+    });
   }
 
   async list(
