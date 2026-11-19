@@ -8,6 +8,41 @@ import express, {
 import multer from 'multer';
 import type { AuthenticationProvider, TenantContext, TenantResolver } from '../../shared/auth/authentication.js';
 import { applicationAuthorization, type Permission, type RolePermissionPolicy } from '../../shared/auth/authorization.js';
+import {
+  AiExecutionError,
+  type AiExecutionRunner,
+} from '../ai/ai-execution-runner.js';
+import { TicketAiAnalysisError } from '../ai/ticket-ai-analysis.service.js';
+import type { TicketAiView } from '../ai/contracts.js';
+import type {
+  AiAnalysisRepository,
+  AuthorizedTicketAnalysisSource,
+} from '../ai/ports.js';
+import { PriorityRecommender } from '../ai/components/priority-recommender.js';
+import { PriorityRecommendationService } from '../ai/priority-recommendation.service.js';
+import {
+  priorityPreviewFromEnvironment,
+  type PriorityPreviewConfiguration,
+} from '../ai/priority-preview-config.js';
+import {
+  createLocalDemoTicketAiRuntime,
+  TicketAiDemoConfigurationError,
+  ticketAiDemoConfigurationFromEnvironment,
+  type TicketAiDemoConfiguration,
+} from '../ai/local-demo-runtime.js';
+import {
+  createLiveTicketAiRuntime,
+  LiveTicketAiConfigurationError,
+  liveTicketAiConfigurationFromEnvironment,
+  type LiveTicketAiConfiguration,
+} from '../ai/live-ticket-ai-runtime.js';
+import {
+  KnowledgeRetriever,
+  type AuthorizedKnowledgeSource,
+} from '../knowledge/retrieval.js';
+import { ApprovedPolicyKnowledgeSource } from '../knowledge/approved-policy-source.js';
+import { ResolutionRecommendationService } from '../ai/resolution-recommendation.service.js';
+import { JsonStorageError } from '../../infrastructure/persistence/json/json-file-store.js';
 
 import {
   createLocalPrivateStorageAdapter,
@@ -107,6 +142,12 @@ export type TicketAppOptions = {
   policyRepository?: PolicyRepository;
   slaEvaluationRepository?: SlaEvaluationRepository;
   slaEvaluationService?: SlaEvaluationServiceType;
+  analysisRepository?: AiAnalysisRepository;
+  ticketAiDemo?: TicketAiDemoConfiguration | null;
+  ticketAiLive?: LiveTicketAiConfiguration | null;
+  priorityPreview?: PriorityPreviewConfiguration | null;
+  resolutionRunner?: AiExecutionRunner;
+  knowledgeSource?: AuthorizedKnowledgeSource;
 };
 
 export function createTicketApp(options: TicketAppOptions = {}) {
@@ -155,6 +196,71 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     ? options.developmentPrincipal ?? null
     : developmentPrincipalFromEnvironment();
   const authorization = options.authorization ?? applicationAuthorization;
+  const ticketAiDemo = options.ticketAiDemo === undefined
+    ? ticketAiDemoConfigurationFromEnvironment()
+    : options.ticketAiDemo;
+  const ticketAiLive = options.ticketAiLive === undefined
+    ? liveTicketAiConfigurationFromEnvironment()
+    : options.ticketAiLive;
+  if (ticketAiDemo && ticketAiLive) {
+    throw new TicketAiDemoConfigurationError(
+      'Enable either local demo mode or live ticket AI, not both.',
+    );
+  }
+  const ticketAiSource: AuthorizedTicketAnalysisSource = {
+    async getAuthorizedTicket(
+      tenant: TenantContext,
+      ticketId: string,
+    ): Promise<TicketAiView | null> {
+      const ticket = await store.findTicket(tenant as DevelopmentPrincipal, ticketId);
+      const caller = tenant as DevelopmentPrincipal;
+      if (!ticket || !Array.isArray(caller.teamIds) || !canAccessTicket(caller, ticket)) {
+        return null;
+      }
+      return {
+        id: ticket.id,
+        organisationId: ticket.organisationId,
+        title: ticket.title,
+        description: descriptionText(ticket.description),
+      };
+    },
+  };
+  const ticketAiRuntime = ticketAiLive
+    ? createLiveTicketAiRuntime(
+      ticketAiSource,
+      ticketAiLive,
+      process.env,
+      undefined,
+      options.analysisRepository,
+    )
+    : ticketAiDemo
+      ? createLocalDemoTicketAiRuntime(ticketAiSource, options.analysisRepository)
+      : null;
+  const ticketAiCategories = ticketAiLive?.categories ?? ticketAiDemo?.categories;
+  const priorityConfig = options.priorityPreview === undefined
+    ? priorityPreviewFromEnvironment()
+    : options.priorityPreview;
+  const priorityRunner = priorityConfig?.runner ?? ticketAiRuntime?.priorityRunner;
+  const priorityService = priorityConfig && priorityRunner
+    ? new PriorityRecommendationService(
+      ticketAiSource,
+      new PriorityRecommender(
+        priorityRunner,
+        priorityConfig.candidate,
+        priorityConfig.minimumConfidence,
+      ),
+    )
+    : null;
+  const resolutionRunner = options.resolutionRunner ?? ticketAiRuntime?.priorityRunner;
+  const resolutionService = resolutionRunner
+    ? new ResolutionRecommendationService(
+      ticketAiSource,
+      new KnowledgeRetriever(
+        options.knowledgeSource ?? new ApprovedPolicyKnowledgeSource(policyRepository, tenantStore),
+      ),
+      resolutionRunner,
+    )
+    : null;
 
   const app = express();
   const fallbackRequestId = () => `req_${randomUUID().replace(/-/g, '')}`;
@@ -781,11 +887,14 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           },
           authenticated,
         );
-      const updated = await policyRepository.transitionVersionStatus(
-        authenticated,
-        version.id,
-        'approved',
-      );
+      const afterApproval = await policyRepository.getVersionById(authenticated, version.id);
+      const updated = afterApproval?.status === 'approved'
+        ? afterApproval
+        : await policyRepository.transitionVersionStatus(
+          authenticated,
+          version.id,
+          'approved',
+        );
       if (!updated) {
         throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
       }
@@ -1058,6 +1167,127 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       data: ticketResponse(ticket),
       requestId: requestId(response),
     });
+  });
+
+  app.get(
+    ['/api/v1/tickets/:ticketId/evidence', '/api/v1/tickets/:ticketId/similar'],
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+      response.setHeader('Cache-Control', 'no-store');
+      if (!resolutionService) {
+        throw new ApiError(
+          503,
+          'RESOLUTION_NOT_CONFIGURED',
+          'Enable an AI runtime to use resolution retrieval.',
+        );
+      }
+      try {
+        const evidence = await resolutionService.retrieve(
+          authenticated,
+          routeParam(request, 'ticketId'),
+          request.path.endsWith('/similar'),
+        );
+        response.json({
+          data: evidence,
+          retrieval: { method: 'lexical', persistedIndex: false },
+          requestId: requestId(response),
+        });
+      } catch (error) {
+        throw ticketAiApiError(error);
+      }
+    },
+  );
+
+  app.post('/api/v1/tickets/:ticketId/recommend-resolution', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+    parseObjectBody(request.body ?? {}, []);
+    response.setHeader('Cache-Control', 'no-store');
+    if (!resolutionService) {
+      throw new ApiError(
+        503,
+        'RESOLUTION_NOT_CONFIGURED',
+        'Enable an AI runtime to recommend resolutions.',
+      );
+    }
+    try {
+      const result = await resolutionService.recommend(
+        authenticated,
+        routeParam(request, 'ticketId'),
+      );
+      response.json({ data: result, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/recommend-priority', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!priorityService) {
+      throw new ApiError(
+        503,
+        'PRIORITY_PREVIEW_DISABLED',
+        'Draft priority preview is not configured.',
+      );
+    }
+    try {
+      const recommendation = await priorityService.recommend(
+        authenticated,
+        routeParam(request, 'ticketId'),
+      );
+      response.json({ data: recommendation, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/analyze', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!ticketAiRuntime || !ticketAiCategories) {
+      throw new ApiError(
+        503,
+        'TICKET_AI_NOT_CONFIGURED',
+        'Ticket analysis is not enabled.',
+      );
+    }
+    try {
+      const analysis = await ticketAiRuntime.service.analyze({
+        tenant: authenticated,
+        ticketId: routeParam(request, 'ticketId'),
+        categories: ticketAiCategories,
+      });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: analysis, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
+  });
+
+  app.get('/api/v1/tickets/:ticketId/analyses', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    if (!ticketAiRuntime) {
+      throw new ApiError(
+        503,
+        'TICKET_AI_NOT_CONFIGURED',
+        'Ticket analysis is not enabled.',
+      );
+    }
+    try {
+      const analyses = await ticketAiRuntime.service.listAnalyses(
+        authenticated,
+        routeParam(request, 'ticketId'),
+      );
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: analyses, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
   });
 
   app.get('/api/v1/tickets', async (request, response) => {
@@ -1393,6 +1623,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       'product',
       'affectedService',
       'teamId',
+      'priority',
     ]);
     if (Object.keys(body).length === 0) {
       throw validationError(
@@ -1404,7 +1635,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     const changes: Partial<
       Pick<
         TicketRecord,
-        'title' | 'description' | 'product' | 'affectedService' | 'teamId'
+        'title' | 'description' | 'product' | 'affectedService' | 'teamId' | 'priority'
       >
     > = {};
     for (const [field, value] of Object.entries(body)) {
@@ -1437,6 +1668,12 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           );
         }
         changes.teamId = value;
+      } else if (field === 'priority') {
+        requireSharedPermission(authenticated, authorization, 'tickets.priority.manage');
+        if (typeof value !== 'string' || !value.trim()) {
+          throw validationError(field, 'Priority must be a non-empty string.');
+        }
+        changes.priority = value.trim();
       } else {
         if (value !== null && typeof value !== 'string') {
           throw validationError(field, 'This field must be a string or null.');
@@ -1585,6 +1822,93 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       });
     },
   );
+
+  app.get('/api/v1/extracted-rules', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const policyVersionId = typeof request.query.policyVersionId === 'string'
+      ? request.query.policyVersionId
+      : undefined;
+    const rules = await policyRepository.listExtractedRules(
+      authenticated,
+      policyVersionId,
+    );
+    response.json({ data: rules, requestId: requestId(response) });
+  });
+
+  app.get('/api/v1/extracted-rules/:ruleId', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const rule = await policyRepository.getExtractedRuleById(
+      authenticated,
+      routeParam(request, 'ruleId'),
+    );
+    if (!rule) {
+      throw new ApiError(404, 'NOT_FOUND', 'Extracted rule not found.');
+    }
+    response.json({ data: rule, requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/approve', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason', 'effectiveFrom']);
+    const reason = requiredText(body, 'reason');
+    const effectiveFrom = optionalText(body, 'effectiveFrom');
+    if (effectiveFrom && Number.isNaN(Date.parse(effectiveFrom))) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'effectiveFrom must be a valid timestamp.', [
+        { field: 'effectiveFrom', message: 'effectiveFrom must be a valid timestamp.' },
+      ]);
+    }
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'approved',
+        reason,
+        effectiveFrom ?? undefined,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/reject', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason']);
+    const reason = requiredText(body, 'reason');
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'rejected',
+        reason,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/request-changes', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason']);
+    const reason = requiredText(body, 'reason');
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'changes_requested',
+        reason,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
 
   app.use((request, response) => {
     response.status(404).json({
@@ -2152,6 +2476,44 @@ function ticketNotFound(): ApiError {
   return new ApiError(404, 'NOT_FOUND', 'Ticket not found.');
 }
 
+function ticketAiApiError(error: unknown): unknown {
+  if (error instanceof TicketAiAnalysisError && error.code === 'TICKET_NOT_FOUND') {
+    return ticketNotFound();
+  }
+  if (error instanceof AiExecutionError) {
+    console.warn('Ticket AI execution failed', {
+      executionId: error.executionId,
+      task: error.task,
+      code: error.code,
+    });
+    return new ApiError(
+      502,
+      'AI_ANALYSIS_FAILED',
+      'Ticket AI processing could not be completed.',
+    );
+  }
+  if (error instanceof TicketAiAnalysisError) {
+    console.error('Ticket AI analysis failed', { code: error.code });
+    return new ApiError(
+      500,
+      'AI_ANALYSIS_FAILED',
+      'Ticket AI processing could not be completed.',
+    );
+  }
+  return error;
+}
+
+function descriptionText(value: JsonValue | undefined): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(descriptionText).filter(Boolean).join(' ');
+  if (value === null || typeof value !== 'object') return '';
+  const text = typeof value.text === 'string' ? value.text : '';
+  const content = Array.isArray(value.content)
+    ? value.content.map(descriptionText).filter(Boolean).join(' ')
+    : '';
+  return [text, content].filter(Boolean).join(' ');
+}
+
 function requestId(response: Response): string {
   return response.locals.requestId as string;
 }
@@ -2170,6 +2532,18 @@ const errorHandler: ErrorRequestHandler = (
         message: error.message,
         requestId: id,
         fields: error.fields,
+      },
+    });
+    return;
+  }
+  if (error instanceof JsonStorageError) {
+    console.error('Ticket AI data storage failed', { code: error.code });
+    response.status(503).json({
+      error: {
+        code: error.code,
+        message: 'The data store is temporarily unavailable.',
+        requestId: id,
+        fields: [],
       },
     });
     return;
@@ -2340,4 +2714,20 @@ function requireTicketPrincipal(
       next(error);
     }
   };
+}
+
+function mapCandidateReviewError(error: unknown): ApiError {
+  if (!(error instanceof Error)) {
+    return new ApiError(500, 'INTERNAL_ERROR', 'The request could not be completed.');
+  }
+  if (/does not exist|not found/i.test(error.message)) {
+    return new ApiError(404, 'NOT_FOUND', error.message);
+  }
+  if (/immutable|already exists/i.test(error.message)) {
+    return new ApiError(409, 'CONFLICT', error.message);
+  }
+  if (/reason|timestamp|review/i.test(error.message)) {
+    return new ApiError(400, 'VALIDATION_ERROR', error.message);
+  }
+  return new ApiError(500, 'INTERNAL_ERROR', 'The request could not be completed.');
 }

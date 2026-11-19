@@ -1,5 +1,5 @@
 import type { Server } from "node:http";
-import { createApp } from "./app.ts";
+import { createIntegratedApp } from "./integrated-app.js";
 import { loadEnvironment, type Environment } from "./config/env.ts";
 import { KeycloakAuthenticationProvider } from "./infrastructure/auth/keycloak-authentication.ts";
 import { KeycloakUserProvisioningProvider } from "./infrastructure/auth/keycloak-user-provisioning.ts";
@@ -20,7 +20,7 @@ export function createConfiguredServer(environment: Environment = loadEnvironmen
       clientSecret: environment.keycloakAdminClientSecret,
     })
     : undefined;
-  return createApp(environment, {
+  return createIntegratedApp(environment, {
     ...(authenticator ? { authenticator } : {}),
     ...(userProvisioner ? { userProvisioner } : {}),
   });

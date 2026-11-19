@@ -77,10 +77,11 @@ export class CandidateRuleService {
         payload: normalized.payload,
         evidence: normalized.evidence,
         confidence: normalized.confidence,
-        ambigous: normalized.ambiguity,
+        ambiguous: normalized.ambiguity,
+        createdAt: timestamp,
         requiresHumanReview: normalized.requiresHumanReview,
         warnings: normalized.warnings,
-        createdAt: timestamp,
+        reviewStatus: 'pending_review',
       };
     });
     return this.policyRepository.createExtractedRules(records, input.tenant);

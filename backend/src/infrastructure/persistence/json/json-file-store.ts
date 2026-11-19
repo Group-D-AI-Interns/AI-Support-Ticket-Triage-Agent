@@ -75,6 +75,11 @@ export class JsonFileStore {
     await this.withLock(name, async () => this.writeUnlocked(name, envelope));
   }
 
+  /** Coordinate a legacy repository's complete read/modify/write operation. */
+  async runExclusive<R>(name: string, action: () => Promise<R>): Promise<R> {
+    return this.withLock(name, action);
+  }
+
   async update<T, R>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>, mutate: (envelope: JsonEnvelope<T>) => R | Promise<R>): Promise<R> {
     return this.withLock(name, async () => {
       const envelope = await this.read(name, validate);
@@ -140,7 +145,7 @@ export class JsonFileStore {
   }
 
   private pathFor(name: string): string {
-    if (!/^[a-z][a-z0-9-]*\.json$/.test(name)) throw new Error("Invalid JSON store filename.");
+    if (!/^[a-z][a-zA-Z0-9-]*\.json$/.test(name)) throw new Error("Invalid JSON store filename.");
     const path = resolve(this.root, name);
     if (!path.startsWith(`${this.root}/`) && !path.startsWith(`${this.root}\\`)) {
       throw new Error("JSON store path escaped configured directory.");

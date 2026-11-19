@@ -12,6 +12,7 @@ import { ExtractionWorker } from '../src/modules/documents/workers/extraction-wo
 import { MockExtractionAdapter } from '../src/modules/documents/services/mock-extraction-adapter.js';
 import { CandidateRuleService } from '../src/modules/documents/services/candidate-rule-service.js';
 import { JsonPolicyRepository } from '../src/modules/policies/repositories/json-policy.repository.js';
+import { ExtractionJobService } from '../src/modules/documents/services/extraction-job-service.js';
 
 const tenantA = { organisationId: 'org-1', userId: 'user-1', roles: ['org-admin'] };
 const tenantB = { organisationId: 'org-2', userId: 'user-2', roles: ['org-admin'] };
@@ -125,6 +126,77 @@ test('retries failed extraction jobs without cross-tenant access', async () => {
     assert.equal(finalState?.status, 'succeeded');
     const candidates = await store.readCollection('extractedRules');
     assert.equal(candidates.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('composes extraction jobs only for tenant-matching document and policy targets', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'doc-extraction-composition-'));
+  try {
+    const store = createJsonTenantStore(root);
+    const storage = createLocalPrivateStorageAdapter(root);
+    const lifecycle = new DocumentLifecycleService(store, storage);
+    const policyRepository = new JsonPolicyRepository(store);
+
+    await policyRepository.createPolicy({
+      id: 'policy-compose-1',
+      organisationId: tenantA.organisationId,
+      policyType: 'sla',
+      ownerId: tenantA.userId,
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      description: 'Composition policy',
+    }, tenantA);
+    await policyRepository.createVersion('policy-compose-1', {
+      id: 'policy-compose-version-1',
+      organisationId: tenantA.organisationId,
+      policyId: 'policy-compose-1',
+      version: 1,
+      status: 'draft',
+      effectiveFrom: null,
+      effectiveTo: null,
+      payload: { rule: 'response-within-2h' },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }, tenantA);
+
+    const uploaded = await lifecycle.uploadDocument({
+      tenant: tenantA,
+      title: 'Composable policy',
+      fileName: 'compose.txt',
+      mimeType: 'text/plain',
+      content: Buffer.from('Respond within two hours.', 'utf8'),
+      createdBy: tenantA.userId,
+    });
+
+    const service = new ExtractionJobService(store, policyRepository);
+    const job = await service.processDocument({
+      tenant: tenantA,
+      documentId: uploaded.document.id,
+      policyId: 'policy-compose-1',
+      policyVersionId: 'policy-compose-version-1',
+    });
+
+    assert.equal(job.status, 'queued');
+    assert.equal(job.documentId, uploaded.document.id);
+    assert.equal(job.documentVersionId, uploaded.version.id);
+
+    await assert.rejects(service.processDocument({
+      tenant: tenantB,
+      documentId: uploaded.document.id,
+      policyId: 'policy-compose-1',
+      policyVersionId: 'policy-compose-version-1',
+    }), /tenant|document/i);
+
+    await assert.rejects(service.processDocument({
+      tenant: tenantA,
+      documentId: uploaded.document.id,
+      policyId: 'policy-compose-1',
+      policyVersionId: 'missing-version',
+    }), /missing|outside/i);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

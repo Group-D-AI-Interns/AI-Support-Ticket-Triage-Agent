@@ -69,9 +69,13 @@ export class AiExecutionRunner {
           instructions,
           input,
         });
+        attempts = Math.max(attempts, response.attempts ?? attempts);
         break;
       } catch (error) {
         const providerError = normalizeProviderError(error);
+        if (error instanceof LlmProviderError) {
+          attempts = Math.max(attempts, error.attempts);
+        }
         const isRetryable = error instanceof LlmProviderError && error.retryable;
         if (isRetryable && attempts <= this.options.maxRetries) {
           continue;

@@ -1,3 +1,5 @@
+> **Integration update (2026-11-19):** `src/main.ts` and `src/server.ts` now enter the same integrated server. Follow the root README and [current integration verification](../api/Integration-Verification.md) for startup, auth, storage and test status. Earlier separate-runtime statements below describe the pre-integration snapshot.
+
 # Deployment and operational handover
 
 **Reviewed snapshot:** `f764c51`, 19 November 2026.

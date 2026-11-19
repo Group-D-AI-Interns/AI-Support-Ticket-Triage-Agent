@@ -10,6 +10,7 @@ export interface AuthorizedTicketAnalysisSource {
 
 export interface AiAnalysisRepository {
   save(tenant: TenantContext, analysis: TicketAiAnalysis): Promise<void>;
+  listForTicket(tenant: TenantContext, ticketId: string): Promise<TicketAiAnalysis[]>;
 }
 
 export type AiExecutionLogEvent = {

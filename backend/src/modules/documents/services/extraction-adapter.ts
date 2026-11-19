@@ -23,12 +23,19 @@ export type ValidatedExtractionOutput = {
   requiresHumanReview: boolean;
 };
 
+export type DocumentTextSegment = {
+  text: string;
+  page?: number;
+  section?: string;
+};
+
 export type ExtractionAdapterInput = {
   tenant: TenantContext;
   documentId: string;
   documentVersionId: string;
   executionId: string;
   content: string;
+  segments?: DocumentTextSegment[];
 };
 
 export type ExtractionExecutionMetadata = {
