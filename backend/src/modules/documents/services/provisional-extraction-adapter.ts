@@ -14,6 +14,7 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
     const warnings = targetHours === null
       ? ['No clear SLA target could be extracted; review required.']
       : [];
+    const provenance = input.segments?.find((segment) => segment.text.trim().length > 0);
     const rule = validateExtractionOutput({
       executionId: input.executionId,
       documentId: input.documentId,
@@ -24,8 +25,10 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
         sourceType: 'document',
         sourceId: input.documentId,
         versionId: input.documentVersionId,
-        excerpt: content,
         confidence: targetHours !== null ? 0.91 : 0.45,
+        page: provenance?.page,
+        section: provenance?.section,
+        excerpt: provenance?.text ?? content,
       }],
       confidence: targetHours !== null ? 0.91 : 0.45,
       ambiguity: targetHours === null,

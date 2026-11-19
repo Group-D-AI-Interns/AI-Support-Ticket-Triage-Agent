@@ -258,7 +258,7 @@ test('worker fails unsupported document formats without retrying', async () => {
     const failed = await worker.processNextForTenant(tenantA);
     assert.equal(failed?.status, 'failed');
     assert.equal(failed?.attempts, 1);
-    assert.equal(failed?.lastError, 'UNSUPPORTED_DOCUMENT_TYPE');
+    assert.equal(failed?.lastError, 'DOCUMENT_CONVERSION_FAILED');
     assert.equal((await store.readCollection('extractedRules')).length, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });

@@ -7,6 +7,10 @@ import type { ExtractionAdapter } from '../services/extraction-adapter.js';
 import { validateExtractionAdapterResult } from '../services/extraction-adapter.js';
 import type { DocumentStorageAdapter } from '../storage/document-storage.js';
 import type { CandidateRuleService } from '../services/candidate-rule-service.js';
+import {
+  LocalDocumentTextConverter,
+  type DocumentTextConverter,
+} from '../services/document-text-converter.js';
 
 class PermanentExtractionError extends Error {
   constructor(readonly code: string, message: string) {
@@ -22,6 +26,7 @@ export class ExtractionWorker {
     private readonly adapter: ExtractionAdapter,
     private readonly storage: DocumentStorageAdapter,
     private readonly candidateRules: CandidateRuleService,
+    private readonly textConverter: DocumentTextConverter = new LocalDocumentTextConverter(),
   ) {}
 
   private get documentRepository(): JsonDocumentRepository {
@@ -55,12 +60,11 @@ export class ExtractionWorker {
         );
       }
       if (
-        version.mimeType !== 'text/plain'
-        || version.fileName.split('.').pop()?.toLowerCase() !== 'txt'
+        !['txt', 'pdf', 'docx'].includes(version.fileName.split('.').pop()?.toLowerCase() ?? '')
       ) {
         throw new PermanentExtractionError(
           'UNSUPPORTED_DOCUMENT_TYPE',
-          'Only text/plain documents are supported by the provisional extraction adapter.',
+          'Only TXT, PDF and DOCX documents are supported. Legacy DOC conversion remains deferred.',
         );
       }
 
@@ -81,13 +85,14 @@ export class ExtractionWorker {
       if (!storedContent) {
         throw new Error('Document content could not be loaded from private storage.');
       }
-      let content: string;
+
+      let converted;
       try {
-        content = new TextDecoder('utf-8', { fatal: true }).decode(storedContent);
-      } catch {
+        converted = await this.textConverter.convert(storedContent, version);
+      } catch (error) {
         throw new PermanentExtractionError(
-          'INVALID_DOCUMENT_ENCODING',
-          'Text documents must contain valid UTF-8 content.',
+          'DOCUMENT_CONVERSION_FAILED',
+          error instanceof Error ? error.message : 'Document text conversion failed.',
         );
       }
 
@@ -96,7 +101,8 @@ export class ExtractionWorker {
         documentId: job.documentId,
         documentVersionId: job.documentVersionId,
         executionId: job.executionId,
-        content,
+        content: converted.content,
+        segments: converted.segments,
       }));
       if (result.executionId !== job.executionId) {
         throw new Error('Extraction result execution ID does not match the claimed job.');

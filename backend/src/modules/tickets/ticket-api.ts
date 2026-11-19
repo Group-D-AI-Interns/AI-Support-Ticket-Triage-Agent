@@ -364,9 +364,15 @@ async function ingestJiraTicket(
   }
 
   const organisationId = dependencies.jiraSettings.projectMappings.get(projectKey);
-  const organisation = organisationId
-    ? dependencies.jiraSettings.organisations.get(organisationId)
-    : undefined;
+  if (!organisationId) {
+    throw new ApiError(
+      401,
+      'JIRA_WEBHOOK_UNAUTHORIZED',
+      'Jira webhook authentication failed.',
+    );
+  }
+
+  const organisation = dependencies.jiraSettings.organisations.get(organisationId);
   if (!organisation || !constantTimeSecretMatches(webhookSecret, organisation.webhookSecret)) {
     throw new ApiError(
       401,
