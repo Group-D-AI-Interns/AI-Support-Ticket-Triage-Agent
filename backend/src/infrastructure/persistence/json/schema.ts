@@ -8,13 +8,18 @@ export const INITIAL_DOCUMENT_POLICY_SCHEMA = {
     'extractedRules',
     'policyApprovals',
     'auditLogs',
+    'extractionJobs',
+    'documentExtractions',
+    'slaEvaluations',
   ],
   indexes: [
     'organisationId + status + createdAt for documents',
     'documentId + version for documentVersions',
+    'organisationId + documentId + createdAt for documentExtractions',
     'organisationId + policyType + status for policies',
     'policyId + version for policyVersions',
     'organisationId + targetType + targetId + createdAt for auditLogs',
+    'organisationId + ticketId + evaluatedAt for slaEvaluations',
   ],
 } as const;
 

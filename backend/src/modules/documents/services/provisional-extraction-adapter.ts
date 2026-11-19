@@ -76,11 +76,11 @@ export function validateExtractionOutput(input: unknown): ValidatedExtractionOut
     return {
       sourceType: sourceType as ExtractionEvidence['sourceType'],
       sourceId,
-      versionId: typeof evidenceItem.versionId === 'string' ? evidenceItem.versionId : undefined,
-      page: typeof evidenceItem.page === 'number' ? evidenceItem.page : undefined,
-      section: typeof evidenceItem.section === 'string' ? evidenceItem.section : undefined,
-      excerpt: typeof evidenceItem.excerpt === 'string' ? evidenceItem.excerpt : undefined,
-      confidence: typeof evidenceItem.confidence === 'number' ? evidenceItem.confidence : undefined,
+      ...(typeof evidenceItem.versionId === 'string' ? { versionId: evidenceItem.versionId } : {}),
+      ...(typeof evidenceItem.page === 'number' ? { page: evidenceItem.page } : {}),
+      ...(typeof evidenceItem.section === 'string' ? { section: evidenceItem.section } : {}),
+      ...(typeof evidenceItem.excerpt === 'string' ? { excerpt: evidenceItem.excerpt } : {}),
+      ...(typeof evidenceItem.confidence === 'number' ? { confidence: evidenceItem.confidence } : {}),
     };
   });
 
@@ -113,7 +113,8 @@ export interface ExtractionAdapter {
 export class ProvisionalExtractionAdapter implements ExtractionAdapter {
   async extract(input: ProvisionalExtractionInput): Promise<ProvisionalExtractionResult> {
     const content = input.content?.trim() ?? '';
-    const targetHours = parseResponseHours(content);
+    const responseTarget = findResponseTarget(content);
+    const targetHours = responseTarget?.hours ?? null;
 
     const defaultNormalized = {
       executionId: input.executionId,
@@ -128,7 +129,7 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
           versionId: input.documentVersionId,
           page: input.pageNumber ?? 1,
           section: input.section ?? 'policy',
-          excerpt: content || 'No excerpt provided.',
+          excerpt: extractionExcerpt(content, responseTarget?.index),
           confidence: targetHours ? 0.91 : 0.45,
         },
       ],
@@ -146,13 +147,22 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
   }
 }
 
-function parseResponseHours(content: string): number | null {
+function extractionExcerpt(content: string, matchIndex?: number): string {
+  const start = matchIndex === undefined ? 0 : Math.max(0, matchIndex - 100);
+  return content.slice(start, start + 500) || 'No excerpt provided.';
+}
+
+function findResponseTarget(content: string): { hours: number; index: number } | null {
   const match = /within\s+(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+hours?/i.exec(content);
   if (!match) {
     return null;
   }
 
-  const rawValue = match[1].toLowerCase();
+  const capturedValue = match[1];
+  if (!capturedValue) {
+    return null;
+  }
+  const rawValue = capturedValue.toLowerCase();
   const wordMap: Record<string, number> = {
     zero: 0,
     one: 1,
@@ -177,7 +187,10 @@ function parseResponseHours(content: string): number | null {
     twenty: 20,
   };
 
-  return Number.isNaN(Number(rawValue)) ? (wordMap[rawValue] ?? null) : Number(rawValue);
+  const hours = Number.isNaN(Number(rawValue))
+    ? (wordMap[rawValue] ?? null)
+    : Number(rawValue);
+  return hours === null ? null : { hours, index: match.index };
 }
 
 function requireString(value: unknown, fieldName: string): string {

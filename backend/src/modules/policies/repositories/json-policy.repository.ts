@@ -69,6 +69,22 @@ export class JsonPolicyRepository implements PolicyRepository {
     return assertTenantAccess(tenant, record) ?? null;
   }
 
+  async listVersionsForPolicy(
+    tenant: TenantContext,
+    policyId: string,
+  ): Promise<PolicyVersionRecord[]> {
+    const policy = await this.getPolicyById(tenant, policyId);
+    if (!policy) {
+      return [];
+    }
+    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
+    return versions.filter(
+      (version) =>
+        version.organisationId === tenant.organisationId &&
+        version.policyId === policyId,
+    );
+  }
+
   async transitionVersionStatus(
     tenantOrVersionId: TenantContext | string,
     versionIdOrStatus: string | PolicyVersionRecord['status'],
@@ -94,14 +110,83 @@ export class JsonPolicyRepository implements PolicyRepository {
       return null;
     }
 
-    const updated = {
-      ...versions[index],
+    const existing = versions[index];
+    if (!existing) {
+      return null;
+    }
+
+    const updated: PolicyVersionRecord = {
+      ...existing,
       status,
       updatedAt: new Date().toISOString(),
     };
 
     versions[index] = updated;
     await this.store.writeCollection('policyVersions', versions);
+    return updated;
+  }
+
+  async activateVersion(
+    tenant: TenantContext,
+    policyId: string,
+    versionId: string,
+  ): Promise<PolicyVersionRecord | null> {
+    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
+    const target = versions.find(
+      (item) =>
+        item.id === versionId &&
+        item.policyId === policyId &&
+        item.organisationId === tenant.organisationId,
+    );
+    if (
+      !target ||
+      target.status !== 'approved' ||
+      target.effectiveFrom === null
+    ) {
+      return null;
+    }
+
+    const targetEffectiveFrom = target.effectiveFrom;
+    const now = new Date().toISOString();
+    const updated: PolicyVersionRecord = { ...target, status: 'active', updatedAt: now };
+    const activeVersions = versions.filter(
+      (item) =>
+        item.organisationId === tenant.organisationId &&
+        item.policyId === policyId &&
+        item.status === 'active',
+    );
+    if (
+      activeVersions.some(
+        (item) =>
+          item.effectiveFrom === null ||
+          Date.parse(targetEffectiveFrom) <= Date.parse(item.effectiveFrom),
+      )
+    ) {
+      return null;
+    }
+    const next = versions.map((item) =>
+      item.organisationId === tenant.organisationId &&
+      item.policyId === policyId &&
+      item.status === 'active'
+        ? {
+            ...item,
+            status: 'archived' as const,
+            effectiveTo:
+              item.effectiveTo === null ||
+              Date.parse(targetEffectiveFrom) <
+                Date.parse(item.effectiveTo)
+                ? targetEffectiveFrom
+                : item.effectiveTo,
+            updatedAt: now,
+          }
+        : item,
+    );
+    const targetIndex = next.findIndex((item) => item.id === versionId);
+    if (targetIndex === -1) {
+      return null;
+    }
+    next[targetIndex] = updated;
+    await this.store.writeCollection('policyVersions', next);
     return updated;
   }
 
