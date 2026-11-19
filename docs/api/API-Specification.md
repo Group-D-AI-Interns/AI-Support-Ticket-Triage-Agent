@@ -539,7 +539,7 @@ The response contains the document's completed processing status and a version-b
 
 ### Configure tenant-specific SLA policies
 
-Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar, statuses, and optional team scope through the API; no policy document upload is required. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
+Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar, statuses, and optional team scope through the API; no policy document upload is required. When an SLA is derived from a processed document, the request may also include both `sourceDocumentId` and `sourceDocumentVersionId`. The server verifies that the document and version belong to the authenticated tenant and retains that provenance on the policy version; the fields must be provided together. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
 
 The following values are illustrative test data only, not defaults or recommendations. Replace them with values chosen by the tenant administrator. Missing priority targets do not fall back to another tenant or an invented value.
 
@@ -594,7 +594,7 @@ Authorization: Bearer <organisation-admin-token>
 Content-Type: application/json
 ```
 
-The request contains `effectiveFrom`, optional `effectiveTo`, and a full `payload` in the same schema as above. Versions must be activated in increasing effective-date order. The prior version remains available for tickets whose creation time falls within its effective period.
+The request contains `effectiveFrom`, optional `effectiveTo`, and a full `payload` in the same schema as above. `sourceDocumentId` and `sourceDocumentVersionId` may also be supplied together to retain source provenance for the new version. Versions must be activated in increasing effective-date order. The prior version remains available for tickets whose creation time falls within its effective period.
 
 ```http
 POST /api/v1/sla-policies/{policyId}/versions/{versionId}/approve

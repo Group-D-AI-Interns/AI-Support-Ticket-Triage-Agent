@@ -264,9 +264,13 @@ test('document processing, human SLA approval, evaluation and reporting work on 
       calendar: { timeZone: 'Africa/Johannesburg', weeklySchedule: Object.fromEntries(['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'].map((day) => [day, [{ startMinute: 0, endMinute: 1440 }]])), holidays: [] },
       targetsByPriority: { high: { firstResponseMinutes: 120, resolutionMinutes: 480 } }, pausedStatuses: ['PENDING'], resolvedStatuses: ['RESOLVED', 'CLOSED'], riskAtPercent: 75,
     };
+    const incompleteSource = await f.request('/api/v1/sla-policies', 'admin', { method: 'POST', body: JSON.stringify({ description: 'Incomplete source SLA', sourceDocumentId: source.document.id, effectiveFrom: '2020-01-01T00:00:00.000Z', payload }) });
+    assert.equal(incompleteSource.status, 400);
     const created = await f.request('/api/v1/sla-policies', 'admin', { method: 'POST', body: JSON.stringify({ description: 'Reviewed test SLA', sourceDocumentId: source.document.id, sourceDocumentVersionId: source.version.id, effectiveFrom: '2020-01-01T00:00:00.000Z', payload }) });
     assert.equal(created.status, 201, JSON.stringify(await created.clone().json()));
     const policy = (await created.json()).data;
+    assert.equal(policy.version.sourceDocumentId, source.document.id);
+    assert.equal(policy.version.sourceDocumentVersionId, source.version.id);
     const path = `/api/v1/sla-policies/${policy.policy.id}/versions/${policy.version.id}`;
     assert.equal((await f.request(`${path}/activate`, 'admin', { method: 'POST', body: '{}' })).status, 409);
     assert.equal((await f.request(`${path}/approve`, 'admin', { method: 'POST', body: '{"reason":"Verified source"}' })).status, 200);
