@@ -58,7 +58,7 @@ test('processes a tenant text source and keeps extraction provenance tenant-scop
   }
 });
 
-test('does not mark unsupported source formats as processed', async () => {
+test('does not mark invalid PDF conversion as processed', async () => {
   const root = mkdtempSync(join(tmpdir(), 'document-processing-'));
   try {
     const { lifecycle, processing } = createServices(root);
@@ -75,7 +75,7 @@ test('does not mark unsupported source formats as processed', async () => {
       processing.processDocument(tenantA, uploaded.document.id),
       (error: unknown) =>
         error instanceof DocumentProcessingError &&
-        error.code === 'UNSUPPORTED_EXTRACTION_FORMAT',
+        error.code === 'EXTRACTION_FAILED',
     );
     const unchanged = await lifecycle.getDocument(tenantA, uploaded.document.id);
     assert.equal(unchanged?.status, 'failed');

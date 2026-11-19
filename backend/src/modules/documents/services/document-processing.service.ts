@@ -1,5 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { TextDecoder } from 'node:util';
 
 import type { JsonTenantStore } from '../../../infrastructure/persistence/json/json-store.js';
 import type { TenantContext } from '../../../shared/tenant.js';
@@ -13,6 +12,10 @@ import {
   ProvisionalExtractionAdapter,
 } from './provisional-extraction-adapter.js';
 import type { DocumentStorageAdapter } from '../storage/document-storage.js';
+import {
+  LocalDocumentTextConverter,
+  type DocumentTextConverter,
+} from './document-text-converter.js';
 
 export type DocumentExtractionRecord = {
   id: string;
@@ -42,6 +45,7 @@ export class DocumentProcessingService {
     private readonly lifecycle: DocumentLifecycleService,
     private readonly storage: DocumentStorageAdapter,
     private readonly adapter = new ProvisionalExtractionAdapter(),
+    private readonly converter: DocumentTextConverter = new LocalDocumentTextConverter(),
   ) {}
 
   async processDocument(
@@ -80,11 +84,11 @@ export class DocumentProcessingService {
       throw new DocumentProcessingError('DOCUMENT_NOT_READY', 'The current document version is unavailable.');
     }
 
-    if (document.mimeType !== 'text/plain' || !document.fileName.toLowerCase().endsWith('.txt')) {
+    if (!['txt', 'pdf', 'docx'].includes(document.fileName.split('.').pop()?.toLowerCase() ?? '')) {
       await this.lifecycle.updateProcessingStatus(tenant, document.id, 'failed', 'failed');
       throw new DocumentProcessingError(
         'UNSUPPORTED_EXTRACTION_FORMAT',
-        'SLA source processing currently supports UTF-8 plain-text (.txt) documents only.',
+        'Only TXT, PDF and DOCX source documents are supported. Legacy DOC conversion remains deferred.',
       );
     }
 
@@ -95,14 +99,30 @@ export class DocumentProcessingService {
         throw new DocumentProcessingError('DOCUMENT_NOT_READY', 'The stored source document is unavailable.');
       }
 
-      let text: string;
+      let converted;
       try {
-        text = new TextDecoder('utf-8', { fatal: true }).decode(content);
+        const versionRecord = {
+          id: version.id,
+          documentId: document.id,
+          organisationId: tenant.organisationId,
+          version: document.version,
+          checksumSha256: document.checksumSha256,
+          fileName: document.fileName,
+          mimeType: document.mimeType,
+          storageKey: document.storageKey,
+          fileSizeBytes: document.fileSizeBytes,
+          createdAt: document.createdAt,
+          createdBy: document.createdBy,
+        };
+        converted = await this.converter.convert(content, versionRecord);
       } catch (error) {
         if (error instanceof TypeError) {
           throw new DocumentProcessingError('INVALID_TEXT_ENCODING', 'The source document is not valid UTF-8 text.');
         }
-        throw error;
+        throw new DocumentProcessingError(
+          'EXTRACTION_FAILED',
+          error instanceof Error ? error.message : 'Document text conversion failed.',
+        );
       }
 
       const executionId = `exec-${randomUUID()}`;
@@ -111,7 +131,8 @@ export class DocumentProcessingService {
         documentId: document.id,
         documentVersionId: version.id,
         executionId,
-        content: text,
+        content: converted.content,
+        segments: converted.segments,
       }));
       if (result.status === 'failed') {
         throw new DocumentProcessingError(
