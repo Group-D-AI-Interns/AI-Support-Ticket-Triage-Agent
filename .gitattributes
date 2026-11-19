@@ -1,0 +1,4 @@
+
+
+# Keep reference checksums stable across Windows/Linux checkouts.
+backend/data/reference/**/*.md text eol=lf

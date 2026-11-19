@@ -9,23 +9,25 @@ export class JsonPolicyRepository implements PolicyRepository {
   constructor(private readonly store: JsonTenantStore) {}
 
   async createPolicy(policy: PolicyRecord, tenant: TenantContext): Promise<PolicyRecord> {
-    if (policy.organisationId !== tenant.organisationId) {
-      throw new Error('Policy organisation does not match tenant context.');
-    }
+    return this.store.withCollectionLock('policies', async () => {
+      if (policy.organisationId !== tenant.organisationId) {
+        throw new Error('Policy organisation does not match tenant context.');
+      }
 
-    const policies = await this.store.readCollection<PolicyRecord>('policies');
-    if (policies.some((item) => item.id === policy.id)) {
-      throw new Error(`Policy ${policy.id} already exists.`);
-    }
+      const policies = await this.store.readCollection<PolicyRecord>('policies');
+      if (policies.some((item) => item.id === policy.id)) {
+        throw new Error(`Policy ${policy.id} already exists.`);
+      }
 
-    policies.push(policy);
-    await this.store.writeCollection('policies', policies);
-    await this.writeAudit(tenant, 'policy.created', 'policy', policy.id, undefined, {
-      policyType: policy.policyType,
-      status: policy.status,
-      version: policy.version,
+      policies.push(policy);
+      await this.store.writeCollection('policies', policies);
+      await this.writeAudit(tenant, 'policy.created', 'policy', policy.id, undefined, {
+        policyType: policy.policyType,
+        status: policy.status,
+        version: policy.version,
+      });
+      return policy;
     });
-    return policy;
   }
 
   async getPolicyById(tenant: TenantContext, policyId: string): Promise<PolicyRecord | null> {
@@ -44,41 +46,43 @@ export class JsonPolicyRepository implements PolicyRepository {
     version: PolicyVersionRecord,
     tenant: TenantContext,
   ): Promise<PolicyVersionRecord> {
-    if (version.organisationId !== tenant.organisationId) {
-      throw new Error('Policy version organisation does not match tenant context.');
-    }
-    if (version.status !== 'draft' && version.status !== 'approved' && version.status !== 'active' && version.status !== 'rejected' && version.status !== 'expired' && version.status !== 'archived') {
-      throw new Error('Policy version has an unsupported status.');
-    }
-    validateEffectiveDates(version);
+    return this.store.withCollectionLock('policyVersions', async () => {
+      if (version.organisationId !== tenant.organisationId) {
+        throw new Error('Policy version organisation does not match tenant context.');
+      }
+      if (version.status !== 'draft' && version.status !== 'pending_approval' && version.status !== 'approved' && version.status !== 'active' && version.status !== 'rejected' && version.status !== 'expired' && version.status !== 'archived') {
+        throw new Error('Policy version has an unsupported status.');
+      }
+      validateEffectiveDates(version);
 
-    const policies = await this.store.readCollection<PolicyRecord>('policies');
-    const policyExists = policies.some((item) => item.id === policyId && item.organisationId === tenant.organisationId);
-    if (!policyExists) {
-      throw new Error(`Policy ${policyId} does not exist for tenant ${tenant.organisationId}.`);
-    }
+      const policies = await this.store.readCollection<PolicyRecord>('policies');
+      const policyExists = policies.some((item) => item.id === policyId && item.organisationId === tenant.organisationId);
+      if (!policyExists) {
+        throw new Error(`Policy ${policyId} does not exist for tenant ${tenant.organisationId}.`);
+      }
 
-    const normalizedVersion: PolicyVersionRecord = {
-      ...version,
-      policyId,
-    };
+      const normalizedVersion: PolicyVersionRecord = {
+        ...version,
+        policyId,
+      };
 
-    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
-    const versionExists = versions.some((item) => item.policyId === policyId && item.version === normalizedVersion.version);
-    if (versionExists) {
-      throw new Error(`Policy version ${normalizedVersion.version} for ${policyId} already exists.`);
-    }
+      const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
+      const versionExists = versions.some((item) => item.policyId === policyId && item.version === normalizedVersion.version);
+      if (versionExists) {
+        throw new Error(`Policy version ${normalizedVersion.version} for ${policyId} already exists.`);
+      }
 
-    versions.push(normalizedVersion);
-    await this.store.writeCollection('policyVersions', versions);
-    await this.writeAudit(tenant, 'policy_version.created', 'policy_version', normalizedVersion.id, undefined, {
-      policyId,
-      version: normalizedVersion.version,
-      status: normalizedVersion.status,
-      effectiveFrom: normalizedVersion.effectiveFrom,
-      effectiveTo: normalizedVersion.effectiveTo,
+      versions.push(normalizedVersion);
+      await this.store.writeCollection('policyVersions', versions);
+      await this.writeAudit(tenant, 'policy_version.created', 'policy_version', normalizedVersion.id, undefined, {
+        policyId,
+        version: normalizedVersion.version,
+        status: normalizedVersion.status,
+        effectiveFrom: normalizedVersion.effectiveFrom,
+        effectiveTo: normalizedVersion.effectiveTo,
+      });
+      return normalizedVersion;
     });
-    return normalizedVersion;
   }
 
   async getVersionById(tenant: TenantContext, versionId: string): Promise<PolicyVersionRecord | null> {
@@ -108,6 +112,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     versionIdOrStatus: string | PolicyVersionRecord['status'],
     maybeStatusOrTenant?: PolicyVersionRecord['status'] | TenantContext,
   ): Promise<PolicyVersionRecord | null> {
+    return this.store.withCollectionLock('policyVersions', async () => {
     let tenant: TenantContext;
     let versionId: string;
     let status: PolicyVersionRecord['status'];
@@ -166,6 +171,7 @@ export class JsonPolicyRepository implements PolicyRepository {
       status: updated.status,
     });
     return updated;
+    });
   }
 
   async activateVersion(
@@ -173,6 +179,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     policyId: string,
     versionId: string,
   ): Promise<PolicyVersionRecord | null> {
+    return this.store.withCollectionLock('policyVersions', async () => {
     const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
     const target = versions.find(
       (item) =>
@@ -230,6 +237,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     next[targetIndex] = updated;
     await this.store.writeCollection('policyVersions', next);
     return updated;
+    });
   }
 
   async createExtractedRule(rule: ExtractedRuleRecord, tenant: TenantContext): Promise<ExtractedRuleRecord> {
@@ -244,6 +252,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     incoming: ExtractedRuleRecord[],
     tenant: TenantContext,
   ): Promise<ExtractedRuleRecord[]> {
+    return this.store.withCollectionLock('extractedRules', async () => {
     if (incoming.some((rule) => rule.organisationId !== tenant.organisationId)) {
       throw new Error('Extracted rule organisation does not match tenant context.');
     }
@@ -282,9 +291,11 @@ export class JsonPolicyRepository implements PolicyRepository {
       await this.store.writeCollection('extractedRules', [...rules, ...additions]);
     }
     return result;
+    });
   }
 
   async addApproval(approval: PolicyApprovalRecord, tenant: TenantContext): Promise<PolicyApprovalRecord> {
+    return this.store.withCollectionLock('policyApprovals', async () => {
     if (approval.organisationId !== tenant.organisationId) {
       throw new Error('Approval organisation does not match tenant context.');
     }
@@ -321,6 +332,7 @@ export class JsonPolicyRepository implements PolicyRepository {
       reason: approval.reason,
     });
     return approval;
+    });
   }
 
   async listExtractedRules(tenant: TenantContext, policyVersionId?: string): Promise<ExtractedRuleRecord[]> {
@@ -343,6 +355,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     reason: string,
     effectiveFrom?: string,
   ): Promise<ExtractedRuleRecord> {
+    return this.store.withCollectionLock('extractedRules', async () => {
     if (!reason.trim()) {
       throw new Error('Candidate-rule review reason is required.');
     }
@@ -414,6 +427,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     });
 
     return reviewed;
+    });
   }
 
   private async writeAudit(
@@ -424,19 +438,21 @@ export class JsonPolicyRepository implements PolicyRepository {
     before?: Record<string, unknown>,
     after?: Record<string, unknown>,
   ): Promise<void> {
-    const auditLogs = await this.store.readCollection<PolicyAuditRecord>('auditLogs');
-    auditLogs.push({
-      id: `audit-${randomUUID()}`,
-      organisationId: tenant.organisationId,
-      actorId: tenant.userId,
-      action,
-      targetType,
-      targetId,
-      createdAt: new Date().toISOString(),
-      ...(before === undefined ? {} : { before }),
-      ...(after === undefined ? {} : { after }),
+    await this.store.withCollectionLock('auditLogs', async () => {
+      const auditLogs = await this.store.readCollection<PolicyAuditRecord>('auditLogs');
+      auditLogs.push({
+        id: `audit-${randomUUID()}`,
+        organisationId: tenant.organisationId,
+        actorId: tenant.userId,
+        action,
+        targetType,
+        targetId,
+        createdAt: new Date().toISOString(),
+        ...(before === undefined ? {} : { before }),
+        ...(after === undefined ? {} : { after }),
+      });
+      await this.store.writeCollection('auditLogs', auditLogs);
     });
-    await this.store.writeCollection('auditLogs', auditLogs);
   }
 }
 

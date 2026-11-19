@@ -52,6 +52,14 @@ export class DocumentProcessingService {
     tenant: TenantContext,
     documentId: string,
   ): Promise<{ document: DocumentRecord; extraction: DocumentExtractionRecord } | null> {
+    return this.store.withCollectionLock('documentExtractions', () =>
+      this.processDocumentLocked(tenant, documentId));
+  }
+
+  private async processDocumentLocked(
+    tenant: TenantContext,
+    documentId: string,
+  ): Promise<{ document: DocumentRecord; extraction: DocumentExtractionRecord } | null> {
     const document = await this.lifecycle.getDocument(tenant, documentId);
     if (!document) {
       return null;
@@ -134,6 +142,18 @@ export class DocumentProcessingService {
         content: converted.content,
         segments: converted.segments,
       }));
+      if (result.executionId !== executionId || result.rules.some((rule) =>
+        rule.documentId !== document.id
+        || rule.documentVersionId !== version.id
+        || !rule.evidence.some((evidence) =>
+          evidence.sourceType === 'document'
+          && evidence.sourceId === document.id
+          && evidence.versionId === version.id))) {
+        throw new DocumentProcessingError(
+          'EXTRACTION_FAILED',
+          'Extraction provenance does not match the source document version.',
+        );
+      }
       if (result.status === 'failed') {
         throw new DocumentProcessingError(
           'EXTRACTION_FAILED',

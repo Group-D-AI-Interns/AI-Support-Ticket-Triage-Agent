@@ -7,19 +7,21 @@ export class JsonDocumentRepository implements DocumentRepository {
   constructor(private readonly store: JsonTenantStore) {}
 
   async create(document: DocumentRecord, tenant: TenantContext): Promise<DocumentRecord> {
-    if (document.organisationId !== tenant.organisationId) {
-      throw new Error('Document organisation does not match tenant context.');
-    }
+    return this.store.withCollectionLock('documents', async () => {
+      if (document.organisationId !== tenant.organisationId) {
+        throw new Error('Document organisation does not match tenant context.');
+      }
 
-    const documents = await this.store.readCollection<DocumentRecord>('documents');
-    const existing = documents.find((item) => item.id === document.id);
-    if (existing) {
-      throw new Error(`Document ${document.id} already exists.`);
-    }
+      const documents = await this.store.readCollection<DocumentRecord>('documents');
+      const existing = documents.find((item) => item.id === document.id);
+      if (existing) {
+        throw new Error(`Document ${document.id} already exists.`);
+      }
 
-    documents.push(document);
-    await this.store.writeCollection('documents', documents);
-    return document;
+      documents.push(document);
+      await this.store.writeCollection('documents', documents);
+      return document;
+    });
   }
 
   async getById(tenant: TenantContext, documentId: string): Promise<DocumentRecord | null> {
@@ -50,37 +52,41 @@ export class JsonDocumentRepository implements DocumentRepository {
     status: DocumentRecord['status'],
     processingStatus?: DocumentRecord['processingStatus'],
   ): Promise<DocumentRecord | null> {
-    const documents = await this.store.readCollection<DocumentRecord>('documents');
-    const index = documents.findIndex((item) => item.id === documentId && item.organisationId === tenant.organisationId);
-    const current = documents[index];
-    if (index === -1 || !current) {
-      return null;
-    }
+    return this.store.withCollectionLock('documents', async () => {
+      const documents = await this.store.readCollection<DocumentRecord>('documents');
+      const index = documents.findIndex((item) => item.id === documentId && item.organisationId === tenant.organisationId);
+      const current = documents[index];
+      if (index === -1 || !current) {
+        return null;
+      }
 
-    const updated = {
-      ...current,
-      status,
-      processingStatus: processingStatus ?? current.processingStatus,
-      updatedAt: new Date().toISOString(),
-    };
+      const updated = {
+        ...current,
+        status,
+        processingStatus: processingStatus ?? current.processingStatus,
+        updatedAt: new Date().toISOString(),
+      };
 
-    documents[index] = updated;
-    await this.store.writeCollection('documents', documents);
-    return updated;
+      documents[index] = updated;
+      await this.store.writeCollection('documents', documents);
+      return updated;
+    });
   }
 
   async addVersion(version: DocumentVersionRecord, tenant: TenantContext): Promise<DocumentVersionRecord> {
-    if (version.organisationId !== tenant.organisationId) {
-      throw new Error('Version organisation does not match tenant context.');
-    }
+    return this.store.withCollectionLock('documentVersions', async () => {
+      if (version.organisationId !== tenant.organisationId) {
+        throw new Error('Version organisation does not match tenant context.');
+      }
 
-    const versions = await this.store.readCollection<DocumentVersionRecord>('documentVersions');
-    if (versions.some((item) => item.id === version.id)) {
-      throw new Error(`Document version ${version.id} already exists.`);
-    }
+      const versions = await this.store.readCollection<DocumentVersionRecord>('documentVersions');
+      if (versions.some((item) => item.id === version.id)) {
+        throw new Error(`Document version ${version.id} already exists.`);
+      }
 
-    versions.push(version);
-    await this.store.writeCollection('documentVersions', versions);
-    return version;
+      versions.push(version);
+      await this.store.writeCollection('documentVersions', versions);
+      return version;
+    });
   }
 }

@@ -159,7 +159,7 @@ export class JsonTicketStore {
     changes: Partial<
       Pick<
         TicketRecord,
-        'title' | 'description' | 'product' | 'affectedService' | 'teamId'
+        'title' | 'description' | 'product' | 'affectedService' | 'teamId' | 'priority'
       >
     >,
   ): Promise<TicketRecord | null> {

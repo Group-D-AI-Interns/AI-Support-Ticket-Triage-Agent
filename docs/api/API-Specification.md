@@ -1,3 +1,43 @@
+## Draft priority recommendation preview
+
+`POST /api/v1/tickets/:ticketId/recommend-priority`
+
+- Auth: bearer access token, verified tenant membership selected by `X-Organisation-ID`.
+- Permission: `tickets.ai.review`, plus existing ticket/team/ownership visibility. Requesters have no AI-review grant. Inaccessible/cross-tenant ticket IDs return 404.
+- Body: `{}` only. Client-supplied impact, urgency, priority, policy, confidence settings, roles and other unknown fields return 400.
+- Success: 200 `{ data: PriorityRecommendation, requestId }`; data includes draft policy provenance, validated factor citations, execution metadata, warnings, missing information and mandatory human review. Priority is P1-P4 or null when information/confidence is insufficient.
+- Errors: 401 unauthenticated; 403 permission/membership; 404 inaccessible ticket; 400 invalid body; 503 `PRIORITY_PREVIEW_DISABLED`; 502 `AI_ANALYSIS_FAILED` for provider timeout/failure/invalid evidence. Normal shared storage/identity errors also apply.
+- Synchronous, preview-only, not persisted. Does not activate policy or change tickets/assignment/closure. No idempotency key is needed for a preview, but repeated requests may incur provider calls.
+- Explicit development opt-in: `APP_ENV=development`, `TICKET_PRIORITY_PREVIEW_ENABLED=true`, `TICKET_PRIORITY_MIN_CONFIDENCE=<reviewed number 0..1>`, and either the existing demo or live runtime. No default confidence threshold is imposed.
+- Server loads the checked-in draft and verifies its source checksum. The request cannot select a policy/path. This is not active tenant policy resolution.
+- Live preview reuses the classification task provider/model with its existing timeout/fallback settings. Offline demo returns null factors/priority, `insufficient_information`, and a `DEMO_ONLY` warning.
+
+Example response fields (abbreviated):
+
+```json
+{
+  "data": {
+    "policyStatus": "draft",
+    "status": "insufficient_information",
+    "priority": null,
+    "requiresHumanReview": true,
+    "missingInformation": ["Human-verified impact and urgency evidence"]
+  },
+  "requestId": "req_example"
+}
+```
+
+## Integrated ticket priority update
+
+`PATCH /api/v1/tickets/:ticketId` also accepts `{ "priority": "<configured-priority>" }`.
+The caller needs ticket access and `tickets.priority.manage` (administrator or support
+lead in the shared role catalogue). Priority must be a non-empty string. SLA evaluation
+uses the exact priority key in the approved policy; unknown keys do not receive invented
+targets. Source Jira priority stays separate. This is a human operational update, not
+an AI action. The existing ticket history records the change.
+
+> **Current integrated application (2026-11-19):** All default startup commands now serve foundation and domain routes together. Protected routes use verified foundation identity plus active server-side memberships, selected with `X-Organisation-ID` or `organisationId`. The static ticket development principal applies only to isolated legacy tests. AI history persists through the shared JSON store. See [Integration-Verification.md](Integration-Verification.md) and the root README; older standalone startup/auth examples below are historical.
+
 # API Specification — Draft
 
 **Base path:** `/api/v1`  
@@ -72,8 +112,8 @@
 | POST | `/tickets/:id/reopen-requests/:requestId/approve` | Approve a pending reopen request |
 | POST | `/tickets/:id/comments` | Add comment |
 | GET | `/tickets/:id/comments` | Retrieve comments visible to the caller |
-| POST | `/tickets/:id/analyze` | Start AI triage |
-| GET | `/tickets/:id/analyses` | Retrieve analysis history |
+| POST | `/tickets/:id/analyze` | Run local synchronous AI demo (development only) |
+| GET | `/tickets/:id/analyses` | Retrieve in-memory demo analysis history |
 | GET | `/tickets/:id/similar` | Retrieve similar permitted tickets |
 | POST | `/tickets/:id/recommend-resolution` | Generate resolution recommendation |
 | POST | `/tickets/:id/recommend-routing` | Generate team recommendation |
@@ -617,58 +657,92 @@ Expected response — `201 Created`:
 
 The private storage key is intentionally omitted. To download, send an authenticated `GET http://localhost:3000/api/v1/tickets/{{ticketId}}/attachments/{{attachmentId}}`. The caller must still have access to the ticket; the response is the file bytes with `Content-Disposition: attachment`. Requesters can access their own ticket attachments, and support staff can access attachments only for tickets in their configured team scope (support leads may also access unassigned tickets).
 
-## 6. Example asynchronous triage
+## 6. Local ticket AI demo
+
+The current Express ticket API implements synchronous classification and
+summarization in either opt-in local demo mode or opt-in live-provider mode.
+Both require `APP_ENV=development` and configured `TICKET_AI_CATEGORIES`. The
+local deterministic heuristic is not an LLM; its results require human review
+and are stored in memory only until the API process restarts. Live mode uses
+the configured per-task provider, retries transient Inception failures, and
+falls back to Groq. Both modes are read-only and use in-memory analysis history;
+there is no asynchronous job or durable persistence.
 
 ### Request
 
 ```http
 POST /api/v1/tickets/ticket_123/analyze
-Authorization: Bearer <access-token>
+Authorization: Bearer <development-bearer-token>
+Content-Type: application/json
 ```
 
-### Response — 202 Accepted
+```json
+{}
+```
+
+### Response — 200 OK
 
 ```json
 {
   "data": {
-    "executionId": "exec_123",
-    "status": "queued",
-    "statusUrl": "/api/v1/jobs/exec_123"
-  }
-}
-```
-
-### Example completed result
-
-```json
-{
-  "data": {
-    "executionId": "exec_123",
+    "id": "analysis_<uuid>",
+    "ticketId": "ticket_123",
+    "organisationId": "org_123",
     "status": "completed",
     "classification": {
-      "categories": ["account_access"],
-      "confidence": 0.91
+      "category": "ACCOUNT_ACCESS",
+      "reason": "The local demo heuristic matched these configured terms: account, access.",
+      "confidence": null,
+      "requiresHumanReview": true,
+      "warnings": ["DEMO_ONLY: deterministic keyword heuristic; not an LLM or calibrated classification."]
     },
     "summary": {
-      "issue": "Requester cannot access the billing portal.",
-      "impact": "Billing work may be delayed.",
-      "missingInformation": ["Browser and time of failure"]
+      "summary": "The requester cannot access the account.",
+      "symptoms": ["Unable to access my account"],
+      "attemptedActions": [],
+      "businessImpact": null,
+      "missingInformation": [],
+      "warnings": ["DEMO_ONLY: extractive summary; not an LLM-generated or completeness-checked summary."]
     },
-    "priorityRecommendation": {
-      "value": "medium",
-      "factors": ["Configured impact and urgency rules"],
-      "requiresHumanReview": true
-    },
-    "routingRecommendation": {
-      "teamId": "team_billing_support",
-      "requiresApproval": true
-    },
-    "evidence": []
+    "executions": [
+      {
+        "executionId": "exec_<uuid>",
+        "task": "ticket_classification",
+        "status": "completed",
+        "provider": "local-demo-heuristic",
+        "model": "local-heuristic-v1",
+        "attempts": 1,
+        "durationMs": 1,
+        "startedAt": "<timestamp>",
+        "completedAt": "<timestamp>"
+      },
+      {
+        "executionId": "exec_<uuid>",
+        "task": "ticket_summarization",
+        "status": "completed",
+        "provider": "local-demo-heuristic",
+        "model": "local-heuristic-v1",
+        "attempts": 1,
+        "durationMs": 1,
+        "startedAt": "<timestamp>",
+        "completedAt": "<timestamp>"
+      }
+    ],
+    "createdAt": "<timestamp>"
   }
 }
 ```
 
-The values above are illustrative contract examples, not real model outputs or configured business rules.
+`GET /api/v1/tickets/ticket_123/analyses` returns the analyses still held in
+memory for the caller's accessible ticket. Both routes enforce the ticket
+module's tenant and requester/team/administrator access checks. The demo
+provider receives only the ticket ID, title, description, and configured
+categories; it does not call an external service.
+
+Similar-ticket retrieval, priority/routing/resolution recommendations, async
+jobs, and persistent AI history remain future integrations. The values above
+show the response shape; timestamps and execution values are generated at
+runtime.
 
 ## 7. Example policy approval
 
@@ -1375,3 +1449,14 @@ components:
 ```
 
 This excerpt is intentionally a draft; expand every endpoint, schema, response, permission and error case before implementation.
+# Evidence and resolution increment
+
+Authenticated ticket reviewers can call `GET /api/v1/tickets/:ticketId/evidence`,
+`GET /api/v1/tickets/:ticketId/similar` and
+`POST /api/v1/tickets/:ticketId/recommend-resolution` with JSON `{}`.
+These enforce `tickets.resolution.review` and existing ticket access. Resolution
+guidance requires human review and never changes tickets. The default evidence source
+exposes effective, approved, active policy payloads only to organisation administrators;
+historical sources are not connected yet. See
+[the resolution contract](../../backend/src/modules/ai/resolution-recommendations.md)
+for response fields, unavailable/evidence-empty behavior and integration requirements.

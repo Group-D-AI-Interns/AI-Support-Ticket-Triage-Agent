@@ -35,33 +35,7 @@ export class TicketAiAnalysisService {
   ) {}
 
   async analyze(input: AnalyzeTicketInput): Promise<TicketAiAnalysis> {
-    if (!input.tenant?.organisationId || !input.tenant.userId) {
-      throw new TicketAiAnalysisError('INVALID_TENANT_CONTEXT', 'Trusted tenant context is required.');
-    }
-    if (!input.ticketId.trim()) {
-      throw new TicketAiAnalysisError('INVALID_TICKET_ID', 'Ticket ID is required.');
-    }
-
-    const ticket = await this.ticketSource.getAuthorizedTicket(input.tenant, input.ticketId);
-    if (!ticket) {
-      throw new TicketAiAnalysisError('TICKET_NOT_FOUND', 'Ticket not found.');
-    }
-    if (ticket.organisationId !== input.tenant.organisationId) {
-      throw new TicketAiAnalysisError(
-        'TICKET_TENANT_MISMATCH',
-        'Ticket source returned a ticket outside the trusted tenant.',
-      );
-    }
-    if (
-      ticket.id !== input.ticketId
-      || !ticket.title.trim()
-      || typeof ticket.description !== 'string'
-    ) {
-      throw new TicketAiAnalysisError(
-        'INVALID_TICKET_DATA',
-        'Ticket source returned an invalid AI ticket projection.',
-      );
-    }
+    const ticket = await this.getAuthorizedTicket(input.tenant, input.ticketId);
 
     const classification = await this.classifier.classify({
       ticket,
@@ -87,5 +61,43 @@ export class TicketAiAnalysisService {
 
     await this.repository.save(input.tenant, analysis);
     return analysis;
+  }
+
+  async listAnalyses(
+    tenant: TenantContext,
+    ticketId: string,
+  ): Promise<TicketAiAnalysis[]> {
+    await this.getAuthorizedTicket(tenant, ticketId);
+    return this.repository.listForTicket(tenant, ticketId);
+  }
+
+  private async getAuthorizedTicket(
+    tenant: TenantContext,
+    ticketId: string,
+  ) {
+    if (!tenant?.organisationId || !tenant.userId) {
+      throw new TicketAiAnalysisError('INVALID_TENANT_CONTEXT', 'Trusted tenant context is required.');
+    }
+    if (!ticketId.trim()) {
+      throw new TicketAiAnalysisError('INVALID_TICKET_ID', 'Ticket ID is required.');
+    }
+
+    const ticket = await this.ticketSource.getAuthorizedTicket(tenant, ticketId);
+    if (!ticket) {
+      throw new TicketAiAnalysisError('TICKET_NOT_FOUND', 'Ticket not found.');
+    }
+    if (ticket.organisationId !== tenant.organisationId) {
+      throw new TicketAiAnalysisError(
+        'TICKET_TENANT_MISMATCH',
+        'Ticket source returned a ticket outside the trusted tenant.',
+      );
+    }
+    if (ticket.id !== ticketId || !ticket.title.trim() || typeof ticket.description !== 'string') {
+      throw new TicketAiAnalysisError(
+        'INVALID_TICKET_DATA',
+        'Ticket source returned an invalid AI ticket projection.',
+      );
+    }
+    return ticket;
   }
 }

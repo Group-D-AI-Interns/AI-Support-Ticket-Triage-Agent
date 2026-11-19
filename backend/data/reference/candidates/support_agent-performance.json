@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "requiresHumanReview": true,
+  "source": {
+    "documentId": "HR-KPA-SA-001",
+    "version": "1.0",
+    "path": "performance/support-agent-kpa-kpi.md",
+    "sha256": "ed38495feb3a2e46db9e77594801c981077793da20dbb22b7a7c2c66df98463b",
+    "section": "2. KEY PERFORMANCE AREAS"
+  },
+  "role": "support_agent",
+  "kpas": [
+    {
+      "number": 1,
+      "name": "SLA Compliance and Ticket Management",
+      "weightPercent": 20,
+      "kpis": [
+        {
+          "name": "Tickets responded to within SLA",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Tickets resolved within SLA",
+          "targetText": "\u2265 90%"
+        },
+        {
+          "name": "Tickets acknowledged within required timeframes",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "SLA breaches properly documented",
+          "targetText": "100%"
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "name": "First Contact Resolution and Technical Effectiveness",
+      "weightPercent": 20,
+      "kpis": [
+        {
+          "name": "First Contact Resolution (FCR)",
+          "targetText": "\u2265 70%"
+        },
+        {
+          "name": "First-Level Resolution Rate",
+          "targetText": "\u2265 75%"
+        },
+        {
+          "name": "Reopened Ticket Rate",
+          "targetText": "\u2264 5%"
+        },
+        {
+          "name": "Correct Technical Resolution",
+          "targetText": "\u2265 95%"
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "name": "Client Experience and Customer Satisfaction",
+      "weightPercent": 15,
+      "kpis": [
+        {
+          "name": "Customer Satisfaction (CSAT)",
+          "targetText": "\u2265 90%"
+        },
+        {
+          "name": "Professional Communication Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Client Complaint Rate",
+          "targetText": "\u2264 2%"
+        },
+        {
+          "name": "Client Updates Provided as Required",
+          "targetText": "\u2265 95%"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "name": "Ticket Documentation and Data Accuracy",
+      "weightPercent": 15,
+      "kpis": [
+        {
+          "name": "Ticket Documentation Compliance",
+          "targetText": "\u2265 98%"
+        },
+        {
+          "name": "Correct Priority Classification",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Correct Client Classification",
+          "targetText": "100%"
+        },
+        {
+          "name": "Complete Resolution Notes",
+          "targetText": "\u2265 98%"
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "name": "Productivity and Workload Management",
+      "weightPercent": 10,
+      "kpis": [
+        {
+          "name": "Assigned Ticket Backlog Management",
+          "targetText": "Within agreed team thresholds"
+        },
+        {
+          "name": "Tickets Updated Within Required Intervals",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Work Queue Management Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Scheduled Work and Shift Adherence",
+          "targetText": "\u2265 95%"
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "name": "Escalation and Incident Management",
+      "weightPercent": 10,
+      "kpis": [
+        {
+          "name": "Correct Escalation Rate",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "P1 Incident Escalation Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Escalation Documentation Compliance",
+          "targetText": "100%"
+        }
+      ]
+    },
+    {
+      "number": 7,
+      "name": "Knowledge Management and Continuous Improvement",
+      "weightPercent": 5,
+      "kpis": [
+        {
+          "name": "Knowledge Base Contributions",
+          "targetText": "At least 1 per quarter"
+        },
+        {
+          "name": "Knowledge Article Usage",
+          "targetText": "As applicable"
+        },
+        {
+          "name": "Identified Process Improvements",
+          "targetText": "At least 1 per quarter"
+        }
+      ]
+    },
+    {
+      "number": 8,
+      "name": "Professional Conduct and Compliance",
+      "weightPercent": 5,
+      "kpis": [
+        {
+          "name": "Policy and Procedure Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Information Security Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Attendance and Punctuality",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Mandatory Training Completion",
+          "targetText": "100%"
+        }
+      ]
+    }
+  ],
+  "totalWeightPercent": 100,
+  "scoringFormula": null,
+  "activationBlockedBy": [
+    "Performance scope/ownership approval",
+    "Within-KPA aggregation and normalisation formula",
+    "Missing evidence treatment and eligible denominators",
+    "Verified measurement sources and access rules"
+  ]
+}

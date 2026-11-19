@@ -1,4 +1,4 @@
-export type AiTask = 'ticket_classification' | 'ticket_summarization';
+export type AiTask = 'ticket_classification' | 'ticket_summarization' | 'ticket_priority_factors' | 'ticket_resolution';
 
 export type TicketAiView = {
   id: string;

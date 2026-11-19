@@ -1,0 +1,112 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "requiresHumanReview": true,
+  "source": {
+    "documentId": "ITSM-POL-002",
+    "version": "2.0",
+    "path": "policies/service-level-agreement.md",
+    "sha256": "b1b399ba87523cf11d8f34f84af070fb0203bc379f6664ac5e39f85d67fcedb0",
+    "section": "7 and 7.1"
+  },
+  "targetsByClientTier": {
+    "diamond": {
+      "P1": {
+        "response": "10 minutes",
+        "resolution": "2 hours"
+      },
+      "P2": {
+        "response": "20 minutes",
+        "resolution": "4 hours"
+      },
+      "P3": {
+        "response": "2 hours",
+        "resolution": "2 business days"
+      },
+      "P4": {
+        "response": "4 business hours",
+        "resolution": "3 business days"
+      }
+    },
+    "platinum": {
+      "P1": {
+        "response": "15 minutes",
+        "resolution": "4 hours"
+      },
+      "P2": {
+        "response": "30 minutes",
+        "resolution": "8 hours"
+      },
+      "P3": {
+        "response": "4 hours",
+        "resolution": "3 business days"
+      },
+      "P4": {
+        "response": "1 business day",
+        "resolution": "5 business days"
+      }
+    },
+    "gold": {
+      "P1": {
+        "response": "30 minutes",
+        "resolution": "8 hours"
+      },
+      "P2": {
+        "response": "1 hour",
+        "resolution": "1 business day"
+      },
+      "P3": {
+        "response": "8 business hours",
+        "resolution": "5 business days"
+      },
+      "P4": {
+        "response": "2 business days",
+        "resolution": "10 business days"
+      }
+    },
+    "silver": {
+      "P1": {
+        "response": "1 hour",
+        "resolution": "1 business day"
+      },
+      "P2": {
+        "response": "4 business hours",
+        "resolution": "2 business days"
+      },
+      "P3": {
+        "response": "1 business day",
+        "resolution": "7 business days"
+      },
+      "P4": {
+        "response": "3 business days",
+        "resolution": "10 business days"
+      }
+    },
+    "bronze": {
+      "P1": {
+        "response": "4 business hours",
+        "resolution": "2 business days"
+      },
+      "P2": {
+        "response": "1 business day",
+        "resolution": "3 business days"
+      },
+      "P3": {
+        "response": "2 business days",
+        "resolution": "10 business days"
+      },
+      "P4": {
+        "response": "5 business days",
+        "resolution": "15 business days"
+      }
+    }
+  },
+  "unitsNormalised": false,
+  "activationBlockedBy": [
+    "Actual contractual targets not approved",
+    "No effective date",
+    "Calendar/timezone/holiday and business-day definitions required",
+    "Client/account entitlement model missing",
+    "Response/resolution event definitions require agreement"
+  ]
+}
