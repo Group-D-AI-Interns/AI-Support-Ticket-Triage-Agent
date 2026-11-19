@@ -186,13 +186,13 @@ A module owns its domain rules and persistence interface. Other modules call its
 
 ### 3.4 Recommended technology direction
 
-The source documents support the following direction, but do not identify a fully approved backend framework or infrastructure vendor.
+The source documents do not identify a backend framework approved for every module. TypeScript, Node.js and Express 5 are approved for Fhulu's Phase 3 ticket API; other framework and infrastructure choices remain open.
 
 | Concern | Recommendation / source position | Status |
 |---|---|---|
-| Backend language | Python | Approved by the repository owner for Fhulu's ticket API implementation; confirm wider service integration before other modules adopt it |
-| Runtime | Python | Required by the selected FastAPI framework |
-| HTTP framework | FastAPI | Approved by the repository owner for Fhulu's ticket API implementation |
+| Backend language | TypeScript | Approved by the repository owner for Fhulu's ticket API after the development branch introduced TypeScript tenant/storage modules |
+| Runtime | Node.js | Required by the selected Express framework |
+| HTTP framework | Express 5 | Approved by the repository owner for Fhulu's ticket API migration |
 | Request validation | Zod is recommended in the capstone specification; use existing equivalent if established | Recommended |
 | API style | Versioned REST API, JSON; multipart for file upload | Defined |
 | Frontend | React web UI is shown in Component Design; verify repository | Documented direction |
@@ -324,7 +324,7 @@ Do not treat a JSON file write as a multi-file transaction. For operations that 
 
 The list describes the data required by the retained scope. Add a file only when a retained requirement needs it.
 
-**Current Phase 3 JSON adapter note:** ticket comments and change history are embedded in each ticket record in `tickets.json` so the ticket change and its history event can be atomically replaced in one file. This is a documented prototype storage choice; normalize them to the logical `ticket_comments` and audit records when the shared persistence/transaction contract is integrated. Attachment bytes remain outside JSON and are deferred until the approved private-storage adapter is available.
+**Current Phase 3 JSON adapter note:** ticket comments, attachment metadata and change history are embedded in each ticket record in `tickets.json` so a ticket change and its history event can be atomically replaced in one file. The TypeScript adapter retains this schema, uses a cross-process file lock, and atomically replaces the JSON file. This is a documented prototype storage choice; normalize comments and audit records when the shared persistence/transaction contract is integrated. Ticket attachment bytes use the shared private-storage adapter and a 25 MB PDF/TXT/DOC/DOCX/PNG/JPEG/WebP validation policy for local development only. Malware scanning is not implemented; this attachment intake is not production-ready.
 
 ### 4.5 Data conventions and future migration
 
@@ -390,7 +390,7 @@ The documents deliberately leave several implementation decisions open. JSON fil
 | Jira Cloud webhook authentication and mappings | Standard admin webhooks do not send a configurable custom header; project, organisation and reporter mappings need a trusted source | Jira ticket ingestion |
 | Local ticket API authentication | A single configured bearer principal is approved only for `APP_ENV=development`; it must be replaced by Phase 1 identity/tenant middleware before deployment | Local Postman testing |
 | Ticket comment visibility | `internal` and `public` visibility values are approved; production authorization must use the shared role/tenant contracts | Ticket comments |
-| Internal ticket status transitions | No transition catalogue is approved; `new` is used only as the initial value shown in the API example and status changes remain unavailable | Ticket lifecycle updates |
+| Internal ticket status transitions | Tenant workflow document supplies statuses, transitions and role restrictions; a draft remains inactive until organisation-admin approval. Jira status remains separate source metadata | Ticket lifecycle updates |
 
 **Rule:** If a decision blocks a module, the owner may build isolated domain interfaces, schemas with explicitly provisional status, mocks and tests. They must not silently choose a production behavior.
 
@@ -968,7 +968,7 @@ Phases are ordered by dependency. Within a phase, the five owners can work in pa
 - Assignment/team scope and ticket history/audit integration.
 
 **Implementation steps:**
-1. Define ticket DTOs and status/priority values from approved project requirements; do not invent unsupported status transitions.
+1. Define ticket DTOs and take internal status values, allowed transitions and role restrictions from tenant workflow configuration; require organisation-admin approval before activation and never infer transitions.
 2. Implement ticket creation with title, description and supported requester/product/service fields.
 3. Derive organisation from authenticated tenant context.
 4. Verify requester permission and team/resource scope.
@@ -995,6 +995,8 @@ Phases are ordered by dependency. Within a phase, the five owners can work in pa
 - Comments and attachments enforce tenant, ownership/team and visibility permissions.
 - Ticket creation does not trust a client-supplied tenant ID.
 - Ticket changes are auditable.
+- Status changes enforce the active tenant workflow, role restrictions, reopening controls and audit history.
+- Draft workflow configurations do not affect ticket creation or status updates before approval.
 - Ticket interfaces are stable for AI and SLA consumers.
 
 **Testing:**
@@ -1386,7 +1388,9 @@ All members participate in Phase 0 contract review, Phase 6 integration and Phas
 - Faith: ticket event timestamps and ticket read interface for SLA.
 - Wandile: ticket content and stable read interface for AI analysis.
 
-**Current repository boundary:** Phase 1/2 tenant, identity, team and file-storage services are not present. A configured development principal is available only when `APP_ENV=development`; it is not production authentication and must be replaced before deployment. Comment visibility is `internal` or `public`; internal status transitions are not implemented because approved transitions are not defined. Ticket attachment upload/download remains deferred until Olerato's private-storage contract is available.
+**Current repository boundary:** The shared tenant type and private local-storage adapter are present, but Phase 1/2 identity and team-membership services are not. A configured development principal is available only when `APP_ENV=development`; it is not production authentication and must be replaced before deployment. Comment visibility is `internal` or `public`. Ticket workflow configurations are tenant-scoped and require organisation-admin approval; this Phase 3 API accepts structured document-derived configuration but does not parse uploaded documents. SLA and priority policy extraction (including the attached priority policy) remains outside this Phase 3 change. Ticket attachments reuse the local private-storage adapter and document upload policy as a development-only prototype; malware scanning and production storage are not implemented.
+
+**Ticket consumer interface:** `src/modules/tickets/application/ticket-read.service.ts` exports a tenant-scoped `TicketReadService` and stable `TicketReadModel` for AI, SLA and reporting consumers. It intentionally excludes comments, audit history and private attachment storage keys. No event broker or asynchronous ticket event publisher is selected or implemented.
 
 **Deliverables**
 - Ticket module and API.
