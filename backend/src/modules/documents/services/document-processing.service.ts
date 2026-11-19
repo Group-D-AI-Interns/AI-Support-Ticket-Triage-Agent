@@ -6,8 +6,11 @@ import type { TenantContext } from '../../../shared/tenant.js';
 import type { DocumentRecord } from '../domain/document.js';
 import type { DocumentLifecycleService } from './document-lifecycle.service.js';
 import {
+  validateExtractionAdapterResult,
+  type ExtractionAdapterResult,
+} from './extraction-adapter.js';
+import {
   ProvisionalExtractionAdapter,
-  type ProvisionalExtractionResult,
 } from './provisional-extraction-adapter.js';
 import type { DocumentStorageAdapter } from '../storage/document-storage.js';
 
@@ -17,12 +20,16 @@ export type DocumentExtractionRecord = {
   documentId: string;
   documentVersionId: string;
   createdAt: string;
-  result: ProvisionalExtractionResult;
+  result: ExtractionAdapterResult;
 };
 
 export class DocumentProcessingError extends Error {
   constructor(
-    readonly code: 'UNSUPPORTED_EXTRACTION_FORMAT' | 'INVALID_TEXT_ENCODING' | 'DOCUMENT_NOT_READY',
+    readonly code:
+      | 'UNSUPPORTED_EXTRACTION_FORMAT'
+      | 'INVALID_TEXT_ENCODING'
+      | 'DOCUMENT_NOT_READY'
+      | 'EXTRACTION_FAILED',
     message: string,
   ) {
     super(message);
@@ -99,13 +106,19 @@ export class DocumentProcessingService {
       }
 
       const executionId = `exec-${randomUUID()}`;
-      const result = await this.adapter.extract({
+      const result = validateExtractionAdapterResult(await this.adapter.extract({
         tenant,
         documentId: document.id,
         documentVersionId: version.id,
         executionId,
         content: text,
-      });
+      }));
+      if (result.status === 'failed') {
+        throw new DocumentProcessingError(
+          'EXTRACTION_FAILED',
+          'The document could not be processed.',
+        );
+      }
       const extraction: DocumentExtractionRecord = {
         id: `document-extraction-${randomUUID()}`,
         organisationId: tenant.organisationId,

@@ -43,8 +43,8 @@ test('processes a tenant text source and keeps extraction provenance tenant-scop
     assert.equal(processed?.document.status, 'processed');
     assert.equal(processed?.document.processingStatus, 'completed');
     assert.equal(processed?.extraction.documentVersionId, uploaded.version.id);
-    assert.equal(processed?.extraction.result.ruleType, 'response_time');
-    assert.equal(processed?.extraction.result.payload.targetHours, 2);
+    assert.equal(processed?.extraction.result.rules[0]?.ruleType, 'response_time');
+    assert.equal(processed?.extraction.result.rules[0]?.payload.targetHours, 2);
     assert.equal(
       await processing.getExtraction(tenantB, uploaded.document.id),
       null,

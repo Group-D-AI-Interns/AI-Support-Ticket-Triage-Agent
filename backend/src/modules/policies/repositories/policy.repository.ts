@@ -22,5 +22,9 @@ export interface PolicyRepository {
     versionId: string,
   ): Promise<PolicyVersionRecord | null>;
   createExtractedRule(rule: ExtractedRuleRecord, tenant: TenantContext): Promise<ExtractedRuleRecord>;
+  createExtractedRules(
+    rules: ExtractedRuleRecord[],
+    tenant: TenantContext,
+  ): Promise<ExtractedRuleRecord[]>;
   addApproval(approval: PolicyApprovalRecord, tenant: TenantContext): Promise<PolicyApprovalRecord>;
 }

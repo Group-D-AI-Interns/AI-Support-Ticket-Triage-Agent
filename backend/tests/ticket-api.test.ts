@@ -942,7 +942,7 @@ test('uploads, processes, inspects, and downloads a tenant SLA source document',
     assert.equal(processed.status, 200);
     assert.equal(processResult.data.document.status, 'processed');
     assert.equal(processResult.data.extraction.documentVersionId, versionId);
-    assert.equal(processResult.data.extraction.result.payload.targetHours, 2);
+    assert.equal(processResult.data.extraction.result.rules[0]?.payload.targetHours, 2);
     assert.equal(detailResult.data.extraction.documentId, documentId);
     assert.equal(download.status, 200);
     assert.equal(downloadedText, 'High priority requests receive a response within two hours.');

@@ -29,7 +29,13 @@ export class InMemoryExtractionQueue implements ExtractionJobQueue {
     }
 
     const target = queuedJobs[0];
+    if (!target) {
+      return null;
+    }
     const index = jobs.findIndex((job) => job.id === target.id);
+    if (index < 0) {
+      return null;
+    }
     const nextVersion: ExtractionJobRecord = {
       ...target,
       attempts: target.attempts + 1,
@@ -52,12 +58,13 @@ export class InMemoryExtractionQueue implements ExtractionJobQueue {
   async update(jobId: string, updates: Partial<ExtractionJobRecord>): Promise<ExtractionJobRecord | null> {
     const jobs = await this.store.readCollection<ExtractionJobRecord>('extractionJobs');
     const index = jobs.findIndex((job) => job.id === jobId);
-    if (index === -1) {
+    const current = jobs[index];
+    if (index === -1 || !current) {
       return null;
     }
 
-    const updated = {
-      ...jobs[index],
+    const updated: ExtractionJobRecord = {
+      ...current,
       ...updates,
       updatedAt: new Date().toISOString(),
     };

@@ -1,148 +1,51 @@
-import type { TenantContext } from '../../../shared/tenant.js';
-
-export type ExtractionEvidence = {
-  sourceType: 'document' | 'approved_policy' | 'knowledge_article' | 'historical_ticket';
-  sourceId: string;
-  versionId?: string;
-  page?: number;
-  section?: string;
-  excerpt?: string;
-  confidence?: number;
-};
-
-export type ValidatedExtractionOutput = {
-  executionId: string;
-  documentId: string;
-  documentVersionId: string;
-  ruleType: string;
-  payload: Record<string, unknown>;
-  evidence: ExtractionEvidence[];
-  confidence: number;
-  ambiguity: boolean;
-  warnings: string[];
-  requiresHumanReview: boolean;
-};
-
-export type ProvisionalExtractionInput = {
-  tenant: TenantContext;
-  documentId: string;
-  documentVersionId: string;
-  executionId: string;
-  content: string;
-  pageNumber?: number;
-  section?: string;
-};
-
-export type ProvisionalExtractionResult = ValidatedExtractionOutput & {
-  status: 'succeeded' | 'failed';
-};
-
-export function validateExtractionOutput(input: unknown): ValidatedExtractionOutput {
-  if (!input || typeof input !== 'object') {
-    throw new TypeError('Extraction output must be an object.');
-  }
-
-  const value = input as Record<string, unknown>;
-
-  const executionId = requireString(value.executionId, 'executionId');
-  const documentId = requireString(value.documentId, 'documentId');
-  const documentVersionId = requireString(value.documentVersionId, 'documentVersionId');
-  const ruleType = requireString(value.ruleType, 'ruleType');
-
-  const payload = value.payload;
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
-    throw new Error('Extraction payload must be an object.');
-  }
-
-  const confidenceValue = value.confidence;
-  if (typeof confidenceValue !== 'number' || !Number.isFinite(confidenceValue) || confidenceValue < 0 || confidenceValue > 1) {
-    throw new Error('Extraction confidence must be a finite number between 0 and 1.');
-  }
-
-  const evidenceRaw = value.evidence;
-  if (!Array.isArray(evidenceRaw)) {
-    throw new Error('Extraction evidence must be an array.');
-  }
-
-  const evidence: ExtractionEvidence[] = evidenceRaw.map((entry, index) => {
-    if (!entry || typeof entry !== 'object') {
-      throw new Error(`Evidence item ${index} must be an object.`);
-    }
-
-    const evidenceItem = entry as Record<string, unknown>;
-    const sourceType = requireString(evidenceItem.sourceType, `evidence[${index}].sourceType`);
-    const sourceId = requireString(evidenceItem.sourceId, `evidence[${index}].sourceId`);
-
-    return {
-      sourceType: sourceType as ExtractionEvidence['sourceType'],
-      sourceId,
-      ...(typeof evidenceItem.versionId === 'string' ? { versionId: evidenceItem.versionId } : {}),
-      ...(typeof evidenceItem.page === 'number' ? { page: evidenceItem.page } : {}),
-      ...(typeof evidenceItem.section === 'string' ? { section: evidenceItem.section } : {}),
-      ...(typeof evidenceItem.excerpt === 'string' ? { excerpt: evidenceItem.excerpt } : {}),
-      ...(typeof evidenceItem.confidence === 'number' ? { confidence: evidenceItem.confidence } : {}),
-    };
-  });
-
-  if (evidence.length === 0) {
-    throw new Error('Extraction output requires at least one evidence reference.');
-  }
-
-  const warnings = Array.isArray(value.warnings) ? value.warnings.map((warning) => String(warning)) : [];
-  const ambiguity = Boolean(value.ambiguity);
-  const requiresHumanReview = ambiguity || confidenceValue < 0.7 || evidence.length === 0 || warnings.some((warning) => /low confidence|uncertain|ambig|review/i.test(warning));
-
-  return {
-    executionId,
-    documentId,
-    documentVersionId,
-    ruleType,
-    payload: payload as Record<string, unknown>,
-    evidence,
-    confidence: confidenceValue,
-    ambiguity,
-    warnings,
-    requiresHumanReview,
-  };
-}
-
-export interface ExtractionAdapter {
-  extract(input: ProvisionalExtractionInput): Promise<ProvisionalExtractionResult>;
-}
+import {
+  validateExtractionOutput,
+  type ExtractionAdapter,
+  type ExtractionAdapterInput,
+  type ExtractionAdapterResult,
+} from './extraction-adapter.js';
 
 export class ProvisionalExtractionAdapter implements ExtractionAdapter {
-  async extract(input: ProvisionalExtractionInput): Promise<ProvisionalExtractionResult> {
-    const content = input.content?.trim() ?? '';
+  async extract(input: ExtractionAdapterInput): Promise<ExtractionAdapterResult> {
+    const startedAt = new Date().toISOString();
+    const started = Date.now();
+    const content = input.content.trim();
     const responseTarget = findResponseTarget(content);
     const targetHours = responseTarget?.hours ?? null;
-
-    const defaultNormalized = {
+    const confidence = targetHours === null ? 0.45 : 0.91;
+    const warnings = targetHours === null
+      ? ['No clear SLA target could be extracted; review required.']
+      : [];
+    const rule = validateExtractionOutput({
       executionId: input.executionId,
       documentId: input.documentId,
       documentVersionId: input.documentVersionId,
-      ruleType: targetHours ? 'response_time' : 'manual_review_required',
-      payload: targetHours ? { targetHours } : { rawText: content },
-      evidence: [
-        {
-          sourceType: 'document' as const,
-          sourceId: input.documentId,
-          versionId: input.documentVersionId,
-          page: input.pageNumber ?? 1,
-          section: input.section ?? 'policy',
-          excerpt: extractionExcerpt(content, responseTarget?.index),
-          confidence: targetHours ? 0.91 : 0.45,
-        },
-      ],
-      confidence: targetHours ? 0.91 : 0.45,
-      ambiguity: !targetHours,
-      warnings: targetHours ? [] : ['No clear SLA target could be extracted; review required.'],
-    };
-
-    const validated = validateExtractionOutput(defaultNormalized);
+      ruleType: targetHours === null ? 'manual_review_required' : 'response_time',
+      payload: targetHours === null ? { rawText: content } : { targetHours },
+      evidence: [{
+        sourceType: 'document',
+        sourceId: input.documentId,
+        versionId: input.documentVersionId,
+        excerpt: extractionExcerpt(content, responseTarget?.index),
+        confidence,
+      }],
+      confidence,
+      ambiguity: targetHours === null,
+      warnings,
+      requiresHumanReview: targetHours === null,
+    });
 
     return {
-      ...validated,
+      executionId: input.executionId,
       status: 'succeeded',
+      rules: [rule],
+      warnings,
+      executionMetadata: {
+        provider: 'local-provisional',
+        model: 'response-hours-regex-v1',
+        startedAt,
+        durationMs: Date.now() - started,
+      },
     };
   }
 }
@@ -191,12 +94,4 @@ function findResponseTarget(content: string): { hours: number; index: number } |
     ? (wordMap[rawValue] ?? null)
     : Number(rawValue);
   return hours === null ? null : { hours, index: match.index };
-}
-
-function requireString(value: unknown, fieldName: string): string {
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new Error(`${fieldName} is required and must be a non-empty string.`);
-  }
-
-  return value.trim();
 }
