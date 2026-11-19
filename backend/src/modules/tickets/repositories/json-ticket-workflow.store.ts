@@ -102,6 +102,9 @@ export class JsonTicketWorkflowStore {
       }
 
       const workflow = records[index];
+      if (!workflow) {
+        return null;
+      }
       if (workflow.status !== 'draft') {
         throw new TicketWorkflowConflictError(
           'Only a draft ticket workflow can be approved.',
@@ -120,6 +123,7 @@ export class JsonTicketWorkflowStore {
       for (let recordIndex = 0; recordIndex < records.length; recordIndex += 1) {
         const record = records[recordIndex];
         if (
+          record &&
           recordIndex !== index &&
           record.organisationId === tenant.organisationId &&
           record.status === 'active'

@@ -226,12 +226,17 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     const authenticated = authenticatedPrincipal(request, principal);
     const limit = queryInteger(request, 'limit', 20, 1, 100);
     const offset = queryInteger(request, 'offset', 0, 0);
+    const q = queryString(request, 'q');
+    const status = queryString(request, 'status');
+    const priority = queryString(request, 'priority');
+    const teamId = queryString(request, 'teamId');
+    const requesterId = queryString(request, 'requesterId');
     const filters = {
-      q: queryString(request, 'q'),
-      status: queryString(request, 'status'),
-      priority: queryString(request, 'priority'),
-      teamId: queryString(request, 'teamId'),
-      requesterId: queryString(request, 'requesterId'),
+      ...(q === undefined ? {} : { q }),
+      ...(status === undefined ? {} : { status }),
+      ...(priority === undefined ? {} : { priority }),
+      ...(teamId === undefined ? {} : { teamId }),
+      ...(requesterId === undefined ? {} : { requesterId }),
     };
     const tickets = await ticketReadService.listTickets(authenticated);
     const filtered = tickets
@@ -705,6 +710,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       }
       const organisationConfig = settings.organisations[organisationId];
       if (
+        !organisationConfig ||
         !secureStringEqual(
           routeParam(request, 'webhookSecret'),
           organisationConfig.webhookSecret,
@@ -1031,7 +1037,7 @@ function optionalName(
   if (!isRecord(value) || typeof value.name !== 'string') {
     throw validationError(
       `issue.fields.${field}`,
-      `${field[0].toUpperCase()}${field.slice(1)} must contain a name.`,
+      `${field === 'status' ? 'Status' : 'Priority'} must contain a name.`,
     );
   }
   return { [field]: value.name };
