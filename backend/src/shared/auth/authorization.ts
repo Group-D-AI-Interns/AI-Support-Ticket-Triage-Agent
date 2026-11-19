@@ -45,6 +45,27 @@ export const ROLE_DISPLAY_NAMES: Readonly<Record<string, readonly string[]>> = {
   requester: ["Requester", "Customer"],
 };
 
+/** Public descriptions for the four approved role templates. */
+export const ROLE_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  organisation_admin: "Manages organisation users, teams, configuration, and permitted operational information.",
+  support_lead: "Oversees support team queues, routing, priorities, approvals, and operational work.",
+  support_agent: "Handles assigned support tickets and reviews applicable AI and resolution recommendations.",
+  requester: "Submits tickets and views permitted updates on their own tickets.",
+};
+
+/** Returns the shared policy as data for role-aware clients; callers still enforce these permissions server-side. */
+export function describeRoleCapabilities(policy: RolePermissionPolicy = applicationAuthorization) {
+  return Object.values(ROLE_IDS).map((id) => ({
+    id,
+    displayNames: [...(ROLE_DISPLAY_NAMES[id] ?? [id])],
+    description: ROLE_DESCRIPTIONS[id] ?? "",
+    permissions: [...(policy.permissionsFor([id]))].sort().map((permission) => ({
+      id: permission,
+      description: PERMISSION_CATALOGUE[permission],
+    })),
+  }));
+}
+
 /** Shared permission catalogue derived from the supplied role responsibilities. */
 const permissions = (...grants: Permission[]) => new Set<Permission>(grants);
 

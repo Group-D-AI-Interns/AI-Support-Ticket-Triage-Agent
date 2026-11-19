@@ -12,7 +12,7 @@ services:
       KC_DB_URL_DATABASE: keycloak
       KC_DB_USERNAME: ${KEYCLOAK_DB_USERNAME:?Set a database username}
       KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:?Set a database password}
-      KC_HOSTNAME: http://localhost:8081
+      KC_HOSTNAME: ${KEYCLOAK_HOSTNAME:-http://localhost:8081}
       KC_BOOTSTRAP_ADMIN_USERNAME: ${KEYCLOAK_BOOTSTRAP_ADMIN_USERNAME:?Set a strong bootstrap admin username}
       KC_BOOTSTRAP_ADMIN_PASSWORD: ${KEYCLOAK_BOOTSTRAP_ADMIN_PASSWORD:?Set a strong bootstrap admin password}
     volumes:

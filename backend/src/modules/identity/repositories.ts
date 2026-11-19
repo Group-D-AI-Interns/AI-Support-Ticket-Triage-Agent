@@ -9,6 +9,7 @@ export interface IdentityRepository {
   findUserById(userId: string): Promise<User | null>;
   findOrganisationStatus(organisationId: string): Promise<OrganisationStatus | null>;
   listUsersForTenant(tenant: TenantContext): Promise<User[]>;
+  listMembershipsForTenant(tenant: TenantContext): Promise<OrganisationMembership[]>;
   findMembership(organisationId: string, userId: string): Promise<OrganisationMembership | null>;
   listMemberships(userId: string): Promise<OrganisationMembership[]>;
   updateUser(userId: string, changes: { displayName?: string; status?: User["status"] }): Promise<User>;
@@ -38,6 +39,11 @@ export class JsonIdentityRepository implements IdentityRepository {
     const ids = new Set(memberships.map((membership) => membership.userId));
     return (await this.store.read("users.json", isEnvelope(isUser))).records
       .filter((user) => ids.has(user.id) && user.status === "active");
+  }
+
+  async listMembershipsForTenant(tenant: TenantContext): Promise<OrganisationMembership[]> {
+    return (await this.store.read("memberships.json", isEnvelope(isMembership))).records
+      .filter((membership) => membership.organisationId === tenant.organisationId && membership.status === "active");
   }
 
   async listMemberships(userId: string): Promise<OrganisationMembership[]> {
