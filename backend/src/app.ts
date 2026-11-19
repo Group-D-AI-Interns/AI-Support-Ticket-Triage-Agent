@@ -4,7 +4,7 @@ import { AppError } from "./shared/errors/app-error.ts";
 import type { Environment } from "./config/env.ts";
 import { createLogger } from "./config/logger.ts";
 import type { AuthenticationProvider, IdentityProvisioningProvider, TenantResolver, TenantContext } from "./shared/auth/authentication.ts";
-import { applicationAuthorization, requirePermission, ROLE_IDS, type RolePermissionPolicy } from "./shared/auth/authorization.ts";
+import { applicationAuthorization, describeRoleCapabilities, requirePermission, ROLE_IDS, type RolePermissionPolicy } from "./shared/auth/authorization.ts";
 import { JsonFileStore, JsonStorageError } from "./infrastructure/persistence/json/json-file-store.ts";
 import { JsonIdentityRepository } from "./modules/identity/repositories.ts";
 import { IdentityService } from "./modules/identity/service.ts";
@@ -125,8 +125,19 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const result = await identity.currentUser(principal.userId, organisationId);
       sendJson(response, 200, { data: {
         user: { id: result.user.id, email: result.user.email, displayName: result.user.displayName, status: result.user.status },
-        organisations: result.organisations,
+        organisations: result.organisations.map((organisation) => ({
+          ...organisation,
+          permissions: [...permissionPolicy.permissionsFor(organisation.roles)].sort(),
+        })),
       }, requestId });
+      return;
+    }
+
+    if (path === "/api/v1/roles" && method === "GET") {
+      const principal = await requireAuthenticatedPrincipal(dependencies.authenticator, request);
+      const tenant = await tenantFromRequest(request, principal.userId, url);
+      requirePermission(permissionPolicy, tenant, "users.manage");
+      sendJson(response, 200, { data: describeRoleCapabilities(permissionPolicy), requestId });
       return;
     }
 
@@ -174,7 +185,14 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       if (path === "/api/v1/users" && method === "GET") {
         requirePermission(permissionPolicy, tenant, "users.read");
         const result = await identity.listUsers(tenant);
-        sendPage(response, result.map(({ id, email, displayName, status }) => ({ id, email, displayName, status })), requestId, url);
+        sendPage(response, result.map(({ user, roles }) => ({
+          id: user.id,
+          email: user.email,
+          displayName: user.displayName,
+          status: user.status,
+          roles,
+          permissions: [...permissionPolicy.permissionsFor(roles)].sort(),
+        })), requestId, url);
       } else if (path === "/api/v1/users" && method === "POST") {
         requirePermission(permissionPolicy, tenant, "users.manage");
         const body = await readJson(request);
@@ -189,6 +207,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
         sendJson(response, 201, { data: {
           user: { id: invited.user.id, email: invited.user.email, displayName: invited.user.displayName, status: invited.user.status },
           membership: invited.membership,
+          permissions: [...permissionPolicy.permissionsFor(invited.membership.roles)].sort(),
         }, requestId });
       } else if (path === "/api/v1/departments" && method === "GET") {
         requirePermission(permissionPolicy, tenant, "teams.read");
@@ -217,7 +236,15 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const tenant = await tenantFromRequest(request, principal.userId, url);
       requirePermission(permissionPolicy, tenant, "users.read");
       const user = await identity.getUser(tenant, userMatch[1]!);
-      sendJson(response, 200, { data: { id: user.id, email: user.email, displayName: user.displayName, status: user.status }, requestId });
+      const membership = await identity.getMembership(tenant, user.id);
+      sendJson(response, 200, { data: {
+        id: user.id,
+        email: user.email,
+        displayName: user.displayName,
+        status: user.status,
+        roles: membership.roles,
+        permissions: [...permissionPolicy.permissionsFor(membership.roles)].sort(),
+      }, requestId });
       return;
     }
     if (userMatch && method === "PATCH") {
@@ -240,9 +267,11 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const tenant = await tenantFromRequest(request, principal.userId, url);
       requirePermission(permissionPolicy, tenant, "users.manage");
       const body = await readJson(request);
+      rejectUnknown(body, ["status", "roles"]);
       const status = requireEnum(body, "status", ["active", "inactive", "suspended"] as const);
       const roles = requireRoleArray(body, "roles");
-      sendJson(response, 200, { data: await identity.setMembership(tenant, membershipMatch[1]!, status, roles), requestId });
+      const membership = await identity.setMembership(tenant, membershipMatch[1]!, status, roles);
+      sendJson(response, 200, { data: { ...membership, permissions: [...permissionPolicy.permissionsFor(membership.roles)].sort() }, requestId });
       return;
     }
 
@@ -355,6 +384,9 @@ export function createApp(environment: Environment, dependencies: AppDependencie
 
   function requireRoleArray(body: Record<string, unknown>, field: string): string[] {
     const values = requireStringArray(body, field);
+    if (values.length === 0) {
+      throw new AppError(400, "VALIDATION_ERROR", "The request is invalid.", [{ field, message: "Assign at least one role." }]);
+    }
     const allowed = new Set<string>(Object.values(ROLE_IDS));
     if (values.some((role) => !allowed.has(role))) {
       throw new AppError(400, "VALIDATION_ERROR", "The request is invalid.", [{ field, message: "One or more role identifiers are not supported." }]);

@@ -45,7 +45,15 @@ export class IdentityService implements TenantResolver {
   }
 
   async listUsers(tenant: TenantContext) {
-    return this.repository.listUsersForTenant(tenant);
+    const [users, memberships] = await Promise.all([
+      this.repository.listUsersForTenant(tenant),
+      this.repository.listMembershipsForTenant(tenant),
+    ]);
+    const rolesByUserId = new Map(memberships.map((membership) => [membership.userId, membership.roles]));
+    return users.flatMap((user) => {
+      const roles = rolesByUserId.get(user.id);
+      return roles ? [{ user, roles: [...roles] }] : [];
+    });
   }
 
   async updateUser(tenant: TenantContext, userId: string, changes: { displayName?: string }) {
@@ -64,6 +72,12 @@ export class IdentityService implements TenantResolver {
     const user = await this.repository.findUserForTenant(tenant, userId);
     if (!user) throw new AppError(404, "NOT_FOUND", "The user was not found in this organisation.");
     return user;
+  }
+
+  async getMembership(tenant: TenantContext, userId: string) {
+    const membership = await this.repository.findMembership(tenant.organisationId, userId);
+    if (!membership || membership.status !== "active") throw new AppError(404, "NOT_FOUND", "The user was not found in this organisation.");
+    return membership;
   }
 
   async setMembership(tenant: TenantContext, userId: string, status: "active" | "inactive" | "suspended", roles: OrganisationMembership["roles"]) {

@@ -151,6 +151,84 @@ describe("Keycloak user invitations", () => {
   });
 });
 
+describe("role-based user management API", () => {
+  it("lists role capabilities and returns effective permissions on memberships and users", async () => {
+    const directory = await makeDirectory();
+    const store = new JsonFileStore(directory);
+    const timestamp = new Date().toISOString();
+    await store.write("users.json", { schemaVersion: 1, records: [
+      { id: "admin", email: "admin@example.test", displayName: "Admin", status: "active", createdAt: timestamp, updatedAt: timestamp },
+      { id: "agent", email: "agent@example.test", displayName: "Agent", status: "active", createdAt: timestamp, updatedAt: timestamp },
+    ] });
+    await store.write("memberships.json", { schemaVersion: 1, records: [
+      { id: "m-admin", organisationId: "org-a", userId: "admin", status: "active", roles: ["organisation_admin"], createdAt: timestamp, updatedAt: timestamp },
+      { id: "m-agent", organisationId: "org-a", userId: "agent", status: "active", roles: ["support_agent"], createdAt: timestamp, updatedAt: timestamp },
+    ] });
+    await store.write("organisations.json", { schemaVersion: 1, records: [
+      { id: "org-a", name: "Organisation A", status: "active", settings: {}, createdAt: timestamp, updatedAt: timestamp },
+    ] });
+    const invitations: Array<{ email: string; displayName: string }> = [];
+    const server = createApp(loadEnvironment({ NODE_ENV: "test", DATA_DIRECTORY: directory, PORT: "0" }), {
+      authenticator: { authenticate: async (request) => ({ userId: typeof request.headers["x-test-user"] === "string" ? request.headers["x-test-user"] : "admin" }) },
+      userProvisioner: {
+        inviteUser: async (input) => { invitations.push(input); return { userId: "new-keycloak-user" }; },
+        updateUser: async () => undefined,
+        deleteUser: async () => undefined,
+      },
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { "content-type": "application/json", "x-organisation-id": "org-a" };
+
+    const roleResponse = await fetch(`${base}/api/v1/roles`, { headers });
+    assert.equal(roleResponse.status, 200);
+    const roleBody = await roleResponse.json() as { data: Array<{ id: string; permissions: Array<{ id: string; description: string }> }> };
+    const requesterRole = roleBody.data.find((role) => role.id === "requester");
+    assert.ok(requesterRole?.permissions.some((permission) => permission.id === "tickets.create.own"));
+
+    const meResponse = await fetch(`${base}/api/v1/me?organisationId=org-a`, { headers });
+    const meBody = await meResponse.json() as { data: { organisations: Array<{ permissions: string[] }> } };
+    assert.equal(meResponse.status, 200);
+    assert.ok(meBody.data.organisations[0]?.permissions.includes("users.manage"));
+
+    const created = await fetch(`${base}/api/v1/users`, {
+      method: "POST", headers, body: JSON.stringify({ email: "new@example.test", displayName: "New User", roles: ["requester"] }),
+    });
+    assert.equal(created.status, 201);
+    const createdBody = await created.json() as { data: { permissions: string[]; membership: { roles: string[] }; user: Record<string, unknown> } };
+    assert.deepEqual(createdBody.data.membership.roles, ["requester"]);
+    assert.deepEqual(createdBody.data.permissions, ["tickets.create.own", "tickets.read.own"]);
+    assert.equal("password" in createdBody.data.user, false);
+
+    const usersResponse = await fetch(`${base}/api/v1/users?organisationId=org-a`, { headers });
+    assert.equal(usersResponse.status, 200);
+    const usersBody = await usersResponse.json() as { data: Array<{ id: string; roles: string[]; permissions: string[] }> };
+    assert.deepEqual(usersBody.data.find((user) => user.id === "new-keycloak-user")?.permissions, createdBody.data.permissions);
+
+    const denied = await fetch(`${base}/api/v1/users?organisationId=org-a`, {
+      method: "POST", headers: { ...headers, "x-test-user": "agent" },
+      body: JSON.stringify({ email: "denied@example.test", displayName: "Denied", roles: ["support_agent"] }),
+    });
+    assert.equal(denied.status, 403);
+    assert.equal(invitations.length, 1);
+
+    const rejectedMembershipUpdate = await fetch(`${base}/api/v1/users/agent/memberships?organisationId=org-a`, {
+      method: "PUT", headers, body: JSON.stringify({ status: "active", roles: ["requester"], permissions: ["*"] }),
+    });
+    assert.equal(rejectedMembershipUpdate.status, 400);
+
+    const membershipUpdate = await fetch(`${base}/api/v1/users/agent/memberships?organisationId=org-a`, {
+      method: "PUT", headers, body: JSON.stringify({ status: "active", roles: ["requester"] }),
+    });
+    assert.equal(membershipUpdate.status, 200);
+    const membershipBody = await membershipUpdate.json() as { data: { permissions: string[] } };
+    assert.deepEqual(membershipBody.data.permissions, ["tickets.create.own", "tickets.read.own"]);
+  });
+});
+
 describe("identity and tenant context", () => {
   it("requires active user and membership and returns only tenant roles", async () => {
     const directory = await makeDirectory();

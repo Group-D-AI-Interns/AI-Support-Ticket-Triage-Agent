@@ -5,6 +5,52 @@
   "loginWithEmailAllowed": true,
   "duplicateEmailsAllowed": false,
   "resetPasswordAllowed": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "organisation_admin",
+        "description": "Manages organisation users, teams, configuration, and permitted operational information.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "support_lead",
+        "description": "Oversees support team queues, routing, priorities, approvals, and operational work.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "support_agent",
+        "description": "Handles assigned support tickets and reviews applicable AI and resolution recommendations.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "requester",
+        "description": "Submits tickets and views permitted updates on their own tickets.",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "organisation-admins",
+      "path": "/organisation-admins"
+    },
+    {
+      "name": "support-leads",
+      "path": "/support-leads"
+    },
+    {
+      "name": "support-agents",
+      "path": "/support-agents"
+    },
+    {
+      "name": "requesters",
+      "path": "/requesters"
+    }
+  ],
   "clients": [
     {
       "clientId": "support-api",

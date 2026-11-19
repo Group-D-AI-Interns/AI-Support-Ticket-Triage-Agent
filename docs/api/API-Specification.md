@@ -39,9 +39,12 @@
 | GET/POST | `/organisations` | List/create organisations (platform admin only) |
 | GET/PATCH | `/organisations/:organisationId` | Read/update permitted organisation |
 | GET/POST | `/users` | List/invite or create users |
-| PATCH | `/users/:id` | Update permitted user |
+| GET/PATCH | `/users/:id` | Read or update permitted user |
+| PUT | `/users/:id/memberships` | Update a user's active-organisation roles and membership status |
+| GET | `/roles` | List canonical roles and their effective permission capabilities |
 | GET/POST | `/departments` | List/create departments |
 | GET/POST | `/teams` | List/create teams |
+| GET/PUT | `/teams/:teamId/members` | List or assign an active organisation member to a team |
 | POST | `/documents` | Upload a tenant source document |
 | GET | `/documents` | List tenant source documents and extraction results |
 | GET | `/documents/:documentId` | Get tenant document, versions, and latest extraction |
@@ -85,6 +88,14 @@
 | GET | `/jobs/:jobId` | Check asynchronous job status |
 
 Ticket, document, SLA, reporting and workflow endpoints use the shared Keycloak access-token verifier. Send the selected tenant as `X-Organisation-ID`; this header selects the organisation to check and does not grant access. The API verifies the caller's active user record, organisation status and active membership, then loads roles and active team memberships from server-side records. The Jira webhook endpoint uses its configured per-organisation secret instead of a user access token.
+
+## 2.1 User roles and capabilities
+
+`GET /api/v1/roles` requires an authenticated user with `users.manage` and an active `X-Organisation-ID` membership. It returns the four canonical role templates (`organisation_admin`, `support_lead`, `support_agent`, `requester`), their display names and the effective permission identifiers/descriptions from the shared backend policy. The administrator aliases “System Administrator” and “Organisation Administrator” both refer to `organisation_admin`.
+
+`POST /api/v1/users` requires `users.manage`. Its body accepts `email`, `displayName`, and a non-empty array of canonical role IDs. The API creates the identity through the configured Keycloak service account, then creates an active organisation membership with those roles. Passwords are never accepted or stored by this API. The response includes the membership and its effective permission IDs. `GET /api/v1/users` and `GET /api/v1/users/:id` include the target user's tenant membership roles and effective permissions. `PUT /api/v1/users/:id/memberships` updates that tenant membership and returns the resulting permission IDs.
+
+Permission IDs in responses describe the shared policy for clients; they do not replace server-side authorization. Unknown roles receive no permissions, client-supplied permissions are rejected, and all access remains subject to active membership and resource/team scope.
 
 ## 3. Example ticket creation
 
