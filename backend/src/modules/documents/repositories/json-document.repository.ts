@@ -28,6 +28,15 @@ export class JsonDocumentRepository implements DocumentRepository {
     return assertTenantAccess(tenant, record) ?? null;
   }
 
+  async getVersionById(
+    tenant: TenantContext,
+    versionId: string,
+  ): Promise<DocumentVersionRecord | null> {
+    const versions = await this.store.readCollection<DocumentVersionRecord>('documentVersions');
+    const record = versions.find((item) => item.id === versionId);
+    return assertTenantAccess(tenant, record) ?? null;
+  }
+
   async list(tenant: TenantContext, filters?: { status?: string }): Promise<DocumentRecord[]> {
     const documents = await this.store.readCollection<DocumentRecord>('documents');
     return documents
@@ -43,14 +52,15 @@ export class JsonDocumentRepository implements DocumentRepository {
   ): Promise<DocumentRecord | null> {
     const documents = await this.store.readCollection<DocumentRecord>('documents');
     const index = documents.findIndex((item) => item.id === documentId && item.organisationId === tenant.organisationId);
-    if (index === -1) {
+    const current = documents[index];
+    if (index === -1 || !current) {
       return null;
     }
 
     const updated = {
-      ...documents[index],
+      ...current,
       status,
-      processingStatus: processingStatus ?? documents[index].processingStatus,
+      processingStatus: processingStatus ?? current.processingStatus,
       updatedAt: new Date().toISOString(),
     };
 

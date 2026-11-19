@@ -179,8 +179,8 @@ describe("authorization", () => {
   const tenant: TenantContext = { organisationId: "org-a", userId: "u1", roles: ["support_agent"] };
   it("denies by default and supports an injected reviewed policy", () => {
     assert.throws(() => requirePermission(new DenyByDefaultAuthorization(), tenant, "teams.manage"), (error: unknown) => error instanceof AppError && error.statusCode === 403);
-    const policy = new RolePermissionAuthorization(new Map([["support_agent", new Set(["tickets.read"])]]));
-    requirePermission(policy, tenant, "tickets.read");
+    const policy = new RolePermissionAuthorization(new Map([["support_agent", new Set(["tickets.read.assigned"])]]));
+    requirePermission(policy, tenant, "tickets.read.assigned");
     assert.throws(() => requirePermission(policy, tenant, "teams.manage"), /permission/);
   });
 

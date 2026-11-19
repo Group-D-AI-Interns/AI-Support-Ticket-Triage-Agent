@@ -1,8 +1,12 @@
+import type { ExtractionExecutionMetadata } from '../services/extraction-adapter.js';
+
 export type ExtractionJobStatus = 'queued' | 'processing' | 'succeeded' | 'failed' | 'retrying';
 
 export type ExtractionJobRecord = {
   id: string;
   organisationId: string;
+  policyId: string;
+  policyVersionId: string;
   documentId: string;
   documentVersionId: string;
   status: ExtractionJobStatus;
@@ -12,7 +16,9 @@ export type ExtractionJobRecord = {
   executionId: string;
   createdAt: string;
   updatedAt: string;
-  claimedAt?: string;
-  completedAt?: string;
-  lastError?: string;
+  claimedAt?: string | undefined;
+  completedAt?: string | undefined;
+  lastError?: string | undefined;
+  warnings?: string[] | undefined;
+  executionMetadata?: ExtractionExecutionMetadata | undefined;
 };

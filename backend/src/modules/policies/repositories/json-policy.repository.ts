@@ -69,6 +69,22 @@ export class JsonPolicyRepository implements PolicyRepository {
     return assertTenantAccess(tenant, record) ?? null;
   }
 
+  async listVersionsForPolicy(
+    tenant: TenantContext,
+    policyId: string,
+  ): Promise<PolicyVersionRecord[]> {
+    const policy = await this.getPolicyById(tenant, policyId);
+    if (!policy) {
+      return [];
+    }
+    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
+    return versions.filter(
+      (version) =>
+        version.organisationId === tenant.organisationId &&
+        version.policyId === policyId,
+    );
+  }
+
   async transitionVersionStatus(
     tenantOrVersionId: TenantContext | string,
     versionIdOrStatus: string | PolicyVersionRecord['status'],
@@ -94,8 +110,13 @@ export class JsonPolicyRepository implements PolicyRepository {
       return null;
     }
 
-    const updated = {
-      ...versions[index],
+    const existing = versions[index];
+    if (!existing) {
+      return null;
+    }
+
+    const updated: PolicyVersionRecord = {
+      ...existing,
       status,
       updatedAt: new Date().toISOString(),
     };
@@ -105,19 +126,120 @@ export class JsonPolicyRepository implements PolicyRepository {
     return updated;
   }
 
+  async activateVersion(
+    tenant: TenantContext,
+    policyId: string,
+    versionId: string,
+  ): Promise<PolicyVersionRecord | null> {
+    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
+    const target = versions.find(
+      (item) =>
+        item.id === versionId &&
+        item.policyId === policyId &&
+        item.organisationId === tenant.organisationId,
+    );
+    if (
+      !target ||
+      target.status !== 'approved' ||
+      target.effectiveFrom === null
+    ) {
+      return null;
+    }
+
+    const targetEffectiveFrom = target.effectiveFrom;
+    const now = new Date().toISOString();
+    const updated: PolicyVersionRecord = { ...target, status: 'active', updatedAt: now };
+    const activeVersions = versions.filter(
+      (item) =>
+        item.organisationId === tenant.organisationId &&
+        item.policyId === policyId &&
+        item.status === 'active',
+    );
+    if (
+      activeVersions.some(
+        (item) =>
+          item.effectiveFrom === null ||
+          Date.parse(targetEffectiveFrom) <= Date.parse(item.effectiveFrom),
+      )
+    ) {
+      return null;
+    }
+    const next = versions.map((item) =>
+      item.organisationId === tenant.organisationId &&
+      item.policyId === policyId &&
+      item.status === 'active'
+        ? {
+            ...item,
+            status: 'archived' as const,
+            effectiveTo:
+              item.effectiveTo === null ||
+              Date.parse(targetEffectiveFrom) <
+                Date.parse(item.effectiveTo)
+                ? targetEffectiveFrom
+                : item.effectiveTo,
+            updatedAt: now,
+          }
+        : item,
+    );
+    const targetIndex = next.findIndex((item) => item.id === versionId);
+    if (targetIndex === -1) {
+      return null;
+    }
+    next[targetIndex] = updated;
+    await this.store.writeCollection('policyVersions', next);
+    return updated;
+  }
+
   async createExtractedRule(rule: ExtractedRuleRecord, tenant: TenantContext): Promise<ExtractedRuleRecord> {
-    if (rule.organisationId !== tenant.organisationId) {
+    const [created] = await this.createExtractedRules([rule], tenant);
+    if (!created) {
+      throw new Error('Extracted rule was not persisted.');
+    }
+    return created;
+  }
+
+  async createExtractedRules(
+    incoming: ExtractedRuleRecord[],
+    tenant: TenantContext,
+  ): Promise<ExtractedRuleRecord[]> {
+    if (incoming.some((rule) => rule.organisationId !== tenant.organisationId)) {
       throw new Error('Extracted rule organisation does not match tenant context.');
     }
 
-    const rules = await this.store.readCollection<ExtractedRuleRecord>('extractedRules');
-    if (rules.some((item) => item.id === rule.id)) {
-      throw new Error(`Extracted rule ${rule.id} already exists.`);
+    const versions = await this.store.readCollection<PolicyVersionRecord>('policyVersions');
+    const versionIds = new Set(
+      versions
+        .filter((version) => version.organisationId === tenant.organisationId)
+        .map((version) => version.id),
+    );
+    if (incoming.some((rule) => !versionIds.has(rule.policyVersionId))) {
+      throw new Error('Extracted rule references a policy version outside the tenant scope.');
     }
 
-    rules.push(rule);
-    await this.store.writeCollection('extractedRules', rules);
-    return rule;
+    const rules = await this.store.readCollection<ExtractedRuleRecord>('extractedRules');
+    const existingById = new Map(rules.map((rule) => [rule.id, rule]));
+    const additions: ExtractedRuleRecord[] = [];
+    const result: ExtractedRuleRecord[] = [];
+
+    for (const candidate of incoming) {
+      const existing = existingById.get(candidate.id);
+      if (existing) {
+        if (!sameCandidateContent(existing, candidate)) {
+          throw new Error('Extraction execution produced conflicting candidate rule content.');
+        }
+        result.push(existing);
+        continue;
+      }
+
+      existingById.set(candidate.id, candidate);
+      additions.push(candidate);
+      result.push(candidate);
+    }
+
+    if (additions.length > 0) {
+      await this.store.writeCollection('extractedRules', [...rules, ...additions]);
+    }
+    return result;
   }
 
   async addApproval(approval: PolicyApprovalRecord, tenant: TenantContext): Promise<PolicyApprovalRecord> {
@@ -130,4 +252,24 @@ export class JsonPolicyRepository implements PolicyRepository {
     await this.store.writeCollection('policyApprovals', approvals);
     return approval;
   }
+}
+
+function sameCandidateContent(
+  left: ExtractedRuleRecord,
+  right: ExtractedRuleRecord,
+): boolean {
+  const { createdAt: _leftCreatedAt, ...leftContent } = left;
+  const { createdAt: _rightCreatedAt, ...rightContent } = right;
+  return stableSerialize(leftContent) === stableSerialize(rightContent);
+}
+
+function stableSerialize(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableSerialize).join(',')}]`;
+  }
+  if (value && typeof value === 'object') {
+    const entries = Object.entries(value).sort(([left], [right]) => left.localeCompare(right));
+    return `{${entries.map(([key, entry]) => `${JSON.stringify(key)}:${stableSerialize(entry)}`).join(',')}}`;
+  }
+  return JSON.stringify(value) ?? 'undefined';
 }

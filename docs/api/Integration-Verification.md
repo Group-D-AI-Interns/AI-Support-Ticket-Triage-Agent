@@ -1,51 +1,49 @@
 # Integration and system verification
 
-**Integration snapshot:** `f764c51` (`origin/thuto/foundation-identity-organisation`), with the subsequent local Phase 7 readiness check and handover edits. This report does not modify ticket, document, policy, AI, SLA or reporting domain code.
+**Integration snapshot:** local branch `thuto/foundation-identity-organisation`, commit `0ac3cda` (`Latest Update`) plus current local integration changes. This report records the local state and test evidence; it does not claim a live Keycloak integration test.
 
 ## Summary
 
-The Thuto foundation is available, and the tenant-scoped repository/service patterns appear in the document and policy code. The team modules are not yet integrated into one runnable backend. The ticket API is a standalone Python/FastAPI application while the shared application and package scripts use Node.js/TypeScript. Ticket auth also uses a separate development principal instead of the shared Keycloak verifier, membership resolver and RBAC policy.
+The tickets runtime decision is now Node.js/TypeScript with Express. The Python ticket implementation was retired in the recorded migration, and ticket, document, policy, SLA and reporting routes are available from `backend/src/modules/tickets/api.ts`, started by `backend/src/main.ts`. AI classification and summarization components are present, but their README says no authorization-aware HTTP route or production provider is wired.
 
-**Integration status: not yet system-ready.** Resolve the runtime and auth integration decisions below, repair the TypeScript build and clean-install failures, and then run protected API contract tests against the assembled application.
+**Integration status: auth path unified; integration verification remains.** `backend/src/main.ts` now starts one configured native HTTP server. That server routes ticket, document, SLA, reporting, and workflow paths to the existing Express app. The Express app receives the shared Keycloak verifier, identity membership resolver, team membership lookup, and permission policy. Its normal application path does not use the static development principal. The alternate document/policy JSON adapter still does not meet the documented shared storage guarantees.
 
-## Findings for module owners
+## Six-item checklist
 
-### Blockers
+| Item | Status | Evidence / remaining work |
+|---|---|---|
+| Ticket runtime | Decided | TypeScript/Express is canonical; Python was retired. Ensure the shared Keycloak foundation and all modules use one bootstrap before deployment. |
+| Ticket auth and permissions | Shared auth integrated; RBAC partially mapped | Express resolves `X-Organisation-ID` through active server-side membership and loads active team membership. The typed shared permission catalogue and role grants are documented in `docs/architecture/Role-Capability-Matrix.md`. Shared permissions gate ticket creation, configuration, audit reads, reopen approvals, organisation-wide reports, ticket visibility, routing, and support access. The application bootstrap disables the standalone development principal. Remaining write capabilities need team approval. |
+| Document/policy fixes and storage alignment | Compile fixes appear resolved; storage alignment remains open | Typecheck and build pass. However `infrastructure/persistence/json/json-store.ts` converts every read/parse/permission error into an empty collection and writes directly with `writeFile`; it has no schema validation, typed error, atomic replacement or cross-process lock. It does not match `JsonFileStore` guarantees described in `docs/backend-foundation.md`. |
+| Lockfile | Resolved | `npm ci` completed successfully on the current staged update. |
+| AI, SLA and reporting | Code present; integration partial | AI classifier/summarizer, SLA evaluation and operational reporting sources and tests are present. SLA and reports are exposed through the tickets Express app. AI README explicitly says there is no authorized ticket source or HTTP/job route. No approved production LLM provider is configured. |
+| Organisation creation rule | Unresolved | API specification says platform admin only, while `backend/src/app.ts` requires `organisations.create` in a selected tenant context. Team/coach must choose the rule and align implementation plus docs. |
 
-1. **Two backend runtimes and entry points.** `backend/src/server.ts` starts the shared Node application. `backend/src/main.py` separately starts the FastAPI ticket application. The Node `createApp` does not mount the ticket API; the `npm start`, typecheck, build and test scripts target the TypeScript application. Agree whether tickets will be ported/mounted into the Node app or whether the project is approving a separately deployed Python service and documenting how it shares auth, tenancy and API contracts.
+## Integration risks to close
 
-2. **Ticket authentication is not integrated with Keycloak.** `backend/src/modules/tickets/api.py` authenticates against the environment-backed development bearer principal in `development_auth.py`. That principal supplies `organisationId`, user ID, roles and team IDs from configuration rather than deriving them from a Keycloak token and server-side memberships. Ticket role checks are implemented locally rather than through shared `requirePermission`. Keep this only as an explicitly isolated test adapter; production ticket requests need the approved shared identity, tenant and permission contract.
+1. **Verify the unified auth path.** The one listener is wired, but no live Keycloak request was run in this update. Verify issuer/audience and membership behavior using the local realm and integration tests before deployment.
+2. **Resolve remaining permission gaps.** Ticket status changes, reopen requests, general ticket metadata edits, comments, and attachments still rely on workflow role rules or resource access because the shared catalogue has no matching write permission. Do not grant new access until the team approves those capability IDs and role grants. `reports.read.team` is not used because the current report returns organisation-wide results; the route requires `reports.read.all`.
+3. **Repair the alternate JSON adapter.** Missing files may read as empty collections, but malformed/unreadable files must not silently look empty. Use the validated shared storage implementation or an adapter preserving typed failures, schema checks, unique IDs, atomic writes and concurrency guarantees.
+4. **Finish AI integration deliberately.** Components currently provide service-level classification/summarization, not an authenticated API workflow. Add the endpoint/job integration only after an approved provider and a trusted authorized ticket-source interface are available.
+5. **Resolve the organisation creation contract.** Current docs disagree; do not infer whether creation is platform-scoped or tenant-admin-scoped.
 
-3. **Merged TypeScript build fails.** `npm run typecheck` and `npm run build` report errors in document extraction queues, document repositories, extraction adapters/workers, policy repositories and document tests. These are in the document/policy implementation and need their owners to resolve before the Node app is considered buildable.
-
-4. **Clean npm install fails.** `npm ci` reports `package.json` and `package-lock.json` are out of sync, including missing locked entries for `@types/node` and `undici-types`. Regenerate and commit the lockfile before asking teammates to install dependencies.
-
-### Contract and persistence alignment
-
-5. **Tenant context has two TypeScript import paths.** The foundation defines `TenantContext` under `shared/auth/authentication.ts`; document, policy and AI code imports a structurally similar type from `shared/tenant.ts`. It currently carries the same tenant concepts, but choose one canonical import path to prevent drift. Both paths must continue to require `organisationId`, `userId` and trusted membership `roles`.
-
-6. **Document/policy JSON persistence bypasses the shared adapter.** Those repositories use `JsonTenantStore` (`infrastructure/persistence/json/json-store.ts`) rather than `JsonFileStore`. The alternate store catches all read/parse errors and returns an empty collection, and writes directly without atomic replacement or the shared writer lock. Adopt the shared adapter or agree on an adapter interface that preserves its validation and concurrency guarantees before the modules share runtime data.
-
-7. **Permission and error contracts need a joint check.** Ticket routes perform local role checks; policy repositories throw generic `Error` for domain conflicts; the shared API maps unknown errors to a generic 500. Review those cases against shared permission identifiers and typed `AppError` responses. The API draft also says organisation creation is platform-admin-only, while the current implementation requires an existing tenant context with `organisations.create`; agree on the intended rule before changing either contract.
-
-8. **Not all modules are in the integration branch.** The fetched Wandile classifier branch contains AI components but is not merged into `development`; SLA and reporting folders remain placeholders. Faith’s module cannot yet be checked for shared-contract use from this snapshot.
-
-## Checks run
+## Checks
 
 | Check | Result |
 |---|---|
-| Shared foundation source tests via Node's built-in TypeScript support | 23 passed, 0 failed |
-| Ticket Python tests (`python -m pytest -q`) | 15 passed, 1 deprecation warning |
-| TypeScript typecheck/build | Failed on document/policy module and test type errors listed above |
-| `npm ci` | Failed because package and lock files are out of sync |
-| Default `npm test` | Could not run: `tsx` is absent locally and the lockfile prevents `npm ci`; tests also need to avoid discovering generated `dist` output |
-| End-to-end Keycloak-protected ticket/document/policy request | Not verified; modules are not mounted into the shared Node app and ticket auth is development-principal based |
+| `npm ci` | Passed on the staged dependency update. |
+| `npm run typecheck` | Passed after the RBAC catalogue and route changes. |
+| `npm run build` | Passed after the RBAC catalogue and route changes. |
+| Focused ticket auth/RBAC integration test | Passed: 1 test; missing/invalid token, active/inactive membership, tenant and ticket isolation, requester create grant, support-agent denial, audit role grants, report scope, workflow permission denial, and shared foundation route checked. Uses an injected authentication provider, not a live Keycloak token. |
+| `npm test` | Passed: 55 tests, 0 failures, including role grant/denial outcomes. |
+| `src/tests/foundation.test.ts` | Passed: 19 tests, including signed Keycloak token issuer/audience/signature validation and identity membership checks. |
+| Local Keycloak discovery | Passed; `http://localhost:8081/realms/ai-support` returned matching issuer metadata and JWKS URI. |
+| Backend `.env` startup smoke test | Passed; `npm start` loaded `AUTH_MODE=keycloak`, and both `/api/v1/tickets` and `/api/v1/me` returned structured 401 responses without a bearer token. |
+| Live Keycloak request through the Express ticket API | Not run; requires the local Keycloak realm and user login. |
 
-## Integration exit criteria
+## Next integration actions
 
-- Agree on the ticket module runtime and wire its routes into the documented service topology.
-- Replace ticket development-principal auth in the integrated path with verified Keycloak identity, active membership-derived `TenantContext`, and shared permission checks.
-- Select the canonical tenant type and JSON repository contract and migrate module adapters accordingly.
-- Resolve the compile errors and lockfile mismatch; make the test script run source tests deterministically without scanning generated output.
-- Merge AI work and add the SLA/reporting module owners' code before claiming whole-system coverage.
-- Add cross-tenant negative tests and authenticated API contract tests for tickets, documents, policies, AI, SLA and reporting.
+- Fhulu/Thuto: verify the shared auth path against Keycloak, review workflow action permissions, and add cross-tenant denial tests.
+- Olerato: migrate `JsonTenantStore` consumers to the shared storage guarantees, preserving malformed-file errors and concurrent-write safety.
+- Wandile/Faith: review AI/SLA/reporting routes and contracts with the integrated bootstrap; AI still needs a provider and authorized source wiring.
+- Thuto/team: decide the organisation creation scope and verify the single startup path against the local Keycloak realm.

@@ -12,4 +12,5 @@ export class TeamService {
   updateTeam(tenant: TenantContext, teamId: string, changes: { name?: string; departmentId?: string | null }) { return this.repository.updateTeam(tenant, teamId, changes); }
   setTeamMembership(tenant: TenantContext, teamId: string, userId: string, role: TeamMembership["role"], status: TeamMembership["status"]) { return this.repository.setTeamMembership(tenant, teamId, userId, role, status); }
   listTeamMemberships(tenant: TenantContext, teamId: string) { return this.repository.listTeamMemberships(tenant, teamId); }
+  listTeamIdsForUser(tenant: TenantContext, userId: string) { return this.repository.listTeamIdsForUser(tenant, userId); }
 }

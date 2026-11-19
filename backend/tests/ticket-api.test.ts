@@ -223,7 +223,7 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
 
 test('ticket workflow drafts require organisation-admin approval and stay tenant-scoped', async () => {
   const admin = await createFixture({
-    principal: principal('user_admin', ['organisation_admin']),
+    principal: principal('user_admin', ['organisation_admin', 'requester']),
   });
   let otherTenantAdmin: Awaited<ReturnType<typeof createFixture>> | undefined;
   let supportFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
@@ -893,6 +893,60 @@ test('uploads private ticket attachments and enforces ticket scope on download',
     if (otherTenantFixture) {
       await otherTenantFixture.close(false);
     }
+    await fixture.close();
+  }
+});
+
+test('uploads, processes, inspects, and downloads a tenant SLA source document', async () => {
+  const fixture = await createFixture({
+    principal: principal('user_admin', ['organisation_admin']),
+  });
+  try {
+    const form = new FormData();
+    form.append('title', 'Support SLA source');
+    form.append(
+      'file',
+      new Blob(
+        ['High priority requests receive a response within two hours.'],
+        { type: 'text/plain' },
+      ),
+      'support-sla.txt',
+    );
+    const uploaded = await fixture.request('/api/v1/documents', {
+      method: 'POST',
+      body: form,
+    });
+    const uploadResult = await uploaded.json();
+    const documentId = uploadResult.data.document.id as string;
+    const versionId = uploadResult.data.version.id as string;
+
+    const processed = await fixture.request(
+      `/api/v1/documents/${documentId}/process`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    const processResult = await processed.json();
+    const detail = await fixture.request(`/api/v1/documents/${documentId}`);
+    const detailResult = await detail.json();
+    const tokenResponse = await fixture.request(
+      `/api/v1/documents/${documentId}/download-token`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    const tokenResult = await tokenResponse.json();
+    const download = await fixture.request(tokenResult.data.downloadPath);
+    const downloadedText = await download.text();
+
+    assert.equal(uploaded.status, 201);
+    assert.equal(uploadResult.data.document.status, 'uploaded');
+    assert.equal('storageKey' in uploadResult.data.document, false);
+    assert.equal('storageKey' in uploadResult.data.version, false);
+    assert.equal(processed.status, 200);
+    assert.equal(processResult.data.document.status, 'processed');
+    assert.equal(processResult.data.extraction.documentVersionId, versionId);
+    assert.equal(processResult.data.extraction.result.rules[0]?.payload.targetHours, 2);
+    assert.equal(detailResult.data.extraction.documentId, documentId);
+    assert.equal(download.status, 200);
+    assert.equal(downloadedText, 'High priority requests receive a response within two hours.');
+  } finally {
     await fixture.close();
   }
 });

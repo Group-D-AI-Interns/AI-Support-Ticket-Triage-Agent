@@ -28,6 +28,8 @@ export type PolicyVersionRecord = {
   effectiveFrom: string | null;
   effectiveTo: string | null;
   payload: Record<string, unknown>;
+  sourceDocumentId?: string;
+  sourceDocumentVersionId?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -36,11 +38,16 @@ export type ExtractedRuleRecord = {
   id: string;
   organisationId: string;
   policyVersionId: string;
+  executionId?: string;
+  documentId?: string;
+  documentVersionId?: string;
   ruleType: string;
   payload: Record<string, unknown>;
   evidence: Array<Record<string, unknown>>;
   confidence: number | null;
   ambigous: boolean;
+  requiresHumanReview?: boolean;
+  warnings?: string[];
   createdAt: string;
 };
 

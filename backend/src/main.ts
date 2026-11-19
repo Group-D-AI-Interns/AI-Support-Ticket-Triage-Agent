@@ -1,11 +1,29 @@
-import { createTicketApp } from './modules/tickets/api.js';
+import { loadEnvironment } from "./config/env.ts";
+import { createLogger } from "./config/logger.ts";
+import { createConfiguredServer } from "./server.ts";
 
-const port = Number(process.env.PORT ?? '8000');
-if (!Number.isInteger(port) || port < 1 || port > 65_535) {
-  throw new Error('PORT must be an integer between 1 and 65535.');
+const environment = loadEnvironment();
+const logger = createLogger(environment.logLevel);
+const server = createConfiguredServer(environment);
+
+server.listen(environment.port, environment.host, () => {
+  logger.info("API server listening", {
+    host: environment.host,
+    port: environment.port,
+    apiBasePath: "/api/v1",
+    authMode: environment.authMode,
+  });
+});
+
+function shutdown(signal: string) {
+  logger.info("API server shutting down", { signal });
+  server.close((error) => {
+    if (error) {
+      logger.error("API server shutdown failed", { error: error.message });
+      process.exitCode = 1;
+    }
+  });
 }
 
-const app = createTicketApp();
-app.listen(port, () => {
-  console.info(`AI Support Ticket Triage Agent API listening on port ${port}.`);
-});
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));

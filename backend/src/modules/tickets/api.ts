@@ -6,12 +6,34 @@ import express, {
   type Response,
 } from 'express';
 import multer from 'multer';
+import type { AuthenticationProvider, TenantContext, TenantResolver } from '../../shared/auth/authentication.js';
+import { applicationAuthorization, type Permission, type RolePermissionPolicy } from '../../shared/auth/authorization.js';
 
 import {
   createLocalPrivateStorageAdapter,
   type DocumentStorageAdapter,
 } from '../documents/storage/document-storage.js';
-import { MAX_DOCUMENT_SIZE_BYTES } from '../documents/validators/document-validation.js';
+import { JsonDocumentRepository } from '../documents/repositories/json-document.repository.js';
+import { DocumentLifecycleService } from '../documents/services/document-lifecycle.service.js';
+import {
+  DocumentProcessingError,
+  DocumentProcessingService,
+} from '../documents/services/document-processing.service.js';
+import {
+  DocumentValidationError,
+  MAX_DOCUMENT_SIZE_BYTES,
+} from '../documents/validators/document-validation.js';
+import { createJsonTenantStore } from '../../infrastructure/persistence/json/json-store.js';
+import type { PolicyRepository } from '../policies/repositories/policy.repository.js';
+import { JsonPolicyRepository } from '../policies/repositories/json-policy.repository.js';
+import { OperationalReportingService } from '../reporting/services/operational-reporting.service.js';
+import type { SlaEvaluationRepository } from '../sla/repositories/sla-evaluation.repository.js';
+import { JsonSlaEvaluationRepository } from '../sla/repositories/sla-evaluation.repository.js';
+import { SlaEvaluationService } from '../sla/services/sla-evaluation.service.js';
+import { RepositorySlaPolicyResolver } from '../sla/services/sla-policy-resolver.js';
+import { parseSlaPolicy, SlaPolicyValidationError } from '../sla/domain/sla-policy.js';
+import type { OperationalReport } from '../reporting/domain/operational-report.js';
+import type { SlaEvaluationService as SlaEvaluationServiceType } from '../sla/services/sla-evaluation.service.js';
 import {
   ConfigurationError,
   jiraSettingsFromEnvironment,
@@ -77,7 +99,14 @@ export type TicketAppOptions = {
   ticketWorkflowStore?: JsonTicketWorkflowStore;
   ticketReadService?: TicketReadService;
   developmentPrincipal?: DevelopmentPrincipal | null;
+  authenticator?: AuthenticationProvider;
+  tenantResolver?: TenantResolver;
+  listTeamIdsForUser?: (tenant: TenantContext, userId: string) => Promise<string[]>;
+  authorization?: RolePermissionPolicy;
   attachmentStorage?: DocumentStorageAdapter;
+  policyRepository?: PolicyRepository;
+  slaEvaluationRepository?: SlaEvaluationRepository;
+  slaEvaluationService?: SlaEvaluationServiceType;
 };
 
 export function createTicketApp(options: TicketAppOptions = {}) {
@@ -88,9 +117,33 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     new JsonTicketWorkflowStore(settings.dataDirectory);
   const ticketReadService =
     options.ticketReadService ?? new JsonTicketReadService(store);
+  const tenantStore = createJsonTenantStore(settings.dataDirectory);
+  const policyRepository =
+    options.policyRepository ?? new JsonPolicyRepository(tenantStore);
+  const documentRepository = new JsonDocumentRepository(tenantStore);
+  const slaEvaluationRepository =
+    options.slaEvaluationRepository ??
+    new JsonSlaEvaluationRepository(tenantStore);
+  const slaEvaluationService =
+    options.slaEvaluationService ??
+    new SlaEvaluationService(
+      store,
+      new RepositorySlaPolicyResolver(policyRepository),
+      slaEvaluationRepository,
+    );
+  const operationalReportingService = new OperationalReportingService(
+    store,
+    slaEvaluationRepository,
+  );
   const attachmentStorage =
     options.attachmentStorage ??
     createLocalPrivateStorageAdapter(settings.dataDirectory);
+  const documentLifecycle = new DocumentLifecycleService(tenantStore, attachmentStorage);
+  const documentProcessing = new DocumentProcessingService(
+    tenantStore,
+    documentLifecycle,
+    attachmentStorage,
+  );
   const attachmentService = new TicketAttachmentService(
     store,
     attachmentStorage,
@@ -101,8 +154,10 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   )
     ? options.developmentPrincipal ?? null
     : developmentPrincipalFromEnvironment();
+  const authorization = options.authorization ?? applicationAuthorization;
 
   const app = express();
+  const fallbackRequestId = () => `req_${randomUUID().replace(/-/g, '')}`;
   const attachmentUpload = multer({
     storage: multer.memoryStorage(),
     limits: {
@@ -112,17 +167,799 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       parts: 1,
     },
   });
+  const documentUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: MAX_DOCUMENT_SIZE_BYTES,
+      files: 1,
+      fields: 1,
+      parts: 2,
+    },
+  });
+  const requireDocumentAdministrator = (
+    request: Request,
+    _response: Response,
+    next: NextFunction,
+  ) => {
+    try {
+      requireOrganisationAdmin(authenticatedPrincipal(request, principal), authorization);
+      next();
+    } catch (error) {
+      next(error);
+    }
+  };
   app.use((request, response, next) => {
-    const requestId = `req_${randomUUID().replace(/-/g, '')}`;
+    const inheritedRequestId = response.getHeader('x-request-id');
+    const requestId = typeof inheritedRequestId === 'string' && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(inheritedRequestId)
+      ? inheritedRequestId
+      : fallbackRequestId();
     response.locals.requestId = requestId;
     response.setHeader('X-Request-ID', requestId);
     next();
   });
   app.use(express.json({ limit: '1mb' }));
+  if (options.authenticator && options.tenantResolver) {
+    app.use(async (request, _response, next) => {
+      if (request.path.startsWith('/api/v1/tickets/ingest/jira/')) {
+        next();
+        return;
+      }
+      try {
+        let authenticated;
+        try {
+          authenticated = await options.authenticator!.authenticate(request);
+        } catch {
+          throw new ApiError(503, 'AUTH_PROVIDER_UNAVAILABLE', 'Authentication is temporarily unavailable.');
+        }
+        if (!authenticated) {
+          throw new ApiError(401, 'UNAUTHENTICATED', 'A valid bearer access token is required.');
+        }
+        const selectedOrganisation = request.header('x-organisation-id') ?? request.query.organisationId;
+        if (typeof selectedOrganisation !== 'string' || !selectedOrganisation.trim()) {
+          throw new ApiError(400, 'ORGANISATION_REQUIRED', 'Select an organisation using the X-Organisation-ID header.');
+        }
+        const tenant = await options.tenantResolver!.resolve(authenticated.userId, selectedOrganisation);
+        if (!tenant) {
+          throw new ApiError(403, 'ORGANISATION_ACCESS_DENIED', 'You do not have an active membership in this organisation.');
+        }
+        const teamIds = await options.listTeamIdsForUser?.(tenant, authenticated.userId) ?? [];
+        (request as Request & { integratedPrincipal?: DevelopmentPrincipal }).integratedPrincipal = {
+          ...tenant,
+          bearerToken: '',
+          teamIds,
+          permissions: [...authorization.permissionsFor(tenant.roles)],
+        };
+        next();
+      } catch (error) {
+        next(error);
+      }
+    });
+  }
+
+  app.get('/api/v1/documents', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const documents = await documentLifecycle.listDocuments(authenticated);
+    const data = await Promise.all(
+      documents.map(async (document) => {
+        const { storageKey: _storageKey, ...safeDocument } = document;
+        return {
+          ...safeDocument,
+          extraction: await documentProcessing.getExtraction(
+            authenticated,
+            document.id,
+          ),
+        };
+      }),
+    );
+    response.json({ data, requestId: requestId(response) });
+  });
+
+  app.post(
+    '/api/v1/documents',
+    requireDocumentAdministrator,
+    documentUpload.single('file'),
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      const body = parseObjectBody(request.body, ['title']);
+      const file = request.file;
+      if (!file) {
+        throw validationError('file', 'A document file is required.');
+      }
+
+      const uploaded = await documentLifecycle.uploadDocument({
+        tenant: authenticated,
+        title: requiredText(body, 'title'),
+        fileName: file.originalname,
+        mimeType: file.mimetype,
+        content: file.buffer,
+        createdBy: authenticated.userId,
+      });
+      const { storageKey: _documentStorageKey, ...document } = uploaded.document;
+      const { storageKey: _versionStorageKey, ...version } = uploaded.version;
+      response.status(201).json({
+        data: {
+          document,
+          version,
+        },
+        requestId: requestId(response),
+      });
+    },
+  );
+
+  app.get('/api/v1/documents/:documentId', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const documentId = routeParam(request, 'documentId');
+    const document = await documentLifecycle.getDocument(
+      authenticated,
+      documentId,
+    );
+    if (!document) {
+      throw new ApiError(404, 'NOT_FOUND', 'Document not found.');
+    }
+    const versions = (
+      await tenantStore.readCollection<{
+        id: string;
+        documentId: string;
+        organisationId: string;
+        version: number;
+        storageKey?: string;
+      }>('documentVersions')
+    )
+      .filter(
+        (version) =>
+          version.documentId === documentId &&
+          version.organisationId === authenticated.organisationId,
+      )
+      .map(({ storageKey: _storageKey, ...version }) => version);
+    const { storageKey: _storageKey, ...safeDocument } = document;
+    response.json({
+      data: {
+        document: safeDocument,
+        versions,
+        extraction: await documentProcessing.getExtraction(
+          authenticated,
+          documentId,
+        ),
+      },
+      requestId: requestId(response),
+    });
+  });
+
+  app.post(
+    '/api/v1/documents/:documentId/process',
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireOrganisationAdmin(authenticated, authorization);
+      parseObjectBody(request.body ?? {}, []);
+      const processed = await documentProcessing.processDocument(
+        authenticated,
+        routeParam(request, 'documentId'),
+      );
+      if (!processed) {
+        throw new ApiError(404, 'NOT_FOUND', 'Document not found.');
+      }
+      const { storageKey: _storageKey, ...document } = processed.document;
+      response.json({
+        data: { document, extraction: processed.extraction },
+        requestId: requestId(response),
+      });
+    },
+  );
+
+  app.post(
+    '/api/v1/documents/:documentId/download-token',
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireOrganisationAdmin(authenticated, authorization);
+      parseObjectBody(request.body ?? {}, []);
+      const token = await documentLifecycle.createDownloadToken(
+        authenticated,
+        routeParam(request, 'documentId'),
+      );
+      if (!token) {
+        throw new ApiError(404, 'NOT_FOUND', 'Document not found.');
+      }
+      response.status(201).json({
+        data: {
+          token,
+          downloadPath: `/api/v1/documents/download/${token}`,
+          expiresInSeconds: 300,
+        },
+        requestId: requestId(response),
+      });
+    },
+  );
+
+  app.get('/api/v1/documents/download/:token', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const token = routeParam(request, 'token');
+    const validated = await documentLifecycle.validateDownloadToken(
+      authenticated,
+      token,
+    );
+    if (!validated) {
+      throw new ApiError(404, 'NOT_FOUND', 'Document download token is invalid or expired.');
+    }
+    const document = await documentLifecycle.getDocument(
+      authenticated,
+      validated.documentId,
+    );
+    const content = await documentLifecycle.downloadDocument(
+      authenticated,
+      token,
+    );
+    if (!document || !content) {
+      throw new ApiError(404, 'NOT_FOUND', 'Document not found.');
+    }
+    response
+      .type(document.mimeType)
+      .setHeader(
+        'Content-Disposition',
+        `attachment; filename*=UTF-8''${encodeURIComponent(document.fileName)}`,
+      )
+      .send(content);
+  });
+
+  app.get('/api/v1/sla-policies', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const policies = (await policyRepository.listPolicies(authenticated)).filter(
+      (policy) => policy.policyType === 'sla',
+    );
+    const data = await Promise.all(
+      policies.map(async (policy) => ({
+        ...policy,
+        versions: await policyRepository.listVersionsForPolicy(
+          authenticated,
+          policy.id,
+        ),
+      })),
+    );
+    response.json({ data, requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/sla-policies', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, [
+      'description',
+      'sourceDocumentId',
+      'sourceDocumentVersionId',
+      'effectiveFrom',
+      'effectiveTo',
+      'payload',
+    ]);
+    const description = requiredText(body, 'description');
+    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
+    const sourceDocumentVersionId = requiredText(
+      body,
+      'sourceDocumentVersionId',
+    );
+    const sourceDocument = await documentRepository.getById(
+      authenticated,
+      sourceDocumentId,
+    );
+    if (
+      !sourceDocument ||
+      sourceDocument.status !== 'processed' ||
+      sourceDocument.processingStatus !== 'completed'
+    ) {
+      throw new ApiError(
+        422,
+        'SOURCE_DOCUMENT_NOT_READY',
+        'The source document must be processed and belong to this organisation.',
+      );
+    }
+    const sourceVersions =
+      await tenantStore.readCollection<{
+        id: string;
+        documentId: string;
+        organisationId: string;
+        version: number;
+      }>('documentVersions');
+    const sourceVersion = sourceVersions.find(
+      (version) =>
+        version.id === sourceDocumentVersionId &&
+        version.documentId === sourceDocumentId &&
+        version.organisationId === authenticated.organisationId,
+    );
+    if (!sourceVersion) {
+      throw validationError(
+        'sourceDocumentVersionId',
+        'The source version must belong to the selected tenant document.',
+      );
+    }
+    const effectiveFrom = requiredText(body, 'effectiveFrom');
+    const effectiveTo =
+      body.effectiveTo === undefined || body.effectiveTo === null
+        ? null
+        : requiredText(body, 'effectiveTo');
+    const now = new Date().toISOString();
+    const policyId = `policy_${randomUUID().replace(/-/g, '')}`;
+    const versionId = `policy_version_${randomUUID().replace(/-/g, '')}`;
+    let payload: ReturnType<typeof parseSlaPolicy>;
+    try {
+      payload = parseSlaPolicy(body.payload, {
+        id: policyId,
+        versionId,
+        version: 1,
+        organisationId: authenticated.organisationId,
+        effectiveFrom,
+        effectiveTo,
+      });
+    } catch (error) {
+      if (error instanceof SlaPolicyValidationError) {
+        throw validationError(error.field, error.message);
+      }
+      throw error;
+    }
+    const {
+      id: _policyId,
+      versionId: _versionId,
+      version: _version,
+      organisationId: _organisationId,
+      effectiveFrom: _effectiveFrom,
+      effectiveTo: _effectiveTo,
+      ...policyPayload
+    } = payload;
+    const policy = await policyRepository.createPolicy(
+      {
+        id: policyId,
+        organisationId: authenticated.organisationId,
+        policyType: 'sla',
+        ownerId: authenticated.userId,
+        status: 'draft',
+        createdAt: now,
+        updatedAt: now,
+        version: 1,
+        description,
+      },
+      authenticated,
+    );
+    const version = await policyRepository.createVersion(
+      policy.id,
+      {
+        id: versionId,
+        organisationId: authenticated.organisationId,
+        policyId: policy.id,
+        version: 1,
+        status: 'pending_approval',
+        effectiveFrom,
+        effectiveTo,
+        payload: policyPayload,
+        sourceDocumentId,
+        sourceDocumentVersionId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      authenticated,
+    );
+    response.status(201).json({
+      data: { policy, version },
+      requestId: requestId(response),
+    });
+  });
+
+  app.post('/api/v1/sla-policies/:policyId/versions', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const policy = await policyRepository.getPolicyById(
+      authenticated,
+      routeParam(request, 'policyId'),
+    );
+    if (!policy || policy.policyType !== 'sla') {
+      throw new ApiError(404, 'NOT_FOUND', 'SLA policy not found.');
+    }
+    const body = parseObjectBody(request.body, [
+      'sourceDocumentId',
+      'sourceDocumentVersionId',
+      'effectiveFrom',
+      'effectiveTo',
+      'payload',
+    ]);
+    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
+    const sourceDocumentVersionId = requiredText(
+      body,
+      'sourceDocumentVersionId',
+    );
+    const document = await documentRepository.getById(
+      authenticated,
+      sourceDocumentId,
+    );
+    if (
+      !document ||
+      document.status !== 'processed' ||
+      document.processingStatus !== 'completed'
+    ) {
+      throw new ApiError(
+        422,
+        'SOURCE_DOCUMENT_NOT_READY',
+        'The source document must be processed and belong to this organisation.',
+      );
+    }
+    const documentVersions =
+      await tenantStore.readCollection<{
+        id: string;
+        documentId: string;
+        organisationId: string;
+      }>('documentVersions');
+    if (
+      !documentVersions.some(
+        (version) =>
+          version.id === sourceDocumentVersionId &&
+          version.documentId === sourceDocumentId &&
+          version.organisationId === authenticated.organisationId,
+      )
+    ) {
+      throw validationError(
+        'sourceDocumentVersionId',
+        'The source version must belong to the selected tenant document.',
+      );
+    }
+    const effectiveFrom = requiredText(body, 'effectiveFrom');
+    const effectiveTo =
+      body.effectiveTo === undefined || body.effectiveTo === null
+        ? null
+        : requiredText(body, 'effectiveTo');
+    const versions = await policyRepository.listVersionsForPolicy(
+      authenticated,
+      policy.id,
+    );
+    const versionNumber =
+      versions.reduce(
+        (maximum, version) => Math.max(maximum, version.version),
+        0,
+      ) + 1;
+    const versionId = `policy_version_${randomUUID().replace(/-/g, '')}`;
+    let payload: ReturnType<typeof parseSlaPolicy>;
+    try {
+      payload = parseSlaPolicy(body.payload, {
+        id: policy.id,
+        versionId,
+        version: versionNumber,
+        organisationId: authenticated.organisationId,
+        effectiveFrom,
+        effectiveTo,
+      });
+    } catch (error) {
+      if (error instanceof SlaPolicyValidationError) {
+        throw validationError(error.field, error.message);
+      }
+      throw error;
+    }
+    const {
+      id: _policyId,
+      versionId: _versionId,
+      version: _version,
+      organisationId: _organisationId,
+      effectiveFrom: _effectiveFrom,
+      effectiveTo: _effectiveTo,
+      ...policyPayload
+    } = payload;
+    const now = new Date().toISOString();
+    const version = await policyRepository.createVersion(
+      policy.id,
+      {
+        id: versionId,
+        organisationId: authenticated.organisationId,
+        policyId: policy.id,
+        version: versionNumber,
+        status: 'pending_approval',
+        effectiveFrom,
+        effectiveTo,
+        payload: policyPayload,
+        sourceDocumentId,
+        sourceDocumentVersionId,
+        createdAt: now,
+        updatedAt: now,
+      },
+      authenticated,
+    );
+    response.status(201).json({
+      data: { policy, version },
+      requestId: requestId(response),
+    });
+  });
+
+  app.post(
+    '/api/v1/sla-policies/:policyId/versions/:versionId/approve',
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireOrganisationAdmin(authenticated, authorization);
+      const body = parseObjectBody(request.body ?? {}, ['reason']);
+      const reason = requiredText(body, 'reason');
+      const policy = await policyRepository.getPolicyById(
+        authenticated,
+        routeParam(request, 'policyId'),
+      );
+      const version = await policyRepository.getVersionById(
+        authenticated,
+        routeParam(request, 'versionId'),
+      );
+      if (
+        !policy ||
+        policy.policyType !== 'sla' ||
+        !version ||
+        version.policyId !== policy.id
+      ) {
+        throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
+      }
+      if (
+        version.sourceDocumentId === undefined ||
+        version.sourceDocumentVersionId === undefined
+      ) {
+        throw new ApiError(
+          409,
+          'POLICY_SOURCE_REQUIRED',
+          'SLA policy version must reference a source document and version.',
+        );
+      }
+      const sourceVersions =
+        await tenantStore.readCollection<{
+          id: string;
+          documentId: string;
+          organisationId: string;
+        }>('documentVersions');
+      if (
+        !sourceVersions.some(
+          (sourceVersion) =>
+            sourceVersion.id === version.sourceDocumentVersionId &&
+            sourceVersion.documentId === version.sourceDocumentId &&
+            sourceVersion.organisationId === authenticated.organisationId,
+        )
+      ) {
+        throw new ApiError(
+          409,
+          'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
+          'The referenced source document version is no longer available.',
+        );
+      }
+      const document = await documentRepository.getById(
+        authenticated,
+        version.sourceDocumentId,
+      );
+      if (
+        !document ||
+        document.status !== 'processed' ||
+        document.processingStatus !== 'completed'
+      ) {
+        throw new ApiError(
+          409,
+          'SOURCE_DOCUMENT_NOT_READY',
+          'The SLA source document must remain processed and tenant-scoped.',
+        );
+      }
+      const approvalRecords =
+        await tenantStore.readCollection<{
+          policyVersionId: string;
+          organisationId: string;
+          decision: string;
+        }>('policyApprovals');
+      const existingApproval = approvalRecords.some(
+        (record) =>
+          record.policyVersionId === version.id &&
+          record.organisationId === authenticated.organisationId &&
+          record.decision === 'approved',
+      );
+      if (version.status === 'approved') {
+        response.json({
+          data: {
+            version,
+            approval:
+              approvalRecords.find(
+                (record) =>
+                  record.policyVersionId === version.id &&
+                  record.organisationId === authenticated.organisationId &&
+                  record.decision === 'approved',
+              ) ?? null,
+          },
+          requestId: requestId(response),
+        });
+        return;
+      }
+      if (version.status !== 'pending_approval') {
+        throw new ApiError(
+          409,
+          'INVALID_POLICY_STATE',
+          'Only a pending SLA policy version can be approved.',
+        );
+      }
+      const approval = existingApproval
+        ? null
+        : await policyRepository.addApproval(
+          {
+          id: `approval_${randomUUID().replace(/-/g, '')}`,
+          organisationId: authenticated.organisationId,
+          policyVersionId: version.id,
+          reviewerId: authenticated.userId,
+          decision: 'approved',
+          reason,
+          createdAt: new Date().toISOString(),
+          },
+          authenticated,
+        );
+      const updated = await policyRepository.transitionVersionStatus(
+        authenticated,
+        version.id,
+        'approved',
+      );
+      if (!updated) {
+        throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
+      }
+      response.json({
+        data: { version: updated, approval },
+        requestId: requestId(response),
+      });
+    },
+  );
+
+  app.post(
+    '/api/v1/sla-policies/:policyId/versions/:versionId/activate',
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireOrganisationAdmin(authenticated, authorization);
+      parseObjectBody(request.body ?? {}, []);
+      const policy = await policyRepository.getPolicyById(
+        authenticated,
+        routeParam(request, 'policyId'),
+      );
+      const version = await policyRepository.getVersionById(
+        authenticated,
+        routeParam(request, 'versionId'),
+      );
+      if (
+        !policy ||
+        policy.policyType !== 'sla' ||
+        !version ||
+        version.policyId !== policy.id
+      ) {
+        throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
+      }
+      if (version.status === 'active') {
+        response.json({
+          data: { policy, version },
+          requestId: requestId(response),
+        });
+        return;
+      }
+      if (version.status !== 'approved') {
+        throw new ApiError(
+          409,
+          'INVALID_POLICY_STATE',
+          'An approved SLA version must have a later effective date than the current active version.',
+        );
+      }
+      const approvals =
+        await tenantStore.readCollection<{
+          policyVersionId: string;
+          organisationId: string;
+          decision: string;
+        }>('policyApprovals');
+      if (
+        !approvals.some(
+          (approval) =>
+            approval.policyVersionId === version.id &&
+            approval.organisationId === authenticated.organisationId &&
+            approval.decision === 'approved',
+        )
+      ) {
+        throw new ApiError(
+          409,
+          'POLICY_APPROVAL_REQUIRED',
+          'An approval record is required before activation.',
+        );
+      }
+      const sourceDocument = version.sourceDocumentId
+        ? await documentRepository.getById(
+            authenticated,
+            version.sourceDocumentId,
+          )
+        : null;
+      if (
+        !sourceDocument ||
+        sourceDocument.status !== 'processed' ||
+        sourceDocument.processingStatus !== 'completed'
+      ) {
+        throw new ApiError(
+          409,
+          'SOURCE_DOCUMENT_NOT_READY',
+          'The SLA source document must remain processed and tenant-scoped.',
+        );
+      }
+      const sourceVersions =
+        await tenantStore.readCollection<{
+          id: string;
+          documentId: string;
+          organisationId: string;
+        }>('documentVersions');
+      if (
+        !version.sourceDocumentId ||
+        !version.sourceDocumentVersionId ||
+        !sourceVersions.some(
+          (sourceVersion) =>
+            sourceVersion.id === version.sourceDocumentVersionId &&
+            sourceVersion.documentId === version.sourceDocumentId &&
+            sourceVersion.organisationId === authenticated.organisationId,
+        )
+      ) {
+        throw new ApiError(
+          409,
+          'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
+          'The referenced source document version is no longer available.',
+        );
+      }
+      const activeVersion = await policyRepository.activateVersion(
+        authenticated,
+        policy.id,
+        version.id,
+      );
+      if (!activeVersion) {
+        throw new ApiError(
+          409,
+          'INVALID_POLICY_STATE',
+          'Only an approved SLA policy version can be activated.',
+        );
+      }
+      response.json({
+        data: { policy, version: activeVersion },
+        requestId: requestId(response),
+      });
+    },
+  );
+
+  app.get('/api/v1/sla/evaluations', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const ticketId = queryString(request, 'ticketId');
+    const evaluations = await slaEvaluationRepository.list(
+      authenticated,
+      ticketId,
+    );
+    response.json({ data: evaluations, requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/sla/evaluations/run', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    parseObjectBody(request.body ?? {}, []);
+    const evaluations =
+      await slaEvaluationService.evaluateTenantTickets(authenticated);
+    response.json({ data: evaluations, requestId: requestId(response) });
+  });
+
+  app.get('/api/v1/reports', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'reports.read.all');
+    const from = queryString(request, 'from');
+    const to = queryString(request, 'to');
+    if (!from || !to) {
+      throw validationError(
+        'period',
+        'Both from and to ISO timestamps are required.',
+      );
+    }
+    let report: OperationalReport;
+    try {
+      report = await operationalReportingService.getSummary(
+        authenticated,
+        from,
+        to,
+      );
+    } catch (error) {
+      if (error instanceof RangeError) {
+        throw validationError('period', error.message);
+      }
+      throw error;
+    }
+    response.json({ data: report, requestId: requestId(response) });
+  });
 
   app.post('/api/v1/ticket-workflows', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated);
+    requireOrganisationAdmin(authenticated, authorization);
     const body = parseObjectBody(request.body, ['config']);
     const config = parseTicketWorkflowConfig(body.config);
     const workflow = await workflowStore.createDraft(
@@ -138,7 +975,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/ticket-workflows', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated);
+    requireOrganisationAdmin(authenticated, authorization);
     response.json({
       data: (await workflowStore.list(authenticated)).map(workflowResponse),
       requestId: requestId(response),
@@ -165,7 +1002,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     '/api/v1/ticket-workflows/:workflowId/approve',
     async (request, response) => {
       const authenticated = authenticatedPrincipal(request, principal);
-      requireOrganisationAdmin(authenticated);
+      requireOrganisationAdmin(authenticated, authorization);
       parseObjectBody(request.body ?? {}, []);
       const workflow = await workflowStore.approve(
         authenticated,
@@ -188,6 +1025,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.post('/api/v1/tickets', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.create.own');
     const body = parseObjectBody(request.body, [
       'title',
       'description',
@@ -226,12 +1064,17 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     const authenticated = authenticatedPrincipal(request, principal);
     const limit = queryInteger(request, 'limit', 20, 1, 100);
     const offset = queryInteger(request, 'offset', 0, 0);
+    const q = queryString(request, 'q');
+    const status = queryString(request, 'status');
+    const priority = queryString(request, 'priority');
+    const teamId = queryString(request, 'teamId');
+    const requesterId = queryString(request, 'requesterId');
     const filters = {
-      q: queryString(request, 'q'),
-      status: queryString(request, 'status'),
-      priority: queryString(request, 'priority'),
-      teamId: queryString(request, 'teamId'),
-      requesterId: queryString(request, 'requesterId'),
+      ...(q === undefined ? {} : { q }),
+      ...(status === undefined ? {} : { status }),
+      ...(priority === undefined ? {} : { priority }),
+      ...(teamId === undefined ? {} : { teamId }),
+      ...(requesterId === undefined ? {} : { requesterId }),
     };
     const tickets = await ticketReadService.listTickets(authenticated);
     const filtered = tickets
@@ -414,7 +1257,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           authenticated,
           workflow.config.permissions.reopenRequestRoles,
         ) ||
-        !authenticated.roles.includes('requester') ||
+        !hasSharedPermission(authenticated, 'tickets.read.own') ||
         ticket.requesterId !== authenticated.userId
       ) {
         throw new ApiError(
@@ -480,6 +1323,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         authenticated,
         ticket,
       );
+      requireSharedPermission(authenticated, authorization, 'tickets.approve');
       if (
         !hasAnyRole(
           authenticated,
@@ -578,7 +1422,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         if (value !== null && typeof value !== 'string') {
           throw validationError(field, 'This field must be a string or null.');
         }
-        if (!authenticated.roles.includes('support_lead')) {
+        if (!hasSharedPermission(authenticated, 'tickets.routing.manage')) {
           throw new ApiError(
             403,
             'FORBIDDEN',
@@ -667,13 +1511,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/tickets/:ticketId/audit', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    if (!isSupportStaff(authenticated)) {
-      throw new ApiError(
-        403,
-        'FORBIDDEN',
-        'Ticket audit is restricted to support staff.',
-      );
-    }
+    requireSharedPermission(authenticated, authorization, 'tickets.audit.read');
     const ticket = await findAccessibleTicket(
       store,
       authenticated,
@@ -705,6 +1543,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       }
       const organisationConfig = settings.organisations[organisationId];
       if (
+        !organisationConfig ||
         !secureStringEqual(
           routeParam(request, 'webhookSecret'),
           organisationConfig.webhookSecret,
@@ -766,6 +1605,8 @@ function authenticatedPrincipal(
   request: Request,
   principal: DevelopmentPrincipal | null,
 ): DevelopmentPrincipal {
+  const integratedPrincipal = (request as Request & { integratedPrincipal?: DevelopmentPrincipal }).integratedPrincipal;
+  if (integratedPrincipal) return integratedPrincipal;
   if (!principal) {
     throw new ApiError(
       503,
@@ -796,17 +1637,17 @@ function canAccessTicket(
   if (ticket.organisationId !== principal.organisationId) {
     return false;
   }
-  if (principal.roles.includes('organisation_admin')) {
+  if (hasSharedPermission(principal, 'tickets.read.all')) {
     return true;
   }
   if (
-    principal.roles.includes('requester') &&
+    hasSharedPermission(principal, 'tickets.read.own') &&
     ticket.requesterId === principal.userId
   ) {
     return true;
   }
   if (
-    principal.roles.includes('support_lead') &&
+    hasSharedPermission(principal, 'tickets.read.team') &&
     ticket.teamId == null
   ) {
     return true;
@@ -1031,7 +1872,7 @@ function optionalName(
   if (!isRecord(value) || typeof value.name !== 'string') {
     throw validationError(
       `issue.fields.${field}`,
-      `${field[0].toUpperCase()}${field.slice(1)} must contain a name.`,
+      `${field === 'status' ? 'Status' : 'Priority'} must contain a name.`,
     );
   }
   return { [field]: value.name };
@@ -1127,21 +1968,38 @@ function queryInteger(
 }
 
 function isSupportStaff(principal: DevelopmentPrincipal): boolean {
-  return (
-    principal.roles.includes('support_agent') ||
-    principal.roles.includes('support_lead') ||
-    principal.roles.includes('organisation_admin')
-  );
+  return hasSharedPermission(principal, 'tickets.read.assigned') ||
+    hasSharedPermission(principal, 'tickets.read.team') ||
+    hasSharedPermission(principal, 'tickets.read.all');
+}
+
+function hasSharedPermission(principal: DevelopmentPrincipal, permission: Permission): boolean {
+  const permissions = principal.permissions
+    ? new Set(principal.permissions)
+    : applicationAuthorization.permissionsFor(principal.roles);
+  return permissions.has(permission);
 }
 
 function requireOrganisationAdmin(
   principal: DevelopmentPrincipal,
+  authorization: RolePermissionPolicy = applicationAuthorization,
 ): void {
-  if (!principal.roles.includes('organisation_admin')) {
+  requireSharedPermission(principal, authorization, 'configuration.manage');
+}
+
+function requireSharedPermission(
+  principal: DevelopmentPrincipal,
+  authorization: RolePermissionPolicy,
+  permission: Permission,
+): void {
+  const permissions = principal.permissions
+    ? new Set(principal.permissions)
+    : authorization.permissionsFor(principal.roles);
+  if (!permissions.has(permission)) {
     throw new ApiError(
       403,
       'FORBIDDEN',
-      'Only an organisation administrator can manage ticket workflows.',
+      'You do not have permission to perform this action.',
     );
   }
 }
@@ -1396,6 +2254,30 @@ const errorHandler: ErrorRequestHandler = (
     });
     return;
   }
+  if (error instanceof DocumentValidationError) {
+    response.status(400).json({
+      error: {
+        code: 'VALIDATION_ERROR',
+        message: 'The request is invalid.',
+        requestId: id,
+        fields: [{ field: 'file', message: error.message }],
+      },
+    });
+    return;
+  }
+  if (error instanceof DocumentProcessingError) {
+    const statusCode =
+      error.code === 'DOCUMENT_NOT_READY' ? 409 : 422;
+    response.status(statusCode).json({
+      error: {
+        code: error.code,
+        message: error.message,
+        requestId: id,
+        fields: [],
+      },
+    });
+    return;
+  }
   if (error instanceof multer.MulterError) {
     const tooLarge = error.code === 'LIMIT_FILE_SIZE';
     response.status(tooLarge ? 413 : 400).json({
@@ -1403,7 +2285,7 @@ const errorHandler: ErrorRequestHandler = (
         code: tooLarge ? 'PAYLOAD_TOO_LARGE' : 'VALIDATION_ERROR',
         message: tooLarge
           ? 'The uploaded file exceeds the 25 MB limit.'
-          : 'The multipart request must contain one file in the "file" field only.',
+          : 'The multipart request must contain one file in the "file" field and a title.',
         requestId: id,
         fields: [],
       },

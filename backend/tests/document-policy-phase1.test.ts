@@ -78,6 +78,7 @@ test('policy repository enforces version lifecycle and tenant isolation', async 
     }, tenantA);
 
     const active = await repo.transitionVersionStatus(version.id, 'approved', tenantA);
+    assert.ok(active);
     assert.equal(active.status, 'approved');
 
     const crossTenant = await repo.getPolicyById(tenantB, created.id);

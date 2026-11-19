@@ -15,6 +15,7 @@ export type DevelopmentPrincipal = TenantContext & {
   bearerToken: string;
   roles: string[];
   teamIds: string[];
+  permissions?: string[];
 };
 
 export function developmentPrincipalFromEnvironment(

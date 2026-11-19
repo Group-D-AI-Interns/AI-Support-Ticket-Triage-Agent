@@ -13,6 +13,7 @@ export interface TeamRepository {
   updateTeam(tenant: TenantContext, teamId: string, changes: { name?: string; departmentId?: string | null }): Promise<Team>;
   setTeamMembership(tenant: TenantContext, teamId: string, userId: string, role: TeamMembership["role"], status: TeamMembership["status"]): Promise<TeamMembership>;
   listTeamMemberships(tenant: TenantContext, teamId: string): Promise<TeamMembership[]>;
+  listTeamIdsForUser(tenant: TenantContext, userId: string): Promise<string[]>;
 }
 
 export class JsonTeamRepository implements TeamRepository {
@@ -124,6 +125,21 @@ export class JsonTeamRepository implements TeamRepository {
     const activeUserIds = new Set(users.records.filter((user) => user.status === "active").map((user) => user.id));
     return members.records.filter((member) => member.organisationId === tenant.organisationId && member.teamId === teamId &&
       member.status === "active" && activeMemberIds.has(member.userId) && activeUserIds.has(member.userId));
+  }
+
+  async listTeamIdsForUser(tenant: TenantContext, userId: string): Promise<string[]> {
+    const [members, organisationMemberships, users] = await Promise.all([
+      this.store.read("team-memberships.json", isEnvelope(isTeamMembership)),
+      this.store.read("memberships.json", isEnvelope(isMembership)),
+      this.store.read("users.json", isEnvelope(isUser)),
+    ]);
+    const hasActiveOrganisationMembership = organisationMemberships.records.some((membership) =>
+      membership.organisationId === tenant.organisationId && membership.userId === userId && membership.status === "active");
+    const isActiveUser = users.records.some((user) => user.id === userId && user.status === "active");
+    if (!hasActiveOrganisationMembership || !isActiveUser) return [];
+    return members.records
+      .filter((membership) => membership.organisationId === tenant.organisationId && membership.userId === userId && membership.status === "active")
+      .map((membership) => membership.teamId);
   }
 
 }

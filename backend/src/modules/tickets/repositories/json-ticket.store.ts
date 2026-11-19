@@ -73,8 +73,10 @@ export class JsonTicketStore {
         const updated: TicketRecord = {
           ...existing,
           ...jiraChanges,
-          status: existing.status,
-          workflowId: existing.workflowId,
+          ...(existing.status === undefined ? {} : { status: existing.status }),
+          ...(existing.workflowId === undefined
+            ? {}
+            : { workflowId: existing.workflowId }),
           updatedAt: now,
           comments: existing.comments ?? [],
           reopenRequests: existing.reopenRequests ?? [],
@@ -316,6 +318,9 @@ export class JsonTicketStore {
         return null;
       }
       const reopenRequest = reopenRequests[requestIndex];
+      if (!reopenRequest) {
+        return null;
+      }
       if (
         reopenRequest.status !== 'pending' ||
         normalizeStatus(ticket.status) !==

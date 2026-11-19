@@ -1,24 +1,24 @@
 # Backend foundation integration guide
 
-This guide documents the shared Thuto-owned contracts currently implemented in `backend/src`. The API uses `/api/v1`, Node's built-in HTTP server and TypeScript source. Runtime dependencies are intentionally empty.
+This guide documents the shared Thuto-owned contracts currently implemented in `backend/src`. The API uses `/api/v1`, one Node HTTP server, and TypeScript source. The server mounts the Express ticket, document, SLA, reporting, and workflow modules alongside the foundation routes.
 
 For the current multi-module deployment status, local runbook, storage operations and handover gates, see `docs/operations/Deployment-and-Handover.md` and `docs/api/Integration-Verification.md`.
 
 ## Start and verify
 
-Use Node.js 22 or newer.
+Use Node.js 20.6 or newer. The development and start scripts load `backend/.env` through Node's `--env-file` option.
 
 ```powershell
 cd backend
+Copy-Item .env.example .env
 npm ci
-$env:DATA_DIRECTORY = ".\.local-data"
 npm run dev
 npm run typecheck
 npm run build
 npm test
 ```
 
-There are no Node runtime dependencies. The current `package.json` and `package-lock.json` are out of sync, so `npm ci` fails until the lockfile is regenerated. The integrated TypeScript build also currently reports errors in document/policy modules; see `docs/operations/Deployment-and-Handover.md`. The development server can run with Node's built-in TypeScript stripping.
+The committed lockfile supports clean installs. `npm run typecheck`, `npm run build`, and `npm test` are the current validation commands.
 
 Copy `.env.example` to a local environment file as needed. For Keycloak, set `AUTH_MODE=keycloak`, `AUTH_ISSUER` to the realm issuer URL, and `AUTH_AUDIENCE` to the API client audience. Configure the Keycloak access token so its `aud` claim includes that API audience. The verifier uses the realm OIDC discovery document for JWKS unless `AUTH_JWKS_URI` is configured. The web client obtains tokens through the selected OIDC client flow and sends the access token as a bearer token; this API does not implement a password login endpoint. User invitations/profile updates additionally require `KEYCLOAK_ADMIN_CLIENT_ID` and `KEYCLOAK_ADMIN_CLIENT_SECRET` for a confidential service account with least-privilege realm user-management access. Do not commit runtime data or secrets. `GET /health/live` reports process liveness. `GET /health/ready` verifies that the configured JSON data directory is readable and writable, returning 503 on storage failure; it does not contact Keycloak or validate every collection. `GET /api/v1/health` reports API version only.
 
@@ -26,7 +26,7 @@ Copy `.env.example` to a local environment file as needed. For Keycloak, set `AU
 
 `KeycloakAuthenticationProvider.authenticate(request)` verifies signed bearer access tokens against the configured realm signing keys. It validates signature algorithm, key ID, issuer, API audience, subject, token type, expiry and not-before. The provider caches JWKS briefly and refreshes the set if a token references an unknown key. For tests or another approved provider, supply an `AuthenticationProvider` through `createApp(environment, { authenticator })`. Never derive identity from arbitrary headers.
 
-The identity service resolves `TenantContext` only when the user and `OrganisationMembership` are both active. Client-provided `organisationId` values select a requested tenant; they do not establish access. For tenant routes, pass the verified context through service/repository methods:
+The identity service resolves `TenantContext` only when the user, organisation, and `OrganisationMembership` are active. For ticket, document, SLA, reporting, and workflow routes, send the selected tenant in `X-Organisation-ID`; the server verifies the membership and loads roles and active team memberships from JSON records. Client-provided tenant identifiers select a requested tenant; they do not establish access. For tenant routes, pass the verified context through service/repository methods:
 
 ```ts
 type TenantContext = {

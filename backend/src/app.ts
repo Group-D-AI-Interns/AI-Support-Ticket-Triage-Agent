@@ -1,4 +1,5 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { Request, Response } from "express";
 import { AppError } from "./shared/errors/app-error.ts";
 import type { Environment } from "./config/env.ts";
 import { createLogger } from "./config/logger.ts";
@@ -14,6 +15,8 @@ import { TeamService } from "./modules/teams/service.ts";
 import { createRequestContext } from "./shared/middleware/request-context.ts";
 import { requireAuthenticatedPrincipal, requireTenantContext } from "./shared/middleware/authentication.ts";
 import { rejectUnknownFields, requireNonEmptyString } from "./shared/validation/index.ts";
+import { createTicketApp } from "./modules/tickets/api.js";
+import { jiraSettingsFromEnvironment } from "./modules/tickets/config.js";
 
 export type AppDependencies = {
   authenticator?: AuthenticationProvider;
@@ -29,6 +32,17 @@ export function createApp(environment: Environment, dependencies: AppDependencie
   const organisation = new OrganisationService(new JsonOrganisationRepository(store));
   const teams = new TeamService(new JsonTeamRepository(store));
   const permissionPolicy = dependencies.authorization ?? applicationAuthorization;
+  const ticketSettings = process.env.JIRA_TENANT_CONFIG
+    ? { ...jiraSettingsFromEnvironment(), dataDirectory: environment.dataDirectory }
+    : { dataDirectory: environment.dataDirectory, projectMappings: {}, organisations: {} };
+  const ticketApp = createTicketApp({
+    settings: ticketSettings,
+    ...(dependencies.authenticator ? { authenticator: dependencies.authenticator } : {}),
+    tenantResolver: dependencies.tenantResolver ?? identity,
+    listTeamIdsForUser: (tenant, userId) => teams.listTeamIdsForUser(tenant, userId),
+    authorization: permissionPolicy,
+    developmentPrincipal: null,
+  });
 
   function sendJson(response: ServerResponse, statusCode: number, body: unknown) {
     response.writeHead(statusCode, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -54,9 +68,21 @@ export function createApp(environment: Environment, dependencies: AppDependencie
   async function handle(request: IncomingMessage, response: ServerResponse) {
     const { requestId } = createRequestContext(request);
     response.setHeader("x-request-id", requestId);
-    const startedAt = Date.now();
     const method = request.method ?? "GET";
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    if (isTicketModulePath(path)) {
+      const startedAt = Date.now();
+      response.once("finish", () => logger.info("HTTP request", {
+        requestId,
+        method,
+        path,
+        statusCode: response.statusCode,
+        durationMs: Date.now() - startedAt,
+      }));
+      ticketApp(request as Request, response as Response, () => undefined);
+      return;
+    }
+    const startedAt = Date.now();
 
     try {
       if (method === "GET" && path === "/health/live") {
@@ -354,4 +380,15 @@ export function createApp(environment: Environment, dependencies: AppDependencie
   }
 
   return createServer((request, response) => { void handle(request, response); });
+}
+
+function isTicketModulePath(path: string): boolean {
+  return [
+    "/api/v1/tickets",
+    "/api/v1/documents",
+    "/api/v1/sla-policies",
+    "/api/v1/sla",
+    "/api/v1/reports",
+    "/api/v1/ticket-workflows",
+  ].some((prefix) => path === prefix || path.startsWith(`${prefix}/`));
 }
