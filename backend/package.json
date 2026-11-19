@@ -3,7 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test --import tsx ./tests/**/*.test.ts"
+    "dev:tickets": "tsx ./src/modules/tickets/server.ts",
+    "test": "node --test --import tsx ./tests/**/*.test.ts",
+    "dev:documents-policies": "tsx ./src/modules/documents/document-policy-server.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",

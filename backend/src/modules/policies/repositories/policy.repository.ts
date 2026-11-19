@@ -13,5 +13,18 @@ export interface PolicyRepository {
     maybeStatusOrTenant?: PolicyVersionRecord['status'] | TenantContext,
   ): Promise<PolicyVersionRecord | null>;
   createExtractedRule(rule: ExtractedRuleRecord, tenant: TenantContext): Promise<ExtractedRuleRecord>;
+  createExtractedRules(
+    rules: ExtractedRuleRecord[],
+    tenant: TenantContext,
+  ): Promise<ExtractedRuleRecord[]>;
+  listExtractedRules(tenant: TenantContext, policyVersionId?: string): Promise<ExtractedRuleRecord[]>;
+  getExtractedRuleById(tenant: TenantContext, ruleId: string): Promise<ExtractedRuleRecord | null>;
+  reviewExtractedRule(
+    tenant: TenantContext,
+    ruleId: string,
+    decision: 'approved' | 'rejected' | 'changes_requested',
+    reason: string,
+    effectiveFrom?: string,
+  ): Promise<ExtractedRuleRecord>;
   addApproval(approval: PolicyApprovalRecord, tenant: TenantContext): Promise<PolicyApprovalRecord>;
 }

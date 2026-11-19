@@ -56,11 +56,12 @@
 | POST | `/sla-policies/:id/activate` | Activate approved SLA version |
 | GET | `/sla/evaluations` | Query SLA evaluations |
 | POST | `/tickets` | Create ticket |
-| POST | `/tickets/ingest` | Ingest from authorised external system |
+| POST | `/tickets/ingest/jira/{webhookSecret}` | Ingest Jira Cloud issue-created/issue-updated webhooks |
 | GET | `/tickets` | Search/filter/paginate tickets |
 | GET | `/tickets/:id` | Ticket details |
 | PATCH | `/tickets/:id` | Update permitted ticket fields |
 | POST | `/tickets/:id/comments` | Add comment |
+| GET | `/tickets/:id/comments` | Retrieve comments visible to the caller |
 | POST | `/tickets/:id/analyze` | Start AI triage |
 | GET | `/tickets/:id/analyses` | Retrieve analysis history |
 | GET | `/tickets/:id/similar` | Retrieve similar permitted tickets |
@@ -87,7 +88,6 @@ Content-Type: application/json
 {
   "title": "Unable to access billing portal",
   "description": "The portal returns an access denied message.",
-  "requesterId": "user_123",
   "product": "Billing Portal",
   "affectedService": "Customer Billing"
 }
@@ -99,16 +99,226 @@ Content-Type: application/json
 {
   "data": {
     "id": "ticket_123",
+    "organisationId": "org_123",
+    "requesterId": "user_123",
+    "title": "Unable to access billing portal",
+    "description": "The portal returns an access denied message.",
+    "product": "Billing Portal",
+    "affectedService": "Customer Billing",
     "status": "new",
-    "createdAt": "2026-11-12T08:30:00.000Z"
+    "createdAt": "2026-11-12T08:30:00.000Z",
+    "updatedAt": "2026-11-12T08:30:00.000Z"
   },
   "requestId": "req_example"
 }
 ```
 
-The server derives organisation scope from the authenticated context and validates that the requester is permitted.
+The server derives both organisation and requester from the authenticated context; client-supplied tenant/requester identifiers are rejected.
 
-## 4. Example asynchronous triage
+## 4. Jira Cloud webhook ingestion
+
+The Jira Cloud webhook endpoint is `POST /api/v1/tickets/ingest/jira/{webhookSecret}`. For this initial implementation, configure a Jira issue-created and issue-updated webhook and use a high-entropy per-organisation secret in the HTTPS URL path. Jira's standard admin webhook does not send a configurable custom header. Redact the secret path from gateway and application access logs and rotate it if exposed.
+
+The endpoint resolves the organisation using the configured Jira project-key mapping, then verifies the URL secret and resolves the reporter using the configured Jira `accountId` mapping. It ignores any organisation ID supplied in the webhook body. Until admin configuration APIs are available, configure these mappings through `JIRA_TENANT_CONFIG`. The mapped requester ID is trusted configuration.
+
+```json
+{
+  "projectMappings": {
+    "SUP": "org_support"
+  },
+  "organisations": {
+    "org_support": {
+      "webhookSecret": "replace-with-a-random-secret-at-least-32-characters",
+      "reporterMappings": {
+        "jira-account-abc": "user_123"
+      }
+    }
+  }
+}
+```
+
+For a local Postman run from PowerShell, set the configuration and start the TypeScript ticket API from the repository root. Install backend npm dependencies first if needed:
+
+```powershell
+npm --prefix backend ci
+$env:JIRA_TENANT_CONFIG = '{"projectMappings":{"SUP":"org_support"},"organisations":{"org_support":{"webhookSecret":"replace-with-a-random-secret-at-least-32-characters","reporterMappings":{"jira-account-abc":"user_123"}}}}'
+$env:DATA_DIRECTORY = ".local-data"
+npm --prefix backend run dev:tickets
+```
+
+Replace the example secret and reporter account mapping with values from the Jira tenant. Keep the secret out of source control and redact it from all request-path logs.
+
+### Postman request
+
+```http
+POST http://localhost:8000/api/v1/tickets/ingest/jira/<webhookSecret>
+Content-Type: application/json
+```
+
+```json
+{
+  "webhookEvent": "jira:issue_created",
+  "issue": {
+    "id": "10042",
+    "key": "SUP-42",
+    "fields": {
+      "project": {
+        "key": "SUP"
+      },
+      "summary": "Unable to access billing portal",
+      "description": {
+        "type": "doc",
+        "content": [
+          {
+            "type": "paragraph",
+            "content": [
+              {
+                "type": "text",
+                "text": "The portal returns an access denied message."
+              }
+            ]
+          }
+        ]
+      },
+      "reporter": {
+        "accountId": "jira-account-abc"
+      },
+      "status": {
+        "name": "Open"
+      },
+      "priority": {
+        "name": "High"
+      }
+    }
+  }
+}
+```
+
+### Expected response — 201 Created
+
+```json
+{
+  "data": {
+    "id": "ticket_<generated-id>",
+    "sourceIssueKey": "SUP-42",
+    "outcome": "created",
+    "createdAt": "2026-11-17T08:30:00.000Z",
+    "updatedAt": "2026-11-17T08:30:00.000Z"
+  },
+  "requestId": "req_<generated-id>"
+}
+```
+
+Jira status and priority are retained verbatim in source metadata; they are not converted to internal workflow values. The reporter must have a configured mapping. Repeated delivery of an already stored issue is idempotent (`200 OK`, outcome `duplicate`); a later issue-updated event updates that same ticket (`200 OK`, outcome `updated`). Unsupported Jira event types, unknown projects, invalid secrets, or unmapped reporters are rejected. Jira Cloud requires a publicly reachable HTTPS URL with a valid certificate; the HTTP URL above is for local Postman testing only.
+
+## 5. Ticket API: local development authentication
+
+The approved identity and tenant middleware is not yet in this repository. Ticket create/read/update, comments, and audit endpoints are therefore enabled only with a **development-only configured principal**. Never configure this adapter outside local development; startup fails if `TICKET_DEV_PRINCIPAL` is set while `APP_ENV` is not `development`. The Jira webhook continues to use its per-organisation URL secret.
+
+Keep the existing `JIRA_TENANT_CONFIG` set in the API process. In the same PowerShell window that will start the TypeScript ticket API, generate a separate development bearer token and configure the local principal:
+
+```powershell
+$devToken = python -c "import secrets; print(secrets.token_urlsafe(32))"
+$devConfig = @{
+  bearerToken = $devToken
+  organisationId = "org_support"
+  userId = "user_123"
+  roles = @("requester", "support_lead")
+  teamIds = @("team_support")
+} | ConvertTo-Json -Depth 5 -Compress
+
+$env:APP_ENV = "development"
+$env:TICKET_DEV_PRINCIPAL = $devConfig
+Write-Host $devToken
+```
+
+Use the printed value as the Postman `devToken` variable, then start/restart the API from this same PowerShell process. The organisation and user IDs must match the configured Jira mapping when accessing imported tickets. `teamIds` are trusted development fixtures, not a substitute for the Phase 1/2 team-membership service. Do not send sensitive data through a publicly exposed development tunnel.
+
+### Create a ticket
+
+```http
+POST http://localhost:8000/api/v1/tickets
+Authorization: Bearer {{devToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "title": "Unable to sign in",
+  "description": "The sign-in page returns an error.",
+  "product": "Customer Portal",
+  "affectedService": "Authentication"
+}
+```
+
+Expected response — `201 Created`:
+
+```json
+{
+  "data": {
+    "id": "ticket_<generated-id>",
+    "organisationId": "org_support",
+    "requesterId": "user_123",
+    "title": "Unable to sign in",
+    "description": "The sign-in page returns an error.",
+    "product": "Customer Portal",
+    "affectedService": "Authentication",
+    "status": "new",
+    "createdAt": "<UTC timestamp>",
+    "updatedAt": "<UTC timestamp>"
+  },
+  "requestId": "req_<generated-id>"
+}
+```
+
+The API assigns tenant and requester from the configured principal and sets initial status to `new` (as in the API draft).
+
+### Search and paginate
+
+```http
+GET http://localhost:8000/api/v1/tickets?q=sign%20in&status=new&limit=20&offset=0
+Authorization: Bearer {{devToken}}
+```
+
+The response uses `data` for the page and `pagination` for `limit`, `offset`, and `total`. Supported filters are `q`, `status`, `priority`, `teamId`, and `requesterId`; the server applies tenant and role scope before filters. Requesters see only their own tickets; support agents see tickets assigned to their configured teams; support leads see unassigned tickets and tickets assigned to their configured teams.
+
+### Update a ticket
+
+```http
+PATCH http://localhost:8000/api/v1/tickets/{{ticketId}}
+Authorization: Bearer {{devToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "title": "Sign-in error after password reset",
+  "teamId": "team_support"
+}
+```
+
+Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured development `teamIds`. Status and priority changes are not accepted: approved internal values/transitions are not defined. Jira status/priority remain source metadata.
+
+### Add and read comments
+
+```http
+POST http://localhost:8000/api/v1/tickets/{{ticketId}}/comments
+Authorization: Bearer {{devToken}}
+Content-Type: application/json
+```
+
+```json
+{
+  "body": "We are investigating the sign-in issue.",
+  "visibility": "public"
+}
+```
+
+`visibility` must be `public` or `internal`. Requesters may add public comments only to their own tickets. Support staff may add either visibility to tickets in their scope. `GET /api/v1/tickets/{{ticketId}}/comments` returns public comments to requesters and both kinds to support staff. `GET /api/v1/tickets/{{ticketId}}/audit` is support-staff-only.
+
+Comments and history are currently stored in each ticket JSON record so a ticket update and its audit event are written atomically. Ticket attachment upload/download is deferred until the shared private file-storage contract is available; no attachment endpoint is exposed yet.
+
+## 6. Example asynchronous triage
 
 ### Request
 
@@ -161,7 +371,7 @@ Authorization: Bearer <access-token>
 
 The values above are illustrative contract examples, not real model outputs or configured business rules.
 
-## 5. Example policy approval
+## 7. Example policy approval
 
 ### Request
 
@@ -210,7 +420,7 @@ Content-Type: application/json
 
 The calculation must use approved formula and weighting versions and verified measurements. AI must not arbitrarily determine the numeric score.
 
-## 7. Validation and authorisation rules
+## 8. Validation and authorisation rules
 
 - Reject unknown or malformed fields according to the API's validation policy.
 - Verify organisation membership and resource ownership on every request.
@@ -221,7 +431,7 @@ The calculation must use approved formula and weighting versions and verified me
 - Rate-limit authentication, public intake and expensive AI operations.
 - Validate status transitions and use concurrency/version checks for approvals and activation.
 
-## 8. OpenAPI draft excerpt
+## 9. OpenAPI draft excerpt
 
 ```yaml
 openapi: 3.0.3
@@ -250,8 +460,6 @@ paths:
                 description:
                   type: string
                   minLength: 1
-                requesterId:
-                  type: string
                 product:
                   type: string
                 affectedService:
@@ -291,6 +499,10 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+      description: >-
+        Production JWT authentication remains subject to identity-provider approval.
+        The local development ticket principal uses an opaque bearer token and is not
+        suitable for deployment.
 ```
 
 This excerpt is intentionally a draft; expand every endpoint, schema, response, permission and error case before implementation.
