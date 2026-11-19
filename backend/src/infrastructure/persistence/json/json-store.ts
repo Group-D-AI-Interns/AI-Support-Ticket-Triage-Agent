@@ -9,7 +9,9 @@ export type JsonCollectionName =
   | 'extractedRules'
   | 'policyApprovals'
   | 'auditLogs'
-  | 'extractionJobs';
+  | 'extractionJobs'
+  | 'documentExtractions'
+  | 'slaEvaluations';
 
 export interface JsonTenantStore {
   readCollection<T>(collection: JsonCollectionName): Promise<T[]>;

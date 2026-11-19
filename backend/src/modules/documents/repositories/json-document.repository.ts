@@ -52,14 +52,15 @@ export class JsonDocumentRepository implements DocumentRepository {
   ): Promise<DocumentRecord | null> {
     const documents = await this.store.readCollection<DocumentRecord>('documents');
     const index = documents.findIndex((item) => item.id === documentId && item.organisationId === tenant.organisationId);
-    if (index === -1) {
+    const current = documents[index];
+    if (index === -1 || !current) {
       return null;
     }
 
     const updated = {
-      ...documents[index],
+      ...current,
       status,
-      processingStatus: processingStatus ?? documents[index].processingStatus,
+      processingStatus: processingStatus ?? current.processingStatus,
       updatedAt: new Date().toISOString(),
     };
 

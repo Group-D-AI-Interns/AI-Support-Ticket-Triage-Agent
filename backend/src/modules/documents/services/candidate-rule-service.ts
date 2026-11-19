@@ -28,15 +28,16 @@ export class CandidateRuleService {
 
   async persistCandidateRule(input: PersistCandidateRuleInput): Promise<ExtractedRuleRecord> {
     const normalized = validateExtractionOutput(input.rule);
-    const [record] = await this.persistCandidateRules({
+    const records = await this.persistCandidateRules({
       tenant: input.tenant,
       policyId: input.policyId,
       policyVersionId: input.policyVersionId,
       executionId: normalized.executionId,
       rules: [normalized],
     });
+    const record = records[0];
     if (!record) {
-      throw new Error('Candidate rule was not persisted.');
+      throw new Error('Candidate rule persistence returned no record.');
     }
     return record;
   }

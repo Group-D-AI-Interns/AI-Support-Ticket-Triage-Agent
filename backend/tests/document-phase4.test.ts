@@ -56,7 +56,9 @@ test('validates extraction output and persists candidate rules with provenance',
     });
 
     assert.equal(stored.ruleType, 'response_time');
-    assert.equal(stored.evidence[0].sourceId, 'doc-42');
+    const storedEvidence = stored.evidence[0];
+    assert.ok(storedEvidence);
+    assert.equal(storedEvidence.sourceId, 'doc-42');
     assert.equal(stored.confidence, 0.91);
     assert.equal(stored.ambiguous, false);
     assert.equal(stored.requiresHumanReview, false);
@@ -150,11 +152,13 @@ test('provisional adapter returns structured result and evidence', async () => {
 
   assert.equal(result.status, 'succeeded');
   assert.equal(result.rules.length, 1);
-  assert.equal(result.rules[0].ruleType, 'response_time');
-  assert.equal(result.rules[0].evidence.length, 1);
-  assert.equal(result.rules[0].documentVersionId, 'doc-version-100');
+  const extractedRule = result.rules[0];
+  assert.ok(extractedRule);
+  assert.equal(extractedRule.ruleType, 'response_time');
+  assert.equal(extractedRule.evidence.length, 1);
+  assert.equal(extractedRule.documentVersionId, 'doc-version-100');
   assert.equal(result.executionMetadata.provider, 'local-provisional');
-  assert.ok(result.rules[0].confidence >= 0 && result.rules[0].confidence <= 1);
+  assert.ok(extractedRule.confidence >= 0 && extractedRule.confidence <= 1);
 });
 
 test('worker loads tenant-scoped text, validates provenance, and persists batch candidates', async () => {
@@ -207,12 +211,14 @@ test('worker loads tenant-scoped text, validates provenance, and persists batch 
     assert.equal(completed?.status, 'succeeded');
     assert.equal(completed?.executionMetadata?.model, 'response-hours-regex-v1');
     assert.equal(candidates.length, 1);
-    assert.equal(candidates[0].documentId, uploaded.document.id);
-    assert.equal(candidates[0].documentVersionId, uploaded.version.id);
-    assert.equal(candidates[0].executionId, 'exec-integration');
-    assert.equal(candidates[0].policyVersionId, 'policy-version-1');
-    assert.equal(candidates[0].payload.targetHours, 2);
-    assert.equal(candidates[0].requiresHumanReview, false);
+    const candidate = candidates[0];
+    assert.ok(candidate);
+    assert.equal(candidate.documentId, uploaded.document.id);
+    assert.equal(candidate.documentVersionId, uploaded.version.id);
+    assert.equal(candidate.executionId, 'exec-integration');
+    assert.equal(candidate.policyVersionId, 'policy-version-1');
+    assert.equal(candidate.payload.targetHours, 2);
+    assert.equal(candidate.requiresHumanReview, false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

@@ -28,6 +28,8 @@ export type PolicyVersionRecord = {
   effectiveFrom: string | null;
   effectiveTo: string | null;
   payload: Record<string, unknown>;
+  sourceDocumentId?: string;
+  sourceDocumentVersionId?: string;
   createdAt: string;
   updatedAt: string;
 };

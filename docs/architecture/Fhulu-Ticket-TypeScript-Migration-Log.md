@@ -118,3 +118,11 @@ These are sequencing notes, not blanket approval for future phases. Related file
 ## Pending review
 
 Phase 4 is complete. Remaining team decisions are production authentication, cross-process/multi-instance storage safety, acceptance of documented behavior differences, and Thuto's approval for removing stale Python dependencies. The Python ticket implementation is no longer present in this branch.
+
+## Development branch merge reconciliation
+
+- **Canonical ticket API:** During the merge into `development`, the newer Express API in `backend/src/modules/tickets/api.ts` and its existing auth, stores, and tests were kept as canonical.
+- **Superseded branch files omitted:** The standalone native-HTTP implementation (`ticket-api.ts`, `ticket-contracts.ts`, `ticket-json-store.ts`, `jira-config.ts`, `server.ts`, and `ticket-json-store.test.ts`) was not carried into `development` because it duplicated the existing ticket API and persistence contracts. The Python ticket implementation was already removed from `development`.
+- **Manifest and shared documentation:** The `development` versions of `backend/package.json`, `docs/api/API-Specification.md`, and the backend implementation guide were kept. The standalone `dev:tickets` launcher and native-HTTP documentation are therefore not part of the merged implementation.
+- **Retained work:** Wandile's AI classification/summarization foundation and the agreed batch extraction adapter/worker integration were merged. The existing document-processing service was aligned to the batch result contract.
+- **Validation after reconciliation:** `npm test --prefix backend` passed **54/54**; `npm run typecheck --prefix backend` passed. No push was performed.

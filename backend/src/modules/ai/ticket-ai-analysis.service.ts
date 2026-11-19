@@ -69,7 +69,9 @@ export class TicketAiAnalysisService {
     });
     const summary = await this.summarizer.summarize({
       ticket,
-      informationToCollect: input.informationToCollect,
+      ...(input.informationToCollect === undefined
+        ? {}
+        : { informationToCollect: input.informationToCollect }),
     });
 
     const analysis: TicketAiAnalysis = {

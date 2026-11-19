@@ -16,9 +16,9 @@ export type ExtractionJobRecord = {
   executionId: string;
   createdAt: string;
   updatedAt: string;
-  claimedAt?: string;
-  completedAt?: string;
-  lastError?: string;
-  warnings?: string[];
-  executionMetadata?: ExtractionExecutionMetadata;
+  claimedAt?: string | undefined;
+  completedAt?: string | undefined;
+  lastError?: string | undefined;
+  warnings?: string[] | undefined;
+  executionMetadata?: ExtractionExecutionMetadata | undefined;
 };

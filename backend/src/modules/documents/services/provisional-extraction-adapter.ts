@@ -9,8 +9,10 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
   async extract(input: ExtractionAdapterInput): Promise<ExtractionAdapterResult> {
     const startedAt = new Date().toISOString();
     const started = Date.now();
-    const content = input.content?.trim() ?? '';
-    const targetHours = parseResponseHours(content);
+    const content = input.content.trim();
+    const responseTarget = findResponseTarget(content);
+    const targetHours = responseTarget?.hours ?? null;
+    const confidence = targetHours === null ? 0.45 : 0.91;
     const warnings = targetHours === null
       ? ['No clear SLA target could be extracted; review required.']
       : [];
@@ -19,18 +21,18 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
       executionId: input.executionId,
       documentId: input.documentId,
       documentVersionId: input.documentVersionId,
-      ruleType: targetHours !== null ? 'response_time' : 'manual_review_required',
-      payload: targetHours !== null ? { targetHours } : { rawText: content },
+      ruleType: targetHours === null ? 'manual_review_required' : 'response_time',
+      payload: targetHours === null ? { rawText: content } : { targetHours },
       evidence: [{
         sourceType: 'document',
         sourceId: input.documentId,
         versionId: input.documentVersionId,
-        confidence: targetHours !== null ? 0.91 : 0.45,
         page: provenance?.page,
         section: provenance?.section,
-        excerpt: provenance?.text ?? content,
+        excerpt: extractionExcerpt(content, responseTarget?.index),
+        confidence,
       }],
-      confidence: targetHours !== null ? 0.91 : 0.45,
+      confidence,
       ambiguity: targetHours === null,
       warnings,
       requiresHumanReview: targetHours === null,
@@ -51,13 +53,22 @@ export class ProvisionalExtractionAdapter implements ExtractionAdapter {
   }
 }
 
-function parseResponseHours(content: string): number | null {
+function extractionExcerpt(content: string, matchIndex?: number): string {
+  const start = matchIndex === undefined ? 0 : Math.max(0, matchIndex - 100);
+  return content.slice(start, start + 500) || 'No excerpt provided.';
+}
+
+function findResponseTarget(content: string): { hours: number; index: number } | null {
   const match = /within\s+(\d+|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)\s+hours?/i.exec(content);
   if (!match) {
     return null;
   }
 
-  const rawValue = match[1].toLowerCase();
+  const capturedValue = match[1];
+  if (!capturedValue) {
+    return null;
+  }
+  const rawValue = capturedValue.toLowerCase();
   const wordMap: Record<string, number> = {
     zero: 0,
     one: 1,
@@ -82,5 +93,8 @@ function parseResponseHours(content: string): number | null {
     twenty: 20,
   };
 
-  return Number.isNaN(Number(rawValue)) ? (wordMap[rawValue] ?? null) : Number(rawValue);
+  const hours = Number.isNaN(Number(rawValue))
+    ? (wordMap[rawValue] ?? null)
+    : Number(rawValue);
+  return hours === null ? null : { hours, index: match.index };
 }

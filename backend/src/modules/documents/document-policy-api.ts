@@ -105,28 +105,42 @@ async function dispatch(request: IncomingMessage, response: ServerResponse, depe
       return;
     }
     if (segments.length === 4 && request.method === 'GET') {
-      const document = await lifecycle.getDocument(tenant, segments[3]);
+      const documentId = segments[3];
+      if (!documentId) throw new ValidationError('Document ID is required.');
+      const document = await lifecycle.getDocument(tenant, documentId);
       if (!document) throw new NotFoundError('Document not found.');
       sendJson(response, 200, { data: document, requestId });
       return;
     }
     if (segments.length === 5 && segments[4] === 'download-token' && request.method === 'POST') {
-      const token = await lifecycle.createDownloadToken(tenant, segments[3]);
+      const documentId = segments[3];
+      if (!documentId) throw new ValidationError('Document ID is required.');
+      const token = await lifecycle.createDownloadToken(tenant, documentId);
       if (!token) throw new NotFoundError('Document not found.');
       sendJson(response, 200, { data: { downloadToken: token }, requestId });
       return;
     }
     if (segments.length === 5 && segments[4] === 'process' && request.method === 'POST') {
+      const documentId = segments[3];
+      if (!documentId) throw new ValidationError('Document ID is required.');
       const body = await readJsonBody(request);
       const policyId = requireString(body.policyId, 'policyId');
       const policyVersionId = requireString(body.policyVersionId, 'policyVersionId');
       const maxAttempts = body.maxAttempts === undefined ? undefined : requirePositiveInteger(body.maxAttempts, 'maxAttempts');
-      const job = await jobService.processDocument({ tenant, documentId: segments[3], policyId, policyVersionId, maxAttempts });
+      const job = await jobService.processDocument({
+        tenant,
+        documentId,
+        policyId,
+        policyVersionId,
+        ...(maxAttempts === undefined ? {} : { maxAttempts }),
+      });
       sendJson(response, 202, { data: job, requestId });
       return;
     }
     if (segments.length === 5 && segments[4] === 'extractions' && request.method === 'GET') {
-      const document = await documentRepository.getById(tenant, segments[3]);
+      const documentId = segments[3];
+      if (!documentId) throw new ValidationError('Document ID is required.');
+      const document = await documentRepository.getById(tenant, documentId);
       if (!document) throw new NotFoundError('Document not found.');
       const rules = await policyRepository.listExtractedRules(tenant);
       sendJson(response, 200, { data: rules.filter((rule) => rule.documentId === document.id), requestId });
@@ -157,14 +171,18 @@ async function dispatch(request: IncomingMessage, response: ServerResponse, depe
       return;
     }
     if (segments.length === 5 && segments[4] === 'versions' && request.method === 'GET') {
-      const policy = await policyRepository.getPolicyById(tenant, segments[3]);
+      const policyId = segments[3];
+      if (!policyId) throw new ValidationError('Policy ID is required.');
+      const policy = await policyRepository.getPolicyById(tenant, policyId);
       if (!policy) throw new NotFoundError('Policy not found.');
       const storeVersions = await dependencies.store.readCollection<PolicyVersionRecord>('policyVersions');
       sendJson(response, 200, { data: storeVersions.filter((version) => version.organisationId === tenant.organisationId && version.policyId === policy.id), requestId });
       return;
     }
     if (segments.length === 5 && segments[4] === 'versions' && request.method === 'POST') {
-      const policy = await policyRepository.getPolicyById(tenant, segments[3]);
+      const policyId = segments[3];
+      if (!policyId) throw new ValidationError('Policy ID is required.');
+      const policy = await policyRepository.getPolicyById(tenant, policyId);
       if (!policy) throw new NotFoundError('Policy not found.');
       const body = await readJsonBody(request);
       const timestamp = new Date().toISOString();
@@ -184,7 +202,9 @@ async function dispatch(request: IncomingMessage, response: ServerResponse, depe
       return;
     }
     if (segments.length === 5 && segments[4] === 'activate' && request.method === 'POST') {
-      const policy = await policyRepository.getPolicyById(tenant, segments[3]);
+      const policyId = segments[3];
+      if (!policyId) throw new ValidationError('Policy ID is required.');
+      const policy = await policyRepository.getPolicyById(tenant, policyId);
       if (!policy) throw new NotFoundError('Policy not found.');
       const body = await readJsonBody(request);
       const versionId = requireString(body.versionId, 'versionId');
@@ -211,6 +231,7 @@ async function dispatch(request: IncomingMessage, response: ServerResponse, depe
 
   if (segments[0] === 'api' && segments[1] === 'v1' && segments[2] === 'extracted-rules' && segments.length === 5) {
     const ruleId = segments[3];
+    if (!ruleId) throw new ValidationError('Extracted rule ID is required.');
     if (request.method === 'GET') {
       const rule = await policyRepository.getExtractedRuleById(tenant, ruleId);
       if (!rule) throw new NotFoundError('Extracted rule not found.');

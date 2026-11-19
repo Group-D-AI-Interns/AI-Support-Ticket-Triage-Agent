@@ -1,19 +1,32 @@
 {
-  "name": "ai-support-ticket-triage-agent-backend",
+  "name": "ai-support-ticket-triage-backend",
+  "version": "0.1.0",
   "private": true,
+  "description": "Backend foundation for the AI Support Ticket Triage Agent",
   "type": "module",
-  "scripts": {
-    "dev:tickets": "tsx ./src/modules/tickets/server.ts",
-    "test": "node --test --import tsx ./tests/**/*.test.ts",
-    "dev:documents-policies": "tsx ./src/modules/documents/document-policy-server.ts"
+  "engines": {
+    "node": ">=20.6.0"
   },
-  "devDependencies": {
-    "@types/node": "^26.6.6",
-    "tsx": "^4.19.2",
-    "typescript": "^5.6.3"
+  "scripts": {
+    "dev": "node --env-file=.env --import tsx --watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node --env-file=.env --import tsx src/main.ts",
+    "typecheck": "node ./node_modules/typescript/bin/tsc --noEmit --project tsconfig.source.json",
+    "test": "node --test --test-concurrency=1 --import tsx ./tests/**/*.test.ts"
   },
   "dependencies": {
+    "express": "^5.1.0",
     "mammoth": "^1.13.0",
-    "pdf-parse": "^2.4.5"
+    "multer": "^2.5.0",
+    "pdf-parse": "^2.4.5",
+    "proper-lockfile": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/multer": "^2.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.0"
   }
 }

@@ -1,30 +1,25 @@
 import { timingSafeEqual } from 'node:crypto';
 
-export class DevelopmentAuthConfigurationError extends Error {
-  constructor(message: string) {
-    super(message);
-    this.name = 'DevelopmentAuthConfigurationError';
-  }
-}
+import type { TenantContext } from '../../shared/tenant.js';
 
-export type TicketRole = 'requester' | 'support_agent' | 'support_lead';
+export class DevelopmentAuthConfigurationError extends Error {}
 
-const supportedRoles = new Set<TicketRole>([
+export const SUPPORTED_ROLES = new Set([
   'requester',
   'support_agent',
   'support_lead',
+  'organisation_admin',
 ]);
 
-export type DevelopmentPrincipal = {
+export type DevelopmentPrincipal = TenantContext & {
   bearerToken: string;
-  organisationId: string;
-  userId: string;
-  roles: ReadonlySet<TicketRole>;
-  teamIds: ReadonlySet<string>;
+  roles: string[];
+  teamIds: string[];
+  permissions?: string[];
 };
 
-export function loadDevelopmentPrincipal(
-  environment: Record<string, string | undefined>,
+export function developmentPrincipalFromEnvironment(
+  environment: NodeJS.ProcessEnv = process.env,
 ): DevelopmentPrincipal | null {
   const rawConfig = environment.TICKET_DEV_PRINCIPAL;
   if (!rawConfig) {
@@ -36,15 +31,15 @@ export function loadDevelopmentPrincipal(
     );
   }
 
-  let value: unknown;
+  let config: unknown;
   try {
-    value = JSON.parse(rawConfig);
+    config = JSON.parse(rawConfig);
   } catch {
     throw new DevelopmentAuthConfigurationError(
       'TICKET_DEV_PRINCIPAL must contain valid JSON.',
     );
   }
-  if (!isRecord(value)) {
+  if (!isRecord(config)) {
     throw new DevelopmentAuthConfigurationError(
       'TICKET_DEV_PRINCIPAL must be a JSON object.',
     );
@@ -57,18 +52,13 @@ export function loadDevelopmentPrincipal(
     'roles',
     'teamIds',
   ]);
-  if (Object.keys(value).some((field) => !allowedFields.has(field))) {
+  if (Object.keys(config).some((field) => !allowedFields.has(field))) {
     throw new DevelopmentAuthConfigurationError(
       'TICKET_DEV_PRINCIPAL contains unsupported fields.',
     );
   }
 
-  const bearerToken = value.bearerToken;
-  const organisationId = value.organisationId;
-  const userId = value.userId;
-  const roles = value.roles;
-  const teamIds = value.teamIds ?? [];
-
+  const { bearerToken, organisationId, userId, roles, teamIds = [] } = config;
   if (typeof bearerToken !== 'string' || bearerToken.length < 32) {
     throw new DevelopmentAuthConfigurationError(
       'The development bearer token must contain at least 32 characters.',
@@ -80,25 +70,33 @@ export function loadDevelopmentPrincipal(
     );
   }
   if (typeof userId !== 'string' || !userId) {
-    throw new DevelopmentAuthConfigurationError('A development userId is required.');
-  }
-  if (
-    !Array.isArray(roles)
-    || roles.length === 0
-    || roles.some((role) => typeof role !== 'string' || !supportedRoles.has(role as TicketRole))
-    || new Set(roles).size !== roles.length
-  ) {
     throw new DevelopmentAuthConfigurationError(
-      'Development roles must be unique values selected from requester, support_agent, and support_lead.',
+      'A development userId is required.',
     );
   }
   if (
-    !Array.isArray(teamIds)
-    || teamIds.some((teamId) => typeof teamId !== 'string' || !teamId)
-    || new Set(teamIds).size !== teamIds.length
+    !Array.isArray(roles) ||
+    roles.length === 0 ||
+    roles.some((role) => typeof role !== 'string' || !SUPPORTED_ROLES.has(role))
   ) {
     throw new DevelopmentAuthConfigurationError(
-      'Development teamIds must be unique non-empty strings.',
+      'Development roles must be selected from requester, support_agent, support_lead, and organisation_admin.',
+    );
+  }
+  if (
+    !Array.isArray(teamIds) ||
+    teamIds.some((teamId) => typeof teamId !== 'string' || !teamId)
+  ) {
+    throw new DevelopmentAuthConfigurationError(
+      'Development teamIds must be an array of non-empty strings.',
+    );
+  }
+  if (
+    new Set(roles).size !== roles.length ||
+    new Set(teamIds).size !== teamIds.length
+  ) {
+    throw new DevelopmentAuthConfigurationError(
+      'Development roles and teamIds must not contain duplicates.',
     );
   }
 
@@ -106,18 +104,20 @@ export function loadDevelopmentPrincipal(
     bearerToken,
     organisationId,
     userId,
-    roles: new Set(roles as TicketRole[]),
-    teamIds: new Set(teamIds as string[]),
+    roles,
+    teamIds,
   };
 }
 
-export function matchesBearerToken(expected: string, provided: string): boolean {
-  const expectedBytes = Buffer.from(expected);
-  const providedBytes = Buffer.from(provided);
-  return expectedBytes.length === providedBytes.length
-    && timingSafeEqual(expectedBytes, providedBytes);
+export function secureStringEqual(left: string, right: string): boolean {
+  const leftBuffer = Buffer.from(left);
+  const rightBuffer = Buffer.from(right);
+  return (
+    leftBuffer.length === rightBuffer.length &&
+    timingSafeEqual(leftBuffer, rightBuffer)
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }

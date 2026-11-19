@@ -65,7 +65,9 @@ test('creates and processes a document extraction job with tenant isolation', as
     assert.equal(document?.processingStatus, 'completed');
     const savedCandidates = await store.readCollection<{ documentVersionId: string }>('extractedRules');
     assert.equal(savedCandidates.length, 1);
-    assert.equal(savedCandidates[0].documentVersionId, uploaded.version.id);
+    const savedCandidate = savedCandidates[0];
+    assert.ok(savedCandidate);
+    assert.equal(savedCandidate.documentVersionId, uploaded.version.id);
 
     const blocked = await worker.processNextForTenant(tenantB);
     assert.equal(blocked, null);

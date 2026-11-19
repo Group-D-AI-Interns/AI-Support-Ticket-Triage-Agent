@@ -1,86 +1,49 @@
-# Initial Repository Assessment
+# Repository Assessment
 
-**Project:** Universal AI-Powered Support Management & Performance Platform  
-**Assessment status:** Pending access to the application repository  
-**Prepared from:** Supplied Capstone Project 05 specification and the accompanying universal-platform project brief.
+**Project:** AI Support Ticket Triage Agent
+**Assessment date:** 2026-11-17
+**Scope:** Repository baseline and backend foundation (Thuto)
 
-## 1. Important assessment limitation
+## 1. Repository findings
 
-The project specification asks for inspection of the supplied repository. The materials available for this assessment describe the desired system, but do not include the application's source repository. Therefore, no claim is made here about the current code, framework, database, routes, authentication implementation, tests, or deployment.
+### Existing stack and application
 
-This is an initial assessment record and inspection plan. Replace every “Not inspected” item with evidence from the actual repository once it is supplied.
+- No frontend application or backend runtime was present at assessment time.
+- The backend consisted of `backend/src/` placeholder directories and six JSON seed files. There was no package manifest, lockfile, TypeScript configuration, entry point, route, middleware or service implementation.
+- The seed files (`organisations`, `users`, `teams`, `tickets`, `sla-policies`, `knowledge-articles`) each use `{ "schemaVersion": 1, "records": [] }`; all collections were empty.
+- There was no authentication provider/session implementation, user or membership model, role catalogue, tenant resolver, persistence adapter, environment configuration, logger, error handler, health check, or test/build/lint setup.
+- Architecture documents recommend TypeScript and a modular monolith, define `/api/v1`, tenant isolation, JSON as the initial application store, a `TenantContext` shape and a standard error envelope. These conventions are reusable design inputs, not pre-existing code.
 
-## 2. Existing stack
+### Commands and baseline results
 
-| Area | Finding |
-|---|---|
-| Frontend | Not inspected — repository required |
-| Backend | Not inspected — repository required |
-| Database | Not inspected — repository required |
-| Authentication/authorisation | Not inspected — repository required |
-| AI/LLM integration | Not inspected — repository required |
-| File/document storage | Not inspected — repository required |
-| Testing | Not inspected — repository required |
-| Deployment/CI | Not inspected — repository required |
+- Runtime present: Node.js `v22.19.0`, npm `10.9.3`.
+- No existing build, lint, or test command could be run because no package manifest or scripts existed. No baseline tests were present.
+- The npm package metadata lookup did not return usable output; no external dependencies were added.
 
-The capstone specification recommends React + TypeScript, Node.js + TypeScript + Express, MongoDB, an LLM provider adapter, configurable embeddings, Zod, Jest, Supertest and Playwright. These are target recommendations, not verified existing technologies.
+## 2. Gaps and reusable conventions
 
-## 3. Repository structure and reusable code
+The API bootstrap, shared middleware, identity, tenant context enforcement, RBAC, organisation/team modules, JSON repositories and tests all required implementation. Existing module placeholders, seed file names/envelope, API base path and documented contracts provide extension points. The repository's previous initial assessment stated the source repository was unavailable; this document replaces that stale finding with the observed baseline.
 
-**Not inspected.** The repository review must identify:
-- Application entry points and package/workspace structure.
-- Existing frontend pages, components, state management and API clients.
-- Backend routes, controllers, services, domain modules and repositories.
-- Database models, indexes, migrations and seed data.
-- Authentication, role/permission checks and tenant ownership enforcement.
-- Existing file upload, document processing, AI, reporting and notification integrations.
-- Existing tests, build scripts, CI/CD and deployment configuration.
+## 3. Decisions and implementation boundary
 
-Reusable components cannot be identified responsibly without the source tree.
+The source documents require JSON files for the initial phase and leave the framework, identity provider/session model, final permission mapping, and JSON concurrency strategy open. The tenant boundary is mandated, but membership and active-tenant selection behavior needs an agreed contract. These decisions block secure authentication, membership-based tenant resolution, protected business endpoints and concurrent JSON persistence. No identity provider, permissions or business operations are invented here.
 
-## 4. Required capability gap review
+The initial foundation uses Node's built-in HTTP server to avoid making an unapproved framework choice. Authentication and tenant resolution are represented by provider interfaces; no request header is treated as authenticated identity. Until a verifier and membership provider are configured, authenticated endpoints are not exposed.
 
-The following are requirements to verify against the existing application, not confirmed gaps:
+## 4. Baseline implementation status
 
-| Capability to inspect | Required target |
-|---|---|
-| Tenant management | Isolated organisation configuration and data |
-| Identity and access | Roles, permissions, tenant and team ownership |
-| Document/policy management | Upload, extraction, versioning, approval and audit |
-| SLA engine | Configurable targets, calendars, breach risk and escalation |
-| Ticket operations | Intake, queue, detail, comments and attachments |
-| AI triage | Classification, summary, priority, similarity, resolution and routing |
-| Dashboards/reporting | Role- and tenant-scoped views |
-| Governance | Approval workflows and auditable decisions |
+Implemented since the baseline: a Node HTTP/TypeScript bootstrap; Keycloak OIDC bearer-token verification; Keycloak user invitations through the Admin REST API; request IDs, structured logs, health endpoints and shared errors; active membership-based tenant resolution; a mapped RBAC policy that denies unknown roles/permissions; organisation, identity and team services; tenant-filtered JSON repositories; and setup/API integration notes in `docs/backend-foundation.md`.
 
-## 5. Risks to verify
+The JSON adapter validates envelopes and IDs, uses atomic replacement, serializes read-modify-write operations and uses a lock file to prevent overlapping process writes. Tests use Node's built-in test runner without external packages.
 
-- Cross-tenant access through APIs, background jobs, search, exports or document retrieval.
-- Overly broad roles or missing ownership checks.
-- Unsafe file upload or publicly accessible documents.
-- Prompt injection in uploaded documents or retrieved ticket text.
-- AI-generated rules becoming active without administrator approval.
-- SLA calculations using unapproved or invented targets.
-- Sensitive customer or employee data in prompts, logs or test fixtures.
-- Destructive refactoring that breaks existing workflows.
+At the current integration snapshot, the shared foundation source suite passes 23 tests when run directly with Node 22's built-in TypeScript support, and the Python ticket suite passes 15 tests. `npm ci` fails because the package and lock files are out of sync; TypeScript typecheck/build fail on document and policy module type errors. The Node server was previously smoke-checked; the current readiness handler also checks local JSON directory read/write access.
 
-## 6. Inspection and baseline plan
+## 5. Remaining decisions and follow-up
 
-1. Obtain the complete repository and setup instructions.
-2. Inspect source tree, package manifests, configuration and deployment files.
-3. Install dependencies using the repository's documented process.
-4. Run existing lint, build and test commands; record exact results.
-5. Map current frontend, backend, database and integration boundaries.
-6. Trace representative user workflows end to end.
-7. Review authentication, authorisation and tenant isolation.
-8. Review data models, indexes, migrations and API contracts.
-9. Identify reusable code and classify findings as keep, extend, refactor or replace.
-10. Produce a prioritised gap register with file paths and evidence.
+The local Keycloak development stack is configured at `http://localhost:8081` (port 8080 remains occupied by the KnowledgeOps instance). The `ai-support` realm publishes the expected issuer and `support-api` audience. The backend's ignored local `.env` enables Keycloak verification and has a confidential service-account client; its service account can obtain a token and query users. SMTP is not configured, so invitation emails have not been verified or sent. The backend also passed a live readiness check and returned `401` for `/api/v1/me` without a bearer token.
 
-## 7. Preliminary recommendation
-
-Preserve existing functionality by default. Prefer incremental changes and document the technical reason, affected files, test plan and rollback strategy for any modification. Do not begin major implementation until the repository assessment and proposed architecture are reviewed.
-
-## 8. Inputs required to finalise
-
-Provide the application repository as a ZIP or accessible source repository. Exclude production credentials, secrets and real customer personal information. The repository-specific findings and final recommendations remain open until that inspection is completed.
+1. Verify a real user's Keycloak access token against `/api/v1/me` end to end.
+2. Review role-to-permission grants and role-assignment constraints with the team; unmapped roles and permissions remain denied.
+3. Agree on active-organisation selection and whether organisation creation is tenant-admin scoped or platform scoped. Status transitions are implemented: only a member with the `organisation.update` permission can change status, and tenant routes reject inactive organisations while the management path allows an authorised member to reactivate them.
+4. The JSON lock prevents overlapping writers, but stale-lock recovery and multi-host writes need an operational decision. Keep this JSON adapter single-instance/single-host.
+5. Configure SMTP only if the team wants to test invitation email delivery.

@@ -172,8 +172,10 @@ test('rejects an unconfigured category returned by the provider', async () => {
       && error.code === 'INVALID_OUTPUT',
   );
 
-  assert.equal(logger.events[0].status, 'failed');
-  assert.equal(logger.events[0].errorCode, 'INVALID_OUTPUT');
+  const event = logger.events[0];
+  assert.ok(event);
+  assert.equal(event.status, 'failed');
+  assert.equal(event.errorCode, 'INVALID_OUTPUT');
   assert.equal(repository.records.length, 0);
 });
 
@@ -247,7 +249,9 @@ test('retries only retryable provider failures and records attempt count', async
 
   assert.equal(calls, 2);
   assert.equal(result.execution.attempts, 2);
-  assert.equal(logger.events[0].attempts, 2);
+  const event = logger.events[0];
+  assert.ok(event);
+  assert.equal(event.attempts, 2);
 });
 
 test('times out provider calls and exposes a normalized error without logging ticket content', async () => {
@@ -266,8 +270,10 @@ test('times out provider calls and exposes a normalized error without logging ti
     (error: unknown) => error instanceof AiExecutionError && error.code === 'TIMEOUT',
   );
 
-  assert.equal(logger.events[0].status, 'failed');
-  assert.equal(logger.events[0].errorCode, 'TIMEOUT');
+  const event = logger.events[0];
+  assert.ok(event);
+  assert.equal(event.status, 'failed');
+  assert.equal(event.errorCode, 'TIMEOUT');
   assert.equal(JSON.stringify(logger.events).includes(ticket.description), false);
 });
 
@@ -307,7 +313,9 @@ test('keeps prompt-injection text in ticket data and sends only the AI ticket pr
 
   assert.equal(requests.length, 2);
   assert.ok(requests.every((request) => request.instructions.includes('untrusted data')));
-  const firstInput = requests[0].input as {
+  const firstRequest = requests[0];
+  assert.ok(firstRequest);
+  const firstInput = firstRequest.input as {
     ticket: Record<string, unknown>;
   };
   assert.equal(firstInput.ticket.description, injectedTicket.description);
