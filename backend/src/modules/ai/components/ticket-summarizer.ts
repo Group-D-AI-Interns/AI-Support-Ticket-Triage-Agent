@@ -5,6 +5,7 @@ import {
   type TicketSummary,
 } from '../contracts.js';
 
+export const SUMMARIZATION_PROMPT_VERSION = 'ticket-summary-v1';
 const SUMMARIZATION_INSTRUCTIONS = [
   'Summarize only facts stated in the ticket.',
   'Separate symptoms, attempted actions, business impact, and missing information.',

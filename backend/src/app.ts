@@ -70,12 +70,13 @@ export function createApp(environment: Environment, dependencies: AppDependencie
     response.setHeader("x-request-id", requestId);
     const method = request.method ?? "GET";
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    const logPath = path.startsWith('/api/v1/tickets/ingest/jira/') ? '/api/v1/tickets/ingest/jira/[redacted]' : path;
     if (isTicketModulePath(path)) {
       const startedAt = Date.now();
       response.once("finish", () => logger.info("HTTP request", {
         requestId,
         method,
-        path,
+        path: logPath,
         statusCode: response.statusCode,
         durationMs: Date.now() - startedAt,
       }));
@@ -113,7 +114,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
         },
       });
     } finally {
-      logger.info("HTTP request", { requestId, method, path, statusCode: response.statusCode, durationMs: Date.now() - startedAt });
+      logger.info("HTTP request", { requestId, method, path: logPath, statusCode: response.statusCode, durationMs: Date.now() - startedAt });
     }
   }
 
@@ -418,6 +419,7 @@ function isTicketModulePath(path: string): boolean {
   return [
     "/api/v1/tickets",
     "/api/v1/documents",
+    "/api/v1/extracted-rules",
     "/api/v1/sla-policies",
     "/api/v1/sla",
     "/api/v1/reports",

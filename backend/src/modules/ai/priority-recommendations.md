@@ -128,3 +128,14 @@ actual POST preview returned 200 with insufficient_information, null priority an
 mandatory review. The updated PowerShell helper also passed against that server.
 A successful P1 response was verified over HTTP using an injected deterministic
 provider with exact ticket citations. No authenticated live provider request was made.
+
+## Subsequent live verification
+
+The 2026-11-19 [pre-LangGraph verification](../../../../docs/architecture/Pre-LangGraph-Verification.md)
+tested this endpoint with a real provider and synthetic signed identity. An initial
+request failed strict citation validation because the model estimated character offsets
+incorrectly. The input now includes bounded `evidenceOptions` with server-computed UTF-16
+offsets; the prompt asks the model to copy a relevant option verbatim. The existing
+validator still checks every returned quotation and rejects invented evidence.
+The final live example returned validated `insufficient_information` with null priority;
+it did not establish a reliable numeric priority from incomplete business context.

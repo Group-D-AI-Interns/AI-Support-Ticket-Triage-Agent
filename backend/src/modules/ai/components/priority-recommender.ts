@@ -1,6 +1,6 @@
 import type { AiExecutionRunner } from '../ai-execution-runner.js';
 import type { TicketAiView } from '../contracts.js';
-import { validatePriorityFactors, type PriorityRecommendation } from '../priority-contracts.js';
+import { validatePriorityFactors, type PriorityRecommendation, type TicketEvidence } from '../priority-contracts.js';
 import { previewPriority, validatePriorityCandidate, type PriorityCandidate } from './priority-matrix.js';
 
 const instructions = [
@@ -11,9 +11,26 @@ const instructions = [
   'reason is a nonempty explanation; confidence is null or a number from 0 to 1; evidence is an array.',
   'Each evidence entry has exactly ticketId, field (title or description), start, end and excerpt.',
   'Use zero-based UTF-16 offsets with exclusive end, and an exact nonempty source excerpt. Cite this ticket only.',
+  'The input supplies evidenceOptions with precomputed exact offsets. Copy a relevant evidence option verbatim, including ticketId, field, start, end and excerpt. Do not calculate or estimate character positions.',
   'Every non-null factor needs evidence. If evidence is insufficient return null and identify the missing information.',
   'missingInformation and warnings are arrays of nonempty strings. Do not output a priority; deterministic code calculates it.',
 ].join(' ');
+
+function evidenceOptions(ticket: TicketAiView): TicketEvidence[] {
+  const options: TicketEvidence[] = [];
+  for (const field of ['title', 'description'] as const) {
+    const content = ticket[field];
+    for (const match of content.matchAll(/[^.!?\r\n]+(?:[.!?]+|$)/gu)) {
+      const leading = match[0].length - match[0].trimStart().length;
+      const excerpt = match[0].trim().slice(0, 800);
+      if (!excerpt) continue;
+      const start = match.index + leading;
+      options.push({ ticketId: ticket.id, field, start, end: start + excerpt.length, excerpt });
+      if (options.length >= 64) return options;
+    }
+  }
+  return options;
+}
 
 export class PriorityRecommender {
   private readonly policy: PriorityCandidate;
@@ -27,7 +44,7 @@ export class PriorityRecommender {
     // Send a snapshot/projection only. Provider updates cannot modify the caller or policy.
     const snapshot = structuredClone(ticket);
     const { result: factors, execution } = await this.runner.execute('ticket_priority_factors', instructions,
-      { ticket: { id: snapshot.id, title: snapshot.title, description: snapshot.description } },
+      { ticket: { id: snapshot.id, title: snapshot.title, description: snapshot.description }, evidenceOptions: evidenceOptions(snapshot) },
       output => validatePriorityFactors(output, snapshot));
     const missingInformation = [...factors.missingInformation];
     const warnings = [...factors.warnings];

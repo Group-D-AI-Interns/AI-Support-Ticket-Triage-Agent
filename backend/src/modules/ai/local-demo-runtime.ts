@@ -1,4 +1,6 @@
 import type { TenantContext } from '../../shared/tenant.js';
+import { TicketAiTriageService, type AiTriageCapabilities } from './ticket-ai-triage.service.js';
+import type { AiWorkflowRun } from './workflow-run.js';
 import {
   AiExecutionRunner,
   type AiExecutionOptions,
@@ -100,6 +102,7 @@ export function createLocalDemoTicketAiRuntime(
   priorityRunner: AiExecutionRunner;
   service: TicketAiAnalysisService;
   repository: AiAnalysisRepository;
+  createTriageService(capabilities?: AiTriageCapabilities): TicketAiTriageService;
 } {
   const runner = new AiExecutionRunner(
     new LocalDemoTicketAiProvider(),
@@ -110,12 +113,16 @@ export function createLocalDemoTicketAiRuntime(
       maxRetries: 0,
     } satisfies AiExecutionOptions,
   );
+  const classifier = new TicketClassifier(runner);
+  const summarizer = new TicketSummarizer(runner);
   return {
     priorityRunner: runner,
+    createTriageService: (capabilities = {}) => new TicketAiTriageService(source, classifier, summarizer, repository,
+      { resolutionRunner: runner, ...capabilities }),
     service: new TicketAiAnalysisService(
       source,
-      new TicketClassifier(runner),
-      new TicketSummarizer(runner),
+      classifier,
+      summarizer,
       repository,
     ),
     repository,
@@ -124,6 +131,14 @@ export function createLocalDemoTicketAiRuntime(
 
 export class InMemoryAiAnalysisRepository implements AiAnalysisRepository {
   private readonly records: TicketAiAnalysis[] = [];
+  private readonly runs: AiWorkflowRun[] = [];
+  async saveWorkflowRun(tenant: TenantContext, run: AiWorkflowRun): Promise<void> {
+    if (run.organisationId !== tenant.organisationId || run.initiatedBy !== tenant.userId) throw new Error('Workflow run tenant mismatch.');
+    this.runs.push(structuredClone(run));
+  }
+  async listWorkflowRuns(tenant: TenantContext, ticketId: string): Promise<AiWorkflowRun[]> {
+    return structuredClone(this.runs.filter(run => run.organisationId === tenant.organisationId && run.ticketId === ticketId));
+  }
 
   async save(tenant: TenantContext, analysis: TicketAiAnalysis): Promise<void> {
     if (analysis.organisationId !== tenant.organisationId) {

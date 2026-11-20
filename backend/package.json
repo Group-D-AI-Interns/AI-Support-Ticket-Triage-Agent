@@ -16,17 +16,20 @@
     "test": "node --test --test-concurrency=1 --import tsx ./tests/**/*.test.ts ./src/**/*.test.ts"
   },
   "dependencies": {
+    "@langchain/core": "1.4.2",
+    "@langchain/langgraph": "1.7.5",
     "express": "^5.1.0",
     "mammoth": "^1.13.0",
     "multer": "^2.5.0",
     "pdf-parse": "^2.4.5",
-    "proper-lockfile": "^4.1.2"
+    "proper-lockfile": "^4.1.2",
+    "zod": "4.6.7"
   },
   "devDependencies": {
     "@types/express": "^5.0.3",
     "@types/multer": "^2.0.0",
-    "@types/proper-lockfile": "^4.1.4",
     "@types/node": "^22.0.0",
+    "@types/proper-lockfile": "^4.1.4",
     "tsx": "^4.19.2",
     "typescript": "^5.7.0"
   }

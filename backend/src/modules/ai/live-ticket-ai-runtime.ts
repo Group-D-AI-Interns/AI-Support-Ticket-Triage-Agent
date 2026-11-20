@@ -19,6 +19,7 @@ import { TicketClassifier } from './components/ticket-classifier.js';
 import { TicketSummarizer } from './components/ticket-summarizer.js';
 import { TicketAiAnalysisService } from './ticket-ai-analysis.service.js';
 import { ticketAiCategoriesFromEnvironment } from './local-demo-runtime.js';
+import { TicketAiTriageService, type AiTriageCapabilities } from './ticket-ai-triage.service.js';
 
 export type LlmProviderName = 'groq' | 'inception';
 
@@ -117,6 +118,7 @@ export function createLiveTicketAiRuntime(
   priorityRunner: AiExecutionRunner;
   service: TicketAiAnalysisService;
   repository: AiAnalysisRepository;
+  createTriageService(capabilities?: AiTriageCapabilities): TicketAiTriageService;
 } {
   const groq = new OpenAiCompatibleProvider({
     name: 'groq',
@@ -167,12 +169,16 @@ export function createLiveTicketAiRuntime(
     configuration.summarizationProvider === 'inception',
   );
 
+  const classifier = new TicketClassifier(classificationRunner);
+  const summarizer = new TicketSummarizer(summarizationRunner);
   return {
     priorityRunner: classificationRunner,
+    createTriageService: (capabilities = {}) => new TicketAiTriageService(source, classifier, summarizer, repository,
+      { resolutionRunner: classificationRunner, ...capabilities }),
     service: new TicketAiAnalysisService(
       source,
-      new TicketClassifier(classificationRunner),
-      new TicketSummarizer(summarizationRunner),
+      classifier,
+      summarizer,
       repository,
     ),
     repository,

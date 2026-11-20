@@ -137,7 +137,19 @@ export class JsonFileStore {
       } finally {
         await file.close();
       }
-      await rename(temporaryPath, path);
+      // Windows can briefly deny replacement while a concurrent reader holds the old file.
+      // Retry the atomic rename; never delete the existing collection as a workaround.
+      const deadline = Date.now() + this.lockTimeoutMs;
+      while (true) {
+        try {
+          await rename(temporaryPath, path);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(code ?? '') || Date.now() >= deadline) throw error;
+          await delay(Math.min(25, Math.max(1, deadline - Date.now())));
+        }
+      }
     } catch (error) {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
       throw new JsonStorageError("STORAGE_IO_ERROR", `Could not write ${name}.`, { cause: error });

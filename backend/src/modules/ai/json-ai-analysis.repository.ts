@@ -2,6 +2,7 @@ import { JsonFileStore, JsonStorageError, type JsonEnvelope } from '../../infras
 import type { TenantContext } from '../../shared/tenant.js';
 import type { AiAnalysisRepository } from './ports.js';
 import { validateTicketClassification, validateTicketSummary, type TicketAiAnalysis } from './contracts.js';
+import { isWorkflowRuns, orchestrationSchema, type AiWorkflowRun } from './workflow-run.js';
 
 function isAnalyses(value: unknown): value is JsonEnvelope<TicketAiAnalysis> {
   if (!value || typeof value !== 'object') return false;
@@ -16,6 +17,7 @@ function isAnalyses(value: unknown): value is JsonEnvelope<TicketAiAnalysis> {
       const category = record.classification?.category;
       validateTicketClassification(record.classification, typeof category === 'string' ? [{ id: category, name: category }] : []);
       validateTicketSummary(record.summary);
+      if (record.orchestration !== undefined && !orchestrationSchema.safeParse(record.orchestration).success) return false;
       return record.executions.length === 2 && record.executions.every((execution) =>
         execution && typeof execution.executionId === 'string' && execution.executionId.trim() &&
         ['ticket_classification', 'ticket_summarization'].includes(execution.task) && execution.status === 'completed' &&
@@ -30,6 +32,19 @@ function isAnalyses(value: unknown): value is JsonEnvelope<TicketAiAnalysis> {
 
 export class JsonAiAnalysisRepository implements AiAnalysisRepository {
   constructor(private readonly store: JsonFileStore) {}
+
+  async saveWorkflowRun(tenant: TenantContext, run: AiWorkflowRun): Promise<void> {
+    if (run.organisationId !== tenant.organisationId || run.initiatedBy !== tenant.userId || !isWorkflowRuns({ schemaVersion: 1, records: [run] })) {
+      throw new JsonStorageError('STORAGE_INVALID_SCHEMA', 'Invalid tenant-scoped workflow metadata.');
+    }
+    await this.store.update('ai-workflow-runs.json', isWorkflowRuns, envelope => {
+      if (envelope.records.some(record => record.runId === run.runId)) throw new JsonStorageError('STORAGE_INVALID_SCHEMA', 'Duplicate workflow run ID.');
+      envelope.records.push(structuredClone(run));
+    });
+  }
+  async listWorkflowRuns(tenant: TenantContext, ticketId: string): Promise<AiWorkflowRun[]> {
+    return (await this.store.read('ai-workflow-runs.json', isWorkflowRuns)).records.filter(run => run.organisationId === tenant.organisationId && run.ticketId === ticketId);
+  }
 
   async save(tenant: TenantContext, analysis: TicketAiAnalysis): Promise<void> {
     if (tenant.organisationId !== analysis.organisationId || !isAnalyses({ schemaVersion: 1, records: [analysis] })) {

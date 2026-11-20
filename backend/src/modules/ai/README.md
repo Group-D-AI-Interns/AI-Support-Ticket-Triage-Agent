@@ -1,17 +1,21 @@
 # Ticket AI integration
 
 The existing `TicketAiAnalysisService`, classifier, summarizer, execution runner,
-provider-neutral interface and output validators are retained. LangGraph is not
-installed. Validation uses the existing TypeScript functions, not Zod.
+provider-neutral interface and output validators are retained. LangGraph now orchestrates
+classification and summarization with explicit review, invalid-output and failure routes.
+Existing TypeScript output validators remain authoritative; Zod validates new graph/run
+contracts and configurable document-extraction payloads.
 
 ## Integrated request flow
 
 1. The shared application verifies the bearer token and resolves active stored tenant membership.
 2. It derives team scope from server-side team memberships. Static development principals are disabled on this path.
 3. The ticket adapter applies existing requester/team/administrator visibility before returning only the AI ticket projection.
-4. The classifier and summarizer use their existing execution runners and provider adapters.
+4. LangGraph invokes the existing classifier and summarizer using their execution runners and provider adapters.
 5. `JsonAiAnalysisRepository` validates and saves the combined analysis to `ai-analyses.json` using locked atomic JSON writes.
 6. History reads re-check ticket access, so revoked membership/team access cannot read prior analyses.
+7. A separate `ai-workflow-runs.json` records graph outcomes and safe execution metadata,
+   including invalid/provider-failed runs. This is application history, not checkpoint storage.
 
 Use `POST /api/v1/tickets/:ticketId/analyze` with `{}` and
 `GET /api/v1/tickets/:ticketId/analyses`. Both require a bearer access token and
@@ -47,11 +51,34 @@ The integrated application injects durable history into both runtime modes. Stan
 `createTicketApp` and runtime factories retain in-memory defaults for existing focused
 tests/isolated demos. Do not use those standalone defaults as the production entry point.
 
-Document extraction has a shared batch contract but remains provisional plain-text
-processing. Mistral embeddings exist as an adapter only. Semantic knowledge indexing,
-real historical-ticket sources, routing recommendations, ticket AI background
-jobs, prompt/config version tracking and real-model evaluation remain further work.
-No checkpoint persistence or LangGraph graph is introduced by this integration.
+The AI-owned `ProviderDocumentExtractionAdapter` now implements the existing document
+batch port, validates configured payload schemas and exact quotations, and requires human
+review. Olerato's default processing path still uses the provisional adapter until she
+approves schemas and wiring; TXT/PDF/DOCX text conversion is separate from model extraction.
+Mistral embeddings remain an adapter, without a persistent semantic index. Real historical
+sources, background jobs, durable aggregate triage/reviewer outcomes and broader model
+evaluation remain further work. No checkpoint persistence is enabled.
+
+`runtime.createTriageService(capabilities)` composes the core graph with existing priority,
+retrieval/resolution and optional routing/SLA sources. Each run reloads authorized upstream
+data. Missing sources are explicitly unavailable, and upstream failures remain visible.
+Routing recommends from approved eligible-team rules; SLA insight consumes Faith's verified
+evaluation and never calculates deadlines with an LLM. This factory is an internal integration
+entry point; the existing `/analyze` endpoint continues to expose core classification/summary.
+
+See [the LangGraph handover](../../../../docs/architecture/Wandile-AI-LangGraph-Handover.md)
+for ports, ownership, execution flow, changed files, verification and remaining dependencies.
+Keycloak, roles and shared authentication configuration remain Thuto's responsibility.
+
+Test the AI alone with synthetic data and existing provider credentials:
+
+```powershell
+node --env-file=.env --import tsx scripts/test-live-ai-workflow.ts
+```
+
+This opt-in test invokes real providers for graph analysis, priority, cited resolution and
+document extraction, using fixture routing/knowledge and isolated temporary JSON history.
+It does not configure Keycloak/Jira or activate any policy; provider usage may apply.
 
 Lexical evidence retrieval and cited resolution recommendations are now available through
 the API. See [resolution-recommendations.md](resolution-recommendations.md) for connected

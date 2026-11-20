@@ -40,8 +40,14 @@ import {
   KnowledgeRetriever,
   type AuthorizedKnowledgeSource,
 } from '../knowledge/retrieval.js';
-import { ApprovedPolicyKnowledgeSource } from '../knowledge/approved-policy-source.js';
 import { ResolutionRecommendationService } from '../ai/resolution-recommendation.service.js';
+import type { AuthorizedRoutingSource, VerifiedSlaInsightSource } from '../ai/team-capability-ports.js';
+import { ProviderDocumentExtractionAdapter, type ApprovedExtractionSchemas } from '../ai/provider-document-extraction.adapter.js';
+import { documentExtractionSchemas } from '../ai/document-extraction-schemas.js';
+import { GovernedKnowledgeSource } from '../knowledge/published-knowledge.js';
+import type { ExtractionAdapter } from '../documents/services/extraction-adapter.js';
+import { ProvisionalExtractionAdapter } from '../documents/services/provisional-extraction-adapter.js';
+import { DocumentKnowledgeService, DocumentKnowledgeError } from '../documents/services/document-knowledge.service.js';
 import { JsonStorageError } from '../../infrastructure/persistence/json/json-file-store.js';
 
 import {
@@ -148,6 +154,10 @@ export type TicketAppOptions = {
   priorityPreview?: PriorityPreviewConfiguration | null;
   resolutionRunner?: AiExecutionRunner;
   knowledgeSource?: AuthorizedKnowledgeSource;
+  routingSource?: AuthorizedRoutingSource;
+  slaInsightSource?: VerifiedSlaInsightSource;
+  documentExtractionAdapter?: ExtractionAdapter;
+  documentExtractionSchemas?: ApprovedExtractionSchemas;
 };
 
 export function createTicketApp(options: TicketAppOptions = {}) {
@@ -364,15 +374,27 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     )
     : null;
   const resolutionRunner = options.resolutionRunner ?? ticketAiRuntime?.priorityRunner;
+  const knowledgeSource = options.knowledgeSource ?? new GovernedKnowledgeSource(policyRepository, tenantStore, authorization);
   const resolutionService = resolutionRunner
     ? new ResolutionRecommendationService(
       ticketAiSource,
       new KnowledgeRetriever(
-        options.knowledgeSource ?? new ApprovedPolicyKnowledgeSource(policyRepository, tenantStore),
+        knowledgeSource,
       ),
       resolutionRunner,
     )
     : null;
+
+  const triageService = ticketAiRuntime?.createTriageService({ knowledge: knowledgeSource,
+    ...(resolutionRunner ? { resolutionRunner } : {}),
+    ...(priorityConfig && priorityRunner ? { priority: new PriorityRecommender(priorityRunner, priorityConfig.candidate, priorityConfig.minimumConfidence) } : {}),
+    ...(options.routingSource ? { routing: options.routingSource } : {}),
+    ...(options.slaInsightSource ? { sla: options.slaInsightSource } : {}),
+  });
+  const documentKnowledge = new DocumentKnowledgeService(tenantStore, policyRepository, attachmentStorage,
+    options.documentExtractionAdapter ?? (ticketAiLive && ticketAiRuntime
+      ? new ProviderDocumentExtractionAdapter(ticketAiRuntime.priorityRunner, options.documentExtractionSchemas ?? documentExtractionSchemas)
+      : new ProvisionalExtractionAdapter()));
 
   const app = express();
   const fallbackRequestId = () => `req_${randomUUID().replace(/-/g, '')}`;
@@ -565,6 +587,36 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       });
     },
   );
+
+  app.post('/api/v1/documents/:documentId/extract-rules', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body ?? {}, ['retry']);
+    if (body.retry !== undefined && typeof body.retry !== 'boolean') throw validationError('retry', 'retry must be a boolean.');
+    const result = await documentKnowledge.extract(authenticated, routeParam(request, 'documentId'), body.retry === true);
+    response.setHeader('Cache-Control', 'no-store');
+    if (result.job.status === 'failed') throw new DocumentKnowledgeError(502, 'DOCUMENT_EXTRACTION_FAILED', 'Extraction failed; inspect document extraction history before an explicit retry.');
+    response.status(result.job.status === 'succeeded' ? 200 : 202).json({ data: result, requestId: requestId(response) });
+  });
+  app.get('/api/v1/documents/:documentId/extractions', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data: await documentKnowledge.history(authenticated, routeParam(request, 'documentId')), requestId: requestId(response) });
+  });
+  app.post('/api/v1/documents/:documentId/publish-knowledge', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['ruleIds', 'reason', 'effectiveFrom', 'effectiveTo', 'visibility']);
+    if (!Array.isArray(body.ruleIds) || !body.ruleIds.length || body.ruleIds.some(id => typeof id !== 'string' || !id.trim())) throw validationError('ruleIds', 'Select approved rule IDs.');
+    if (body.visibility !== 'administrators' && body.visibility !== 'support_staff') throw validationError('visibility', 'Choose administrators or support_staff explicitly.');
+    const result = await documentKnowledge.publish(authenticated, routeParam(request, 'documentId'), {
+      ruleIds: body.ruleIds as string[], reason: requiredText(body, 'reason'), effectiveFrom: requiredText(body, 'effectiveFrom'),
+      effectiveTo: optionalText(body, 'effectiveTo') ?? null, visibility: body.visibility,
+    });
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data: result, requestId: requestId(response) });
+  });
 
   app.post(
     '/api/v1/documents/:documentId/download-token',
@@ -1197,6 +1249,29 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     } catch (error) {
       throw ticketAiApiError(error);
     }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/triage', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!triageService || !ticketAiCategories) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    try {
+      const result = await triageService.analyze({ tenant: authenticated, ticketId: routeParam(request, 'ticketId'), categories: ticketAiCategories });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: result, requestId: requestId(response) });
+    } catch (error) { throw ticketAiApiError(error); }
+  });
+  app.get('/api/v1/tickets/:ticketId/ai-runs', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    if (!ticketAiRuntime) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    try {
+      const runs = await ticketAiRuntime.service.listWorkflowRuns(authenticated, routeParam(request, 'ticketId'));
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: runs, requestId: requestId(response) });
+    } catch (error) { throw ticketAiApiError(error); }
   });
 
   app.post('/api/v1/tickets/:ticketId/analyze', async (request, response) => {
@@ -2592,6 +2667,10 @@ const errorHandler: ErrorRequestHandler = (
         fields: [{ field: 'file', message: error.message }],
       },
     });
+    return;
+  }
+  if (error instanceof DocumentKnowledgeError) {
+    response.status(error.statusCode).json({ error: { code: error.code, message: error.message, requestId: id, fields: [] } });
     return;
   }
   if (error instanceof DocumentProcessingError) {

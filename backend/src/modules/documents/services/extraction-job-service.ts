@@ -5,7 +5,7 @@ import type { TenantContext } from '../../../shared/tenant.js';
 import type { ExtractionJobRecord } from '../domain/extraction-job.js';
 import { JsonDocumentRepository } from '../repositories/json-document.repository.js';
 import { InMemoryExtractionQueue } from '../queue/in-memory-extraction-queue.js';
-import type { JsonPolicyRepository } from '../../policies/repositories/json-policy.repository.js';
+import type { PolicyRepository } from '../../policies/repositories/policy.repository.js';
 
 export type ProcessDocumentInput = {
   tenant: TenantContext;
@@ -18,7 +18,7 @@ export type ProcessDocumentInput = {
 export class ExtractionJobService {
   constructor(
     private readonly store: JsonTenantStore,
-    private readonly policyRepository: JsonPolicyRepository,
+    private readonly policyRepository: PolicyRepository,
   ) {}
 
   async processDocument(input: ProcessDocumentInput): Promise<ExtractionJobRecord> {
@@ -28,10 +28,10 @@ export class ExtractionJobService {
       throw new Error('Document does not exist for this tenant.');
     }
 
-    const versions = await this.store.readCollection<{ id: string; documentId: string; organisationId: string }>('documentVersions');
+    const versions = await this.store.readCollection<{ id: string; documentId: string; organisationId: string; version: number }>('documentVersions');
     const version = versions
       .filter((item) => item.organisationId === input.tenant.organisationId)
-      .find((item) => item.documentId === document.id);
+      .find((item) => item.documentId === document.id && item.version === document.version);
     if (!version) {
       throw new Error('Document version does not exist for this tenant.');
     }
