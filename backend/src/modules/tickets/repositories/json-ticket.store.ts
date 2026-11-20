@@ -37,14 +37,24 @@ type PriorityOverrideAudit = {
   reason: string;
   businessJustification: string;
 };
+export type TicketChangeListener = (change: {
+  organisationId: string;
+  ticketId: string;
+}) => void;
 
 export class JsonTicketStore {
   private readonly ticketsPath: string;
   private readonly lockPath: string;
+  private readonly changeListeners = new Set<TicketChangeListener>();
 
   constructor(private readonly dataDirectory: string) {
     this.ticketsPath = join(dataDirectory, 'tickets.json');
     this.lockPath = join(dataDirectory, 'tickets.lock');
+  }
+
+  subscribeToTicketChanges(listener: TicketChangeListener): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
   }
 
   async upsertJiraTicket(ticket: NewTicket): Promise<[TicketRecord, JiraOutcome]> {
@@ -115,6 +125,7 @@ export class JsonTicketStore {
         }
         records[records.indexOf(existing)] = updated;
         await this.writeRecords(records);
+        this.notifyTicketChanged(updated);
         return [updated, 'updated'];
       }
 
@@ -139,6 +150,7 @@ export class JsonTicketStore {
       }
       records.push(created);
       await this.writeRecords(records);
+      this.notifyTicketChanged(created);
       return [created, 'created'];
     });
   }
@@ -197,6 +209,7 @@ export class JsonTicketStore {
       }
       records.push(created);
       await this.writeRecords(records);
+      this.notifyTicketChanged(created);
       return created;
     });
   }
@@ -277,6 +290,7 @@ export class JsonTicketStore {
       }
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
       return updated;
     });
   }
@@ -387,6 +401,7 @@ export class JsonTicketStore {
       }
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
       return updated;
     });
   }
@@ -439,6 +454,7 @@ export class JsonTicketStore {
       });
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
       return [updated, request];
     });
   }
@@ -506,6 +522,7 @@ export class JsonTicketStore {
       });
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
       return [updated, approvedRequest];
     });
   }
@@ -564,6 +581,9 @@ export class JsonTicketStore {
       }
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
+      if (recordAsSlaAcknowledgement) {
+        this.notifyTicketChanged(updated);
+      }
       return [updated, storedComment];
     });
   }
@@ -645,6 +665,7 @@ export class JsonTicketStore {
       const event = appendHistory(updated, action, tenant.userId, changes, now);
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
       return [updated, event];
     });
   }
@@ -721,6 +742,16 @@ export class JsonTicketStore {
         }
       }
     }
+  }
+
+  private notifyTicketChanged(
+    ticket: Pick<TicketRecord, 'organisationId' | 'id'>,
+  ): void {
+    const change = {
+      organisationId: ticket.organisationId,
+      ticketId: ticket.id,
+    };
+    for (const listener of this.changeListeners) listener(change);
   }
 
   private async readRecords(): Promise<TicketRecord[]> {
