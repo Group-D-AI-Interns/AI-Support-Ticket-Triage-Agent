@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import express, {
   type Express,
   type ErrorRequestHandler,
@@ -41,8 +41,23 @@ import {
   KnowledgeRetriever,
   type AuthorizedKnowledgeSource,
 } from '../knowledge/retrieval.js';
-import { ApprovedPolicyKnowledgeSource } from '../knowledge/approved-policy-source.js';
 import { ResolutionRecommendationService } from '../ai/resolution-recommendation.service.js';
+import type { AuthorizedRoutingSource, VerifiedSlaInsightSource } from '../ai/team-capability-ports.js';
+import { AiOperationsStore } from '../ai/operations-store.js';
+import { AiOperationsService, AiOperationsError } from '../ai/operations-service.js';
+import { operationsApi } from '../ai/operations-api.js';
+import { TriageJobs, automationFromEnvironment, type AutomationConfiguration } from '../ai/triage-jobs.js';
+import { createTriageWorker } from '../ai/triage-worker.js';
+import { aiDocumentation } from '../ai/ai-documentation.js';
+import { JsonTeamRepository } from '../teams/repositories.js';
+import { JsonFileStore } from '../../infrastructure/persistence/json/json-file-store.js';
+import { FreshVerifiedSlaSource } from '../ai/verified-sla-source.js';
+import { ProviderDocumentExtractionAdapter, type ApprovedExtractionSchemas } from '../ai/provider-document-extraction.adapter.js';
+import { documentExtractionSchemas } from '../ai/document-extraction-schemas.js';
+import { GovernedKnowledgeSource } from '../knowledge/published-knowledge.js';
+import type { ExtractionAdapter } from '../documents/services/extraction-adapter.js';
+import { ProvisionalExtractionAdapter } from '../documents/services/provisional-extraction-adapter.js';
+import { DocumentKnowledgeService, DocumentKnowledgeError } from '../documents/services/document-knowledge.service.js';
 import { JsonStorageError } from '../../infrastructure/persistence/json/json-file-store.js';
 
 import {
@@ -162,7 +177,12 @@ export type TicketAppOptions = {
   ticketAiLive?: LiveTicketAiConfiguration | null;
   priorityPreview?: PriorityPreviewConfiguration | null;
   resolutionRunner?: AiExecutionRunner;
+  aiAutomation?: AutomationConfiguration;
   knowledgeSource?: AuthorizedKnowledgeSource;
+  routingSource?: AuthorizedRoutingSource;
+  slaInsightSource?: VerifiedSlaInsightSource;
+  documentExtractionAdapter?: ExtractionAdapter;
+  documentExtractionSchemas?: ApprovedExtractionSchemas;
 };
 
 export function stopTicketApp(app: Express): void {
@@ -384,17 +404,81 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     )
     : null;
   const resolutionRunner = options.resolutionRunner ?? ticketAiRuntime?.priorityRunner;
+  const baseKnowledge = options.knowledgeSource ?? new GovernedKnowledgeSource(policyRepository, tenantStore, authorization);
+  let operations: AiOperationsService;
+  const knowledgeSource: AuthorizedKnowledgeSource = { async listAuthorizedDocuments(tenant) {
+    return [...await baseKnowledge.listAuthorizedDocuments(tenant), ...await operations.listAuthorizedDocuments(tenant)];
+  } };
   const resolutionService = resolutionRunner
     ? new ResolutionRecommendationService(
       ticketAiSource,
       new KnowledgeRetriever(
-        options.knowledgeSource ?? new ApprovedPolicyKnowledgeSource(policyRepository, tenantStore),
+        knowledgeSource,
       ),
       resolutionRunner,
     )
     : null;
 
+  const slaInsightSource = options.slaInsightSource ?? new FreshVerifiedSlaSource(slaEvaluationService,
+    async (tenant, ticketId) => {
+      const caller = tenant as DevelopmentPrincipal;
+      const ticket = await store.findTicket(tenant, ticketId);
+      if (!ticket || !Array.isArray(caller.teamIds) || !canAccessTicket(caller, ticket)) return null;
+      return { ticket: { id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: descriptionText(ticket.description) },
+        revision: createHash('sha256').update(JSON.stringify(ticket)).digest('hex'),
+        domain: { createdAt: ticket.createdAt, ...(ticket.priority === undefined ? {} : { priority: ticket.priority }), ...(ticket.teamId === undefined ? {} : { teamId: ticket.teamId }) } };
+    }, tenant => authorization.permissionsFor(tenant.roles).has('configuration.manage'));
+  const triageService = ticketAiRuntime?.createTriageService({ knowledge: knowledgeSource, sla: slaInsightSource,
+    ...(resolutionRunner ? { resolutionRunner } : {}),
+    ...(priorityConfig && priorityRunner ? { priority: new PriorityRecommender(priorityRunner, priorityConfig.candidate, priorityConfig.minimumConfidence) } : {}),
+    routing: options.routingSource ?? { getAuthorizedRoutingContext: (tenant, ticket) => operations.getAuthorizedRoutingContext(tenant, ticket) },
+  });
+  const operationFiles = new JsonFileStore(settings.dataDirectory);
+  const operationTeams = new JsonTeamRepository(operationFiles);
+  const canRunAi = (tenant: TenantContext) => ['tickets.ai.review', 'tickets.resolution.review'].every(permission =>
+    authorization.permissionsFor(tenant.roles).has(permission as Permission));
+  const resolveAiActor = async (organisationId: string, userId: string): Promise<TenantContext | null> => {
+    const tenant = options.tenantResolver ? await options.tenantResolver.resolve(userId, organisationId) :
+      principal?.organisationId === organisationId && principal.userId === userId ? principal : null;
+    if (!tenant || !canRunAi(tenant)) return null;
+    const teamIds = options.tenantResolver ? await options.listTeamIdsForUser?.(tenant, userId) ?? [] : principal?.teamIds ?? [];
+    return { ...tenant, teamIds } as DevelopmentPrincipal;
+  };
+  operations = new AiOperationsService(new AiOperationsStore(operationFiles), {
+    async ticket(tenant, id) {
+      const ticket = await store.findTicket(tenant, id);
+      const caller = tenant as DevelopmentPrincipal;
+      return ticket && Array.isArray(caller.teamIds) && canAccessTicket(caller, ticket) ? ticket : null;
+    },
+    project: ticket => ({ id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: descriptionText(ticket.description) }),
+    teams: tenant => operationTeams.listTeams(tenant),
+    can: (tenant, permission) => authorization.permissionsFor(tenant.roles).has(permission),
+    teamIds: tenant => (tenant as DevelopmentPrincipal).teamIds ?? [],
+    async isResolved(tenant, ticket) {
+      const policy = await slaEvaluationService.resolvePolicyForTicket(tenant, ticket);
+      return typeof ticket.status === 'string' && (policy?.resolvedStatuses.includes(ticket.status) ?? false);
+    },
+    categories: () => ticketAiCategories ?? [], knowledge: baseKnowledge,
+    ...(options.routingSource ? { routing: options.routingSource } : {}),
+    async triage(tenant, ticketId) {
+      if (!triageService || !ticketAiCategories) throw new AiOperationsError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+      return triageService.analyze({ tenant, ticketId, categories: ticketAiCategories });
+    },
+  });
+  const triageJobs = new TriageJobs(operations, resolveAiActor);
+  const worker = createTriageWorker(options.aiAutomation ?? automationFromEnvironment(), triageJobs, resolveAiActor, tenant => store.listTickets(tenant));
+  const notifyIntake = async (organisationId: string, ticketId: string, createdAt: string) => {
+    try { await worker.intake(organisationId, ticketId, createdAt); }
+    catch { console.warn('AI intake enqueue failed; background reconciliation will retry.'); }
+  };
+  const documentKnowledge = new DocumentKnowledgeService(tenantStore, policyRepository, attachmentStorage,
+    options.documentExtractionAdapter ?? (ticketAiLive && ticketAiRuntime
+      ? new ProviderDocumentExtractionAdapter(ticketAiRuntime.priorityRunner, options.documentExtractionSchemas ?? documentExtractionSchemas)
+      : new ProvisionalExtractionAdapter()));
+
   const app = express();
+  app.locals.aiWorker = worker;
+  app.use(aiDocumentation());
   const slaEvaluationWorker = options.slaEvaluationWorker
     ? new SlaEvaluationWorker(
         slaEvaluationService,
@@ -480,6 +564,12 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       }
     });
   }
+
+  app.use('/api/v1', operationsApi(operations, triageJobs, (request, permissions) => {
+    const caller = authenticatedPrincipal(request, principal);
+    for (const permission of permissions) requireSharedPermission(caller, authorization, permission);
+    return caller;
+  }, ticketAiRuntime?.evaluateSample));
 
   app.get('/api/v1/documents', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
@@ -592,6 +682,36 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       });
     },
   );
+
+  app.post('/api/v1/documents/:documentId/extract-rules', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body ?? {}, ['retry']);
+    if (body.retry !== undefined && typeof body.retry !== 'boolean') throw validationError('retry', 'retry must be a boolean.');
+    const result = await documentKnowledge.extract(authenticated, routeParam(request, 'documentId'), body.retry === true);
+    response.setHeader('Cache-Control', 'no-store');
+    if (result.job.status === 'failed') throw new DocumentKnowledgeError(502, 'DOCUMENT_EXTRACTION_FAILED', 'Extraction failed; inspect document extraction history before an explicit retry.');
+    response.status(result.job.status === 'succeeded' ? 200 : 202).json({ data: result, requestId: requestId(response) });
+  });
+  app.get('/api/v1/documents/:documentId/extractions', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data: await documentKnowledge.history(authenticated, routeParam(request, 'documentId')), requestId: requestId(response) });
+  });
+  app.post('/api/v1/documents/:documentId/publish-knowledge', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['ruleIds', 'reason', 'effectiveFrom', 'effectiveTo', 'visibility']);
+    if (!Array.isArray(body.ruleIds) || !body.ruleIds.length || body.ruleIds.some(id => typeof id !== 'string' || !id.trim())) throw validationError('ruleIds', 'Select approved rule IDs.');
+    if (body.visibility !== 'administrators' && body.visibility !== 'support_staff') throw validationError('visibility', 'Choose administrators or support_staff explicitly.');
+    const result = await documentKnowledge.publish(authenticated, routeParam(request, 'documentId'), {
+      ruleIds: body.ruleIds as string[], reason: requiredText(body, 'reason'), effectiveFrom: requiredText(body, 'effectiveFrom'),
+      effectiveTo: optionalText(body, 'effectiveTo') ?? null, visibility: body.visibility,
+    });
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data: result, requestId: requestId(response) });
+  });
 
   app.post(
     '/api/v1/documents/:documentId/download-token',
@@ -1145,6 +1265,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       },
       authenticated,
     );
+    await notifyIntake(ticket.organisationId, ticket.id, ticket.createdAt);
     response.status(201).json({
       data: ticketResponse(ticket),
       requestId: requestId(response),
@@ -1224,6 +1345,30 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     } catch (error) {
       throw ticketAiApiError(error);
     }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/triage', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!triageService || !ticketAiCategories) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    try {
+      const report = await operations.run(authenticated, routeParam(request, 'ticketId'));
+      const result = { ...(report.data.result as Record<string, unknown>), triageId: report.id };
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: result, requestId: requestId(response) });
+    } catch (error) { throw ticketAiApiError(error); }
+  });
+  app.get('/api/v1/tickets/:ticketId/ai-runs', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    if (!ticketAiRuntime) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    try {
+      const runs = await ticketAiRuntime.service.listWorkflowRuns(authenticated, routeParam(request, 'ticketId'));
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: runs, requestId: requestId(response) });
+    } catch (error) { throw ticketAiApiError(error); }
   });
 
   app.post('/api/v1/tickets/:ticketId/analyze', async (request, response) => {
@@ -1958,6 +2103,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           }
         : mappedTicket;
       const [stored, outcome] = await store.upsertJiraTicket(ticket);
+      if (outcome === 'created') await notifyIntake(organisationId, stored.id, stored.createdAt);
       response.status(outcome === 'created' ? 201 : 200).json({
         data: {
           id: stored.id,
@@ -2713,6 +2859,7 @@ function ticketNotFound(): ApiError {
 }
 
 function ticketAiApiError(error: unknown): unknown {
+  if (error instanceof AiOperationsError) return new ApiError(error.status, error.code, error.message);
   if (error instanceof TicketAiAnalysisError && error.code === 'TICKET_NOT_FOUND') {
     return ticketNotFound();
   }
@@ -2873,6 +3020,10 @@ const errorHandler: ErrorRequestHandler = (
         fields: [{ field: 'file', message: error.message }],
       },
     });
+    return;
+  }
+  if (error instanceof DocumentKnowledgeError) {
+    response.status(error.statusCode).json({ error: { code: error.code, message: error.message, requestId: id, fields: [] } });
     return;
   }
   if (error instanceof DocumentProcessingError) {

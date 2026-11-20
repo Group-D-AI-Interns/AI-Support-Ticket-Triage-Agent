@@ -2089,3 +2089,30 @@ Where the source documents are incomplete or contradictory, this guide marks the
 ---
 
 **End of document.**
+
+
+### AI completion integration status ? 20 November 2026
+
+The current Node/TypeScript implementation retains the existing LangGraph core and provider
+adapters. AI-owned routing governance, verified historical resolution retrieval, combined
+triage/reviewer history, labeled evaluation and durable processing jobs are implemented.
+The full triage endpoint is the current routing recommendation interface; the separately
+listed recommend-routing endpoint above remains a proposed convenience API. No shared
+/jobs API or teammate runtime has been introduced.
+
+AI operations use an atomic versioned ai-operations.json ledger alongside the existing
+core analysis/workflow and SLA files. The current ticket API provides authorized ticket
+projections and intake notifications; source lifecycle/permissions remain with their owners.
+The integrated server starts an explicitly opted-in AI worker, using server-resolved actor
+membership on every attempt. JSON jobs are application records, not LangGraph checkpoints.
+
+See the AI module README for the exact contracts, scope restrictions, evidence withdrawal,
+review behavior, test sequence and environment settings. The dedicated AI completion Postman
+collection and docs/api/ai-openapi.json describe the executable APIs; /api/v1/ai/docs serves
+local Swagger UI. Authentication/Keycloak and existing role capabilities are unchanged.
+
+The implementation supplies mechanisms, not business approval: real category/team mappings,
+reviewed resolutions, source visibility, evaluation acceptance thresholds, automatic processing
+account/budget/intake timestamp and storage retention remain team decisions. Automatic intake
+stays disabled until explicitly configured. No automatic ticket assignment, priority update,
+policy activation, customer-visible comment, closure or Jira writeback is performed.

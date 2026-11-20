@@ -58,3 +58,52 @@ Ticket classification, summarisation, priority preview and resolution recommenda
 - Olerato/Wandile: agree on extraction rule schemas, provider/model, evidence format and review thresholds; implement the provider-backed adapter.
 - Team: verify human-user login and tenant authorization in each development realm.
 - AI owners: keep live provider calls disabled in production until external data handling and provider configuration are approved.
+
+
+## Wandile AI completion checks (20 November 2026)
+
+The combined triage endpoint now persists a report and returns triageId. AI-owned APIs add
+approved routing rules, verified historical resolutions, immutable human review/quality labels,
+synthetic evaluation runs and leased background jobs. These reuse the existing ticket, knowledge,
+SLA, authorization, provider and LangGraph components. No AI ticket writeback or role expansion
+is included. The earlier extraction-adapter action above is superseded: provider-backed
+extraction already exists and is covered by the document/knowledge integration tests.
+
+Use the dedicated [AI completion Postman collection](../../postman/Wandile-AI-Completion.postman_collection.json)
+and [AI OpenAPI](ai-openapi.json). A running backend serves Swagger at `/api/v1/ai/docs`.
+The [AI module guide](../../backend/src/modules/ai/README.md) documents ordering, prerequisites,
+source revocation, review semantics, actor mappings, retries and evaluation limitations.
+
+Focused HTTP tests use signed synthetic tokens, local JWKS stubs, temporary JSON storage and
+the deterministic provider. They require no live Keycloak/Jira/LLM credentials. Run from backend/:
+
+```powershell
+npm run typecheck
+npm run build
+npm test
+```
+
+An automatic worker is disabled unless explicitly configured with an actor mapping and intake
+start timestamp. Manual queue/process endpoints exercise the same worker contract without
+changing environment flags. Tests establish integration and safeguards; real approved tenant
+mappings, reviewed resolutions, provider evaluation results and operational rollout remain
+team-owned acceptance work.
+
+
+Final completion verification:
+
+| Check | Result |
+|---|---|
+| Full regression suite | 197 passed, 0 failures; 11 suites. |
+| Source typecheck and complete TypeScript build | Passed. |
+| AI completion Postman artifact | 23 requests; JSON bodies parsed and test scripts compiled successfully. |
+| Combined OpenAPI artifact | 33 paths; internal component references resolve. |
+| Running backend liveness/readiness | Both 200 at 127.0.0.1:3000. |
+| Running Swagger/spec/local bundle | All 200. |
+| AI governance endpoint without credentials | 401. |
+| Whitespace check | git diff --check passed. |
+| Live provider/Jira calls for this completion change | None; real tenant/provider acceptance remains manual. |
+
+The full test log is local and ignored: backend/.local-data/ai-completion-final-tests.log.
+The backend was started for manual testing. Existing staged development-merge work remains
+preserved and the completion changes have not been committed.

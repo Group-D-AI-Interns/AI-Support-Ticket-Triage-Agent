@@ -7,6 +7,8 @@ import type { ExtractionAdapter } from '../services/extraction-adapter.js';
 import { validateExtractionAdapterResult } from '../services/extraction-adapter.js';
 import type { DocumentStorageAdapter } from '../storage/document-storage.js';
 import type { CandidateRuleService } from '../services/candidate-rule-service.js';
+import type { DocumentExtractionRecord } from '../services/document-processing.service.js';
+import type { DocumentRecord } from '../domain/document.js';
 import {
   LocalDocumentTextConverter,
   type DocumentTextConverter,
@@ -53,6 +55,7 @@ export class ExtractionWorker {
         !version
         || version.documentId !== document.id
         || version.organisationId !== tenant.organisationId
+        || version.version !== document.version
       ) {
         throw new PermanentExtractionError(
           'DOCUMENT_VERSION_NOT_FOUND',
@@ -133,12 +136,27 @@ export class ExtractionWorker {
         );
       }
 
+      const currentDocument = await this.documentRepository.getById(tenant, job.documentId);
+      if (!currentDocument || currentDocument.version !== version.version) {
+        throw new PermanentExtractionError('DOCUMENT_VERSION_CHANGED', 'The source document version changed during extraction.');
+      }
       await this.candidateRules.persistCandidateRules({
         tenant,
         policyId: job.policyId,
         policyVersionId: job.policyVersionId,
         executionId: job.executionId,
         rules: result.rules,
+      });
+
+      // Make worker extraction visible through the existing document detail/history API.
+      await this.store.withCollectionLock('documentExtractions', async () => {
+        const records = await this.store.readCollection<DocumentExtractionRecord>('documentExtractions');
+        const id = `document-extraction-${job.executionId}`;
+        if (!records.some(record => record.id === id && record.organisationId === tenant.organisationId)) {
+          records.push({ id, organisationId: tenant.organisationId, documentId: job.documentId,
+            documentVersionId: job.documentVersionId, createdAt: new Date().toISOString(), result });
+          await this.store.writeCollection('documentExtractions', records);
+        }
       });
 
       const completed = await this.queue.update(job.id, {
@@ -153,7 +171,7 @@ export class ExtractionWorker {
         return null;
       }
 
-      await this.documentRepository.updateStatus(tenant, job.documentId, 'processed', 'completed');
+      await this.updateJobDocument(tenant, job, 'processed', 'completed');
       return completed;
     } catch (error) {
       const retryable = !(error instanceof PermanentExtractionError);
@@ -184,12 +202,19 @@ export class ExtractionWorker {
       return null;
     }
 
-    await this.documentRepository.updateStatus(
-      tenant,
-      job.documentId,
+    await this.updateJobDocument(
+      tenant, job,
       shouldRetry ? 'processing' : 'failed',
       shouldRetry ? 'queued' : 'failed',
     );
     return updated;
+  }
+
+  private async updateJobDocument(tenant: TenantContext, job: ExtractionJobRecord, status: DocumentRecord['status'], processingStatus: DocumentRecord['processingStatus']) {
+    const document = await this.documentRepository.getById(tenant, job.documentId);
+    const version = await this.documentRepository.getVersionById(tenant, job.documentVersionId);
+    if (document && version && document.version === version.version) {
+      await this.documentRepository.updateStatus(tenant, document.id, status, processingStatus);
+    }
   }
 }

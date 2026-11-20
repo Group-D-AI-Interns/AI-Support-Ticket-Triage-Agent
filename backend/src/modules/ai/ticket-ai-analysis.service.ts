@@ -8,16 +8,10 @@ import type {
 import type { AiAnalysisRepository, AuthorizedTicketAnalysisSource } from './ports.js';
 import { TicketClassifier } from './components/ticket-classifier.js';
 import { TicketSummarizer } from './components/ticket-summarizer.js';
-
-export class TicketAiAnalysisError extends Error {
-  constructor(
-    readonly code: string,
-    message: string,
-  ) {
-    super(message);
-    this.name = 'TicketAiAnalysisError';
-  }
-}
+import { loadAuthorizedTicket } from './authorized-ticket.js';
+import { TicketAnalysisGraph } from './ticket-analysis.graph.js';
+import { AiExecutionError } from './ai-execution-runner.js';
+export { TicketAiAnalysisError } from './authorized-ticket.js';
 
 export type AnalyzeTicketInput = {
   tenant: TenantContext;
@@ -27,36 +21,39 @@ export type AnalyzeTicketInput = {
 };
 
 export class TicketAiAnalysisService {
+  private readonly workflow: TicketAnalysisGraph;
   constructor(
     private readonly ticketSource: AuthorizedTicketAnalysisSource,
-    private readonly classifier: TicketClassifier,
-    private readonly summarizer: TicketSummarizer,
+    classifier: TicketClassifier,
+    summarizer: TicketSummarizer,
     private readonly repository: AiAnalysisRepository,
-  ) {}
+  ) { this.workflow = new TicketAnalysisGraph(classifier, summarizer); }
 
   async analyze(input: AnalyzeTicketInput): Promise<TicketAiAnalysis> {
     const ticket = await this.getAuthorizedTicket(input.tenant, input.ticketId);
 
-    const classification = await this.classifier.classify({
+    const output = await this.workflow.run({
       ticket,
       categories: input.categories,
-    });
-    const summary = await this.summarizer.summarize({
-      ticket,
       ...(input.informationToCollect === undefined
         ? {}
         : { informationToCollect: input.informationToCollect }),
     });
+    await this.repository.saveWorkflowRun?.(input.tenant, { ...output.orchestration, organisationId: ticket.organisationId,
+      ticketId: ticket.id, initiatedBy: input.tenant.userId, executions: output.executions, failure: output.failure });
+    if (output.failure) throw new AiExecutionError(output.failure.code, 'AI analysis could not produce a valid result.', output.failure.executionId, output.failure.task);
+    if (!output.classification || !output.summary) throw new Error('Analysis graph did not produce its required outputs.');
 
     const analysis: TicketAiAnalysis = {
       id: `analysis_${randomUUID()}`,
       ticketId: ticket.id,
       organisationId: input.tenant.organisationId,
       status: 'completed',
-      classification: classification.result,
-      summary: summary.result,
-      executions: [classification.execution, summary.execution],
+      classification: output.classification,
+      summary: output.summary,
+      executions: output.executions,
       createdAt: new Date().toISOString(),
+      orchestration: output.orchestration,
     };
 
     await this.repository.save(input.tenant, analysis);
@@ -71,33 +68,15 @@ export class TicketAiAnalysisService {
     return this.repository.listForTicket(tenant, ticketId);
   }
 
+  async listWorkflowRuns(tenant: TenantContext, ticketId: string) {
+    await this.getAuthorizedTicket(tenant, ticketId);
+    return this.repository.listWorkflowRuns?.(tenant, ticketId) ?? [];
+  }
+
   private async getAuthorizedTicket(
     tenant: TenantContext,
     ticketId: string,
   ) {
-    if (!tenant?.organisationId || !tenant.userId) {
-      throw new TicketAiAnalysisError('INVALID_TENANT_CONTEXT', 'Trusted tenant context is required.');
-    }
-    if (!ticketId.trim()) {
-      throw new TicketAiAnalysisError('INVALID_TICKET_ID', 'Ticket ID is required.');
-    }
-
-    const ticket = await this.ticketSource.getAuthorizedTicket(tenant, ticketId);
-    if (!ticket) {
-      throw new TicketAiAnalysisError('TICKET_NOT_FOUND', 'Ticket not found.');
-    }
-    if (ticket.organisationId !== tenant.organisationId) {
-      throw new TicketAiAnalysisError(
-        'TICKET_TENANT_MISMATCH',
-        'Ticket source returned a ticket outside the trusted tenant.',
-      );
-    }
-    if (ticket.id !== ticketId || !ticket.title.trim() || typeof ticket.description !== 'string') {
-      throw new TicketAiAnalysisError(
-        'INVALID_TICKET_DATA',
-        'Ticket source returned an invalid AI ticket projection.',
-      );
-    }
-    return ticket;
+    return loadAuthorizedTicket(this.ticketSource, tenant, ticketId);
   }
 }

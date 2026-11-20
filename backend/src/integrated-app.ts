@@ -36,6 +36,10 @@ export function createIntegratedApp(
     tenantResolver: resolver,
     moduleHandler: modules,
   });
-  server.once('close', () => stopTicketApp(modules));
+  server.once('listening', () => modules.locals.aiWorker.start());
+  server.once('close', () => {
+    modules.locals.aiWorker.stop();
+    stopTicketApp(modules);
+  });
   return server;
 }

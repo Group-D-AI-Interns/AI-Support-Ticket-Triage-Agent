@@ -7,6 +7,7 @@ import { LlmProviderError, type StructuredGenerationProvider, type StructuredGen
 import { PriorityRecommender } from '../src/modules/ai/components/priority-recommender.js';
 import { PriorityRecommendationService } from '../src/modules/ai/priority-recommendation.service.js';
 import type { AiExecutionLogEvent } from '../src/modules/ai/ports.js';
+import type { TicketEvidence } from '../src/modules/ai/priority-contracts.js';
 
 const policy = JSON.parse(await readFile(new URL('../data/reference/candidates/priority-policy.json', import.meta.url), 'utf8'));
 const tenant = { organisationId: 'org-a', userId: 'agent', roles: ['support_agent'] };
@@ -54,6 +55,26 @@ test('missing, uncertain and low-confidence evidence produces no priority', asyn
     assert.equal(result.status, 'insufficient_information');
     assert.ok(result.missingInformation.length);
   }
+});
+
+test('supplies exact evidence offsets for Unicode, repeated sentences and whitespace without trusting model arithmetic', async () => {
+  const snapshot = { ...ticket, description: '  😀 Users blocked.\n Users blocked. Users blocked.  No workaround exists!  ' };
+  // Existing response deliberately declines; this test inspects the input contract.
+  const declined = fixture({ impact: assessment(null), urgency: assessment(null), missingInformation: ['Business impact'], warnings: [] });
+  await declined.recommender.recommend(snapshot);
+  const request = declined.requests[0]!;
+  const input = request.input as { ticket: { title: string; description: string }; evidenceOptions: TicketEvidence[] };
+  assert.match(request.instructions, /Copy a relevant evidence option verbatim/);
+  assert.ok(input.evidenceOptions.length > 1);
+  for (const option of input.evidenceOptions) {
+    assert.equal(option.ticketId, snapshot.id);
+    assert.equal(input.ticket[option.field].slice(option.start, option.end), option.excerpt);
+    assert.ok(option.excerpt.trim());
+  }
+  const repeated = input.evidenceOptions.filter(option => option.excerpt === 'Users blocked.');
+  assert.equal(repeated.length, 2);
+  assert.notEqual(repeated[0]!.start, repeated[1]!.start);
+  assert.equal(input.evidenceOptions.find(option => option.excerpt.startsWith('😀'))?.start, 2);
 });
 
 test('rejects fabricated, cross-ticket, out-of-range and unsupported evidence', async () => {

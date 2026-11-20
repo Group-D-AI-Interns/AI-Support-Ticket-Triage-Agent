@@ -6,6 +6,7 @@ import {
   type TicketClassificationCategory,
 } from '../contracts.js';
 
+export const CLASSIFICATION_PROMPT_VERSION = 'ticket-classification-v1';
 const CLASSIFICATION_INSTRUCTIONS = [
   'Classify the ticket using only one of the supplied category IDs.',
   'If the evidence does not support a configured category, return category null and require human review.',

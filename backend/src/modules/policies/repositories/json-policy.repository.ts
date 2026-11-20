@@ -145,6 +145,7 @@ export class JsonPolicyRepository implements PolicyRepository {
     const hasApproval = approvals.some(
       (approval) => approval.policyVersionId === versionId
         && approval.organisationId === tenant.organisationId
+        && !approval.extractedRuleId
         && approval.decision === 'approved',
     );
     if (status === 'approved' && !hasApproval) {
@@ -409,12 +410,14 @@ export class JsonPolicyRepository implements PolicyRepository {
         createdAt: timestamp,
         ...(effectiveFrom === undefined ? {} : { effectiveFrom }),
       };
-      const approvals = await this.store.readCollection<PolicyApprovalRecord>('policyApprovals');
-      if (approvals.some((item) => item.extractedRuleId === ruleId)) {
-        throw new Error('Candidate-rule approval record already exists.');
-      }
-      approvals.push(approval);
-      await this.store.writeCollection('policyApprovals', approvals);
+      await this.store.withCollectionLock('policyApprovals', async () => {
+        const approvals = await this.store.readCollection<PolicyApprovalRecord>('policyApprovals');
+        if (approvals.some((item) => item.organisationId === tenant.organisationId && item.extractedRuleId === ruleId)) {
+          throw new Error('Candidate-rule approval record already exists.');
+        }
+        approvals.push(approval);
+        await this.store.writeCollection('policyApprovals', approvals);
+      });
     }
 
     await this.writeAudit(tenant, `extracted_rule.${decision}`, 'policy_version', current.policyVersionId, {
