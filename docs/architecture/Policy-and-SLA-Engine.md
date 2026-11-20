@@ -79,10 +79,20 @@ The evaluation service resolves each ticket using:
 5. Persist evaluation inputs, result and policy version.
 6. Record at-risk and breached states for reporting.
 
-The current API exposes an administrator-triggered tenant batch evaluation.
-Automatic evaluation on ticket events and a scheduled worker are not yet wired.
-Notification/escalation actions require a separately agreed tenant policy
-contract.
+The API exposes an administrator-triggered tenant batch evaluation. The
+configured server also reevaluates tickets after relevant persisted ticket
+changes and sweeps active organisations on an in-process interval, five
+minutes by default (`SLA_EVALUATION_INTERVAL_MS`). Evaluation failures are
+logged; the next scheduled sweep retries eligible tickets. This worker is
+process-local and is not coordinated across multiple server instances, so it
+must not be treated as a durable or multi-instance job queue. Notification
+and escalation actions require a separately agreed tenant policy contract.
+Each successful evaluation appends a historical snapshot; retention or
+compaction is not configured and must be decided before high-volume use.
+Until a tenant retention rule is approved, the provisional development approach
+is to preserve snapshots and perform no automatic deletion. Escalation remains
+report-only at the configured risk/breach states; no outbound notifications are
+sent until owners approve contacts, actions and a delivery channel.
 
 ## 5. Governance
 
