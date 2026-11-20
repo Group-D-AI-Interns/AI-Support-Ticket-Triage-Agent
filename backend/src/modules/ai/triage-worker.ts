@@ -11,12 +11,13 @@ export function createTriageWorker(configuration: AutomationConfiguration, jobs:
   const cursors = new Map<string, number>();
   // Trusted injected test configurations default to this process's startup boundary.
   const createdAfter = Date.parse(configuration.createdAfter ?? new Date().toISOString());
+  const limits = { maxJobsPerDay: configuration.maxJobsPerDay ?? 10, maxAttemptsPerJob: configuration.maxAttemptsPerJob ?? 1 };
   async function intake(organisationId: string, ticketId: string, ticketCreatedAt = new Date().toISOString()) {
     if (!configuration.enabled || !(Date.parse(ticketCreatedAt) >= createdAfter)) return;
     const userId = configuration.actors[organisationId];
     if (!userId) return;
     const actor = await resolve(organisationId, userId);
-    if (actor) await jobs.enqueue(actor, ticketId, true);
+    if (actor) await jobs.enqueue(actor, ticketId, true, limits);
   }
   async function tick() {
     if (busy || stopped || !configuration.enabled) return;
@@ -31,7 +32,7 @@ export function createTriageWorker(configuration: AutomationConfiguration, jobs:
         const start = cursors.get(organisationId) ?? 0;
         for (const item of rows.slice(start, start + 50)) {
           if (stopped) return;
-          try { await jobs.enqueue(actor, item.id, true); }
+          try { await jobs.enqueue(actor, item.id, true, limits); }
           catch { /* Individual inaccessible tickets never stop other jobs. */ }
         }
         cursors.set(organisationId, start + 50 >= rows.length ? 0 : start + 50);

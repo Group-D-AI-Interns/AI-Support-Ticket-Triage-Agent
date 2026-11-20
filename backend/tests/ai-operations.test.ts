@@ -146,3 +146,28 @@ test('an administrator can disable a rule after its team or category is removed'
     assert.equal(disabled.data.status,'disabled');assert.equal(disabled.data.approvedBy,'admin');
   } finally {await f.close();}
 });
+
+test('automatic workload budget is atomic, deduplicated and resets on the next UTC day',async()=>{
+  const f=await fixture();
+  try{
+    let now=Date.now();const jobs=new TriageJobs(f.ops,async()=>f.tenant,1000,()=>now);
+    const limits={maxJobsPerDay:1,maxAttemptsPerJob:1};
+    const first=await jobs.enqueue(f.tenant,f.ticket.id,true,limits);
+    assert.equal(first.data.maxAttempts,1);
+    assert.equal((await jobs.enqueue(f.tenant,f.ticket.id,true,limits)).id,first.id);
+    f.ticket.description='Changed account access request';
+    const attempts=await Promise.allSettled([jobs.enqueue(f.tenant,f.ticket.id,true,limits),jobs.enqueue(f.tenant,f.ticket.id,true,limits)]);
+    assert.ok(attempts.every(result=>result.status==='rejected' && result.reason.code==='AI_DAILY_JOB_LIMIT_REACHED'));
+    assert.equal((await f.ops.store.list('org-a','job')).length,1);
+    now+=86400000;
+    assert.equal((await jobs.enqueue(f.tenant,f.ticket.id,true,limits)).data.status,'queued');
+  }finally{await f.close();}
+});
+
+test('enabled automation requires an explicit workload budget',()=>{
+  const base={AI_AUTOMATION_ENABLED:'true',AI_AUTOMATION_ACTORS:'{"org-a":"admin"}',AI_AUTOMATION_CREATED_AFTER:'2026-11-20T00:00:00.000Z'};
+  assert.throws(()=>automationFromEnvironment(base),/Explicitly configure/);
+  assert.throws(()=>automationFromEnvironment({...base,AI_AUTOMATION_MAX_JOBS_PER_DAY:'0',AI_AUTOMATION_MAX_ATTEMPTS_PER_JOB:'1'}));
+  const config=automationFromEnvironment({...base,AI_AUTOMATION_MAX_JOBS_PER_DAY:'10',AI_AUTOMATION_MAX_ATTEMPTS_PER_JOB:'1'});
+  assert.equal(config.maxJobsPerDay,10);assert.equal(config.maxAttemptsPerJob,1);
+});
