@@ -226,6 +226,7 @@ function createRunner(
   usesInceptionPrimary: boolean,
 ): AiExecutionRunner {
   const options: AiExecutionOptions = {
+    outputValidationRetries: 1,
     model,
     timeoutMs: usesInceptionPrimary
       ? maximumInceptionExecutionMs(configuration)

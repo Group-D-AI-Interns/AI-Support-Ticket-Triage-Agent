@@ -195,7 +195,10 @@ using swagger-ui-dist 5.35.1. Documentation is public; business endpoints retain
 tenant membership, permission and ticket/source checks. This does not change Keycloak.
 
 Import `postman/Wandile-AI-Completion.postman_collection.json`. Set collection variables:
-baseUrl, accessToken, organisationId, teamId and categoryId. Use an existing administrator
+baseUrl, accessToken, requesterAccessToken, organisationId, teamId and categoryId. The ticket
+creation request uses requesterAccessToken because tickets.create.own belongs to requesters;
+the remaining requests use the administrator accessToken. Both users need active membership
+in the selected organisation. Skip creation if using an existing accessible ticketId. Use an existing administrator
 for governance/evaluation; agent/lead testing uses their own tokens and current team membership.
 The numbered folders capture created IDs automatically:
 
@@ -256,6 +259,8 @@ AI_AUTOMATION_ENABLED=true
 AI_AUTOMATION_ACTORS={"your-organisation-id":"your-active-processing-user-id"}
 AI_AUTOMATION_CREATED_AFTER=2026-11-20T00:00:00.000Z
 AI_AUTOMATION_INTERVAL_MS=2000
+AI_AUTOMATION_MAX_JOBS_PER_DAY=10
+AI_AUTOMATION_MAX_ATTEMPTS_PER_JOB=1
 ```
 
 Use a deliberate timestamp to bound reconciliation; older tickets are excluded from scanning.
@@ -293,3 +298,72 @@ docs/architecture/AI_SUPPORT_TICKET_TRIAGE_AGENT_BACKEND_IMPLEMENTATION.md and
 postman/Wandile-AI-Completion.postman_collection.json. Existing merge changes and previously
 uncommitted SLA integration work are preserved separately; no commit or merge completion
 was performed.
+
+
+## Reliability and controlled local-pilot acceptance
+
+Live core classification/summarization now allow one regeneration after INVALID_OUTPUT.
+The existing runner, validators, graph nodes and provider adapters are retained. The retry
+uses the original instructions/input and a new execution ID; rejected output is never fed
+back as instructions or accepted after a second invalid response. Successful metadata stores
+validationRetryOf, the total provider-attempt count and elapsed duration. Transport failures
+continue to follow their existing retry rules. Resolution, priority and document extraction
+do not gain this core-output regeneration behavior. Configuration changes require a backend
+restart; no ignored environment settings were changed by this implementation.
+
+`data/evaluation/triage-v2.json` expands the starter set to twelve synthetic cases. Run two
+rounds from backend/ using the configured live providers:
+
+```powershell
+node --env-file=.env --import tsx scripts/evaluate-live-ai.ts 2
+```
+
+This makes real provider calls using synthetic data only and preserves all outcomes under
+.local-data/reliability-*/. It does not rewrite prior failures. Reports separate first-pass
+completion, recovered cases, terminal failures and category accuracy over all samples. Phrase
+checks and summary-fact coverage are proxies; no semantic-groundedness score is invented.
+The local engineering gate proposes 100% completion, at least 90% first-pass completion,
+at least 90% category accuracy over all cases and zero prohibited phrase hits. These are
+starter acceptance thresholds requiring team review before production use.
+
+The verified 20 November run completed 24/24 samples with correct expected categories;
+23/24 completed on the first pass, one recovered after validation failure, and zero prohibited
+phrase hits were observed. This is a small synthetic test, not a production accuracy guarantee.
+
+`data/reference/candidates/ai-pilot-rollout.json` records the proposed rollout and Wandile's
+approval of Account Support / ACCOUNT_ACCESS, Billing Support / BILLING and a local workload
+limit of ten new automatic jobs per organisation per UTC day with one job attempt. Real
+team/rule IDs are filled only after authenticated API creation. Source contract targets,
+processing account, activation timestamp and monetary provider budget are separate decisions.
+Do not treat the candidate or a fixture approval as an active operational policy.
+
+Automatic job reservations enforce the daily limit atomically in the JSON ledger. Duplicate
+reservations reuse the original job without spending another slot; failed jobs still consume
+their reservation. Legacy jobs without an automatic/manual marker count conservatively.
+Manual user-triggered processing is separate from the automatic workload limit. No currency
+cap is claimed: per-task calls, validation regeneration, provider retries/fallback and token
+usage affect cost. Provider account spending controls require an explicit monetary budget.
+Automation remains off until configured with approved actor/start date and both workload
+limit variables. These controls do not grant the actor new ticket or SLA permissions.
+
+For live acceptance using existing approved application records, copy
+`data/evaluation/ai-acceptance-input.example.json` to `.local-data/ai-acceptance-input.json`
+and replace every placeholder with real IDs. The target must be a legitimate requester
+submission; the historical ticket must be a different, resolved ticket with reviewed,
+currently visible resolution evidence. Set an effective approved routing rule and SLA policy
+through their existing APIs. Keep the administrator access token in the ignored local file.
+Then run:
+
+```powershell
+node --import tsx scripts/test-ai-acceptance.ts
+```
+
+This checks current identity/access, historical retrieval, full triage, routing and Faith's
+verified SLA, combined history, review recording, leased/idempotent processing and unchanged
+ticket data. It records needs_information rather than fabricating a human acceptance, and
+fails the full guidance gate if resolution evidence is insufficient. It never provisions
+users, changes permissions, activates policy, assigns tickets or closes them. Results are
+written to .local-data/ai-acceptance-results.json without tokens or source ticket content.
+The complete HTTP integration suite also exercises this joined workflow using isolated
+fixture users, requester submissions, recorded resolution evidence and synthetic policy
+approvals; those fixture approvals are not approvals for your local organisation.

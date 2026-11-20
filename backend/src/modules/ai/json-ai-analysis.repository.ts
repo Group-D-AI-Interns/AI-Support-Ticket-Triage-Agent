@@ -24,6 +24,7 @@ function isAnalyses(value: unknown): value is JsonEnvelope<TicketAiAnalysis> {
         typeof execution.provider === 'string' && execution.provider.trim() &&
         typeof execution.model === 'string' && execution.model.trim() &&
         Number.isInteger(execution.attempts) && execution.attempts > 0 &&
+        (execution.validationRetryOf === undefined || (typeof execution.validationRetryOf === 'string' && !!execution.validationRetryOf.trim() && execution.validationRetryOf !== execution.executionId)) &&
         Number.isFinite(execution.durationMs) && execution.durationMs >= 0 &&
         Number.isFinite(Date.parse(execution.startedAt)) && Number.isFinite(Date.parse(execution.completedAt)));
     } catch { return false; }

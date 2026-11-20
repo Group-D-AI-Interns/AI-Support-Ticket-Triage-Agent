@@ -17,6 +17,7 @@ export const orchestrationSchema = z.strictObject({
   promptVersions: z.strictObject({ classification: text, summarization: text }).optional(),
 });
 const execution = z.strictObject({ executionId: text, task: z.enum(['ticket_classification', 'ticket_summarization']), status: z.literal('completed'),
+  validationRetryOf: text.optional(),
   provider: text, model: text, attempts: z.number().int().positive(), durationMs: z.number().finite().nonnegative(), startedAt: timestamp, completedAt: timestamp });
 const runSchema = orchestrationSchema.extend({
   organisationId: text, ticketId: text, initiatedBy: text, executions: z.array(execution).max(2),

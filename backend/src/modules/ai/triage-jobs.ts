@@ -9,7 +9,10 @@ export class TriageJobs {
   constructor(private readonly operations: AiOperationsService,
     private readonly resolveActor: (organisationId: string, userId: string) => Promise<TenantContext | null>,
     private readonly leaseMs = 300_000, private readonly clock = () => Date.now()) {}
-  async enqueue(tenant: TenantContext, ticketId: string, automatic = false) {
+  async enqueue(tenant: TenantContext, ticketId: string, automatic = false,
+    limits = { maxJobsPerDay: 10, maxAttemptsPerJob: 1 }) {
+    if (!Number.isInteger(limits.maxJobsPerDay) || limits.maxJobsPerDay < 1 || limits.maxJobsPerDay > 1000 ||
+      !Number.isInteger(limits.maxAttemptsPerJob) || limits.maxAttemptsPerJob < 1 || limits.maxAttemptsPerJob > 3) throw new Error('Invalid automatic job budget.');
     const actor = await this.resolveActor(tenant.organisationId, tenant.userId);
     if (!actor) throw new AiOperationsError(403, 'AI_ACTOR_UNAVAILABLE', 'The processing user is not currently authorized.');
     const ticket = await this.operations.ticket(actor, ticketId);
@@ -18,10 +21,13 @@ export class TriageJobs {
     const id = automatic ? `job_${createHash('sha256').update(key).digest('hex')}` : `job_${randomUUID()}`;
     const now = new Date(this.clock()).toISOString();
     const job: OfKind<'job'> = { id, kind: 'job', organisationId: tenant.organisationId, actorId: tenant.userId, createdAt: now, updatedAt: now,
-      data: { ticketId, snapshotHash, status: 'queued', attempts: 0, maxAttempts: 3, availableAt: now, leaseUntil: null, leaseToken: null, reportId: null, errorCode: null } };
+      data: { ticketId, snapshotHash, automatic, status: 'queued', attempts: 0, maxAttempts: automatic ? limits.maxAttemptsPerJob : 3, availableAt: now, leaseUntil: null, leaseToken: null, reportId: null, errorCode: null } };
     return this.operations.store.change(rows => {
       const existing = rows.find(item => item.kind === 'job' && item.id === id && item.organisationId === tenant.organisationId);
       if (existing) return existing as OfKind<'job'>;
+      if (automatic && rows.filter(row => row.kind === 'job' && row.organisationId === tenant.organisationId && row.data.automatic !== false && row.createdAt.slice(0, 10) === now.slice(0, 10)).length >= limits.maxJobsPerDay) {
+        throw new AiOperationsError(429, 'AI_DAILY_JOB_LIMIT_REACHED', 'The organisation automatic-job budget for this UTC day is exhausted.');
+      }
       rows.push(job); return job;
     });
   }
@@ -85,7 +91,7 @@ export class TriageJobs {
   }
 }
 
-export type AutomationConfiguration = { enabled: boolean; actors: Record<string, string>; intervalMs: number; createdAfter?: string };
+export type AutomationConfiguration = { enabled: boolean; actors: Record<string, string>; intervalMs: number; createdAfter?: string; maxJobsPerDay?: number; maxAttemptsPerJob?: number };
 export function automationFromEnvironment(environment: NodeJS.ProcessEnv = process.env): AutomationConfiguration {
   if (environment.AI_AUTOMATION_ENABLED === undefined || environment.AI_AUTOMATION_ENABLED === 'false') return { enabled: false, actors: {}, intervalMs: 2_000 };
   if (environment.AI_AUTOMATION_ENABLED !== 'true') throw new Error('AI_AUTOMATION_ENABLED must be true or false.');
@@ -95,5 +101,8 @@ export function automationFromEnvironment(environment: NodeJS.ProcessEnv = proce
   if (!Number.isInteger(intervalMs) || intervalMs < 1_000 || intervalMs > 60_000) throw new Error('AI_AUTOMATION_INTERVAL_MS must be 1000..60000.');
   const createdAfter = environment.AI_AUTOMATION_CREATED_AFTER;
   if (!createdAfter || !Number.isFinite(Date.parse(createdAfter)) || !/^\d{4}-\d{2}-\d{2}T/.test(createdAfter)) throw new Error('AI_AUTOMATION_CREATED_AFTER must explicitly bound intake with an ISO timestamp.');
-  return { enabled: true, actors: actors as Record<string, string>, intervalMs, createdAfter };
+  const maxJobsPerDay = Number(environment.AI_AUTOMATION_MAX_JOBS_PER_DAY);
+  const maxAttemptsPerJob = Number(environment.AI_AUTOMATION_MAX_ATTEMPTS_PER_JOB);
+  if (!Number.isInteger(maxJobsPerDay) || maxJobsPerDay < 1 || maxJobsPerDay > 1000 || !Number.isInteger(maxAttemptsPerJob) || maxAttemptsPerJob < 1 || maxAttemptsPerJob > 3) throw new Error('Explicitly configure AI_AUTOMATION_MAX_JOBS_PER_DAY (1..1000) and AI_AUTOMATION_MAX_ATTEMPTS_PER_JOB (1..3).');
+  return { enabled: true, actors: actors as Record<string, string>, intervalMs, createdAfter, maxJobsPerDay, maxAttemptsPerJob };
 }

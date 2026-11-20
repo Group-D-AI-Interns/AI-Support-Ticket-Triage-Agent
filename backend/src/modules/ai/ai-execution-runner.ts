@@ -16,6 +16,7 @@ export type AiExecutionOptions = {
   model: string;
   timeoutMs: number;
   maxRetries: number;
+  outputValidationRetries?: 0 | 1;
 };
 
 export class AiExecutionError extends Error {
@@ -24,6 +25,7 @@ export class AiExecutionError extends Error {
     message: string,
     readonly executionId: string,
     readonly task: AiTask,
+    readonly attempts = 1,
   ) {
     super(message);
     this.name = 'AiExecutionError';
@@ -45,6 +47,7 @@ export class AiExecutionRunner {
     if (!Number.isInteger(options.maxRetries) || options.maxRetries < 0) {
       throw new Error('AI maxRetries must be a non-negative integer.');
     }
+    if (options.outputValidationRetries !== undefined && ![0, 1].includes(options.outputValidationRetries)) throw new Error('outputValidationRetries must be 0 or 1.');
   }
 
   async execute<T>(
@@ -53,6 +56,20 @@ export class AiExecutionRunner {
     input: unknown,
     validate: (output: unknown) => T,
   ): Promise<{ result: T; execution: AiTaskExecution }> {
+    const startedAt = new Date();
+    try { return await this.executeOnce(task, instructions, input, validate); }
+    catch (error) {
+      const eligible = task === 'ticket_classification' || task === 'ticket_summarization';
+      if (!eligible || this.options.outputValidationRetries !== 1 || !(error instanceof AiExecutionError) || error.code !== 'INVALID_OUTPUT') throw error;
+      // Regenerate from original trusted instructions/data. Never feed rejected model text back as instructions.
+      const retry = await this.executeOnce(task, instructions, input, validate);
+      return { ...retry, execution: { ...retry.execution, attempts: retry.execution.attempts + error.attempts,
+        startedAt: startedAt.toISOString(), durationMs: Date.now() - startedAt.getTime(), validationRetryOf: error.executionId } };
+    }
+  }
+
+  private async executeOnce<T>(task: AiTask, instructions: string, input: unknown,
+    validate: (output: unknown) => T): Promise<{ result: T; execution: AiTaskExecution }> {
     const executionId = `exec_${randomUUID()}`;
     const startedAt = new Date();
     const startTime = Date.now();
@@ -97,6 +114,7 @@ export class AiExecutionRunner {
           providerError.message,
           executionId,
           task,
+          attempts,
         );
       }
     }
@@ -124,6 +142,7 @@ export class AiExecutionRunner {
         'The AI provider returned invalid execution metadata.',
         executionId,
         task,
+        attempts,
       );
     }
 
@@ -149,6 +168,7 @@ export class AiExecutionRunner {
           : 'The AI provider output failed validation.',
         executionId,
         task,
+        attempts,
       );
     }
 

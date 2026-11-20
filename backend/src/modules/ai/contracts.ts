@@ -33,6 +33,7 @@ export type TicketSummary = {
 };
 
 export type AiTaskExecution = {
+  validationRetryOf?: string;
   executionId: string;
   task: AiTask;
   status: 'completed';
