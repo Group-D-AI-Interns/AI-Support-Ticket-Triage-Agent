@@ -4,7 +4,7 @@ import { JsonFileStore } from './infrastructure/persistence/json/json-file-store
 import { IdentityService } from './modules/identity/service.js';
 import { JsonIdentityRepository } from './modules/identity/repositories.js';
 import { JsonTeamRepository } from './modules/teams/repositories.js';
-import { createTicketApp, type TicketAppOptions } from './modules/tickets/api.js';
+import { createTicketApp, stopTicketApp, type TicketAppOptions } from './modules/tickets/api.js';
 import { jiraSettingsFromEnvironment } from './modules/tickets/config.js';
 import { JsonAiAnalysisRepository } from './modules/ai/json-ai-analysis.repository.js';
 
@@ -31,8 +31,15 @@ export function createIntegratedApp(
     listTeamIdsForUser: (tenant, userId) => teams.listTeamIdsForUser(tenant, userId),
     ...(dependencies.authorization ? { authorization: dependencies.authorization } : {}),
   });
-  const server = createApp(environment, { ...dependencies, tenantResolver: resolver, moduleHandler: modules });
-  server.on('listening', () => modules.locals.aiWorker.start());
-  server.on('close', () => modules.locals.aiWorker.stop());
+  const server = createApp(environment, {
+    ...dependencies,
+    tenantResolver: resolver,
+    moduleHandler: modules,
+  });
+  server.once('listening', () => modules.locals.aiWorker.start());
+  server.once('close', () => {
+    modules.locals.aiWorker.stop();
+    stopTicketApp(modules);
+  });
   return server;
 }

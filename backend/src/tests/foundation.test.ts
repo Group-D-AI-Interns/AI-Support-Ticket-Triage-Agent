@@ -69,6 +69,8 @@ describe("environment configuration", () => {
   it("rejects invalid ports and JSON lock timeout values", () => {
     assert.throws(() => loadEnvironment({ PORT: "70000" }), /PORT/);
     assert.throws(() => loadEnvironment({ JSON_WRITE_LOCK_TIMEOUT_MS: "0" }), /JSON_WRITE_LOCK_TIMEOUT_MS/);
+    assert.equal(loadEnvironment({}).slaEvaluationIntervalMs, 300000);
+    assert.throws(() => loadEnvironment({ SLA_EVALUATION_INTERVAL_MS: "0" }), /SLA_EVALUATION_INTERVAL_MS/);
   });
 
   it("requires issuer and audience when Keycloak mode is enabled", () => {
