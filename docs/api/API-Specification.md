@@ -103,8 +103,11 @@ action.
 | POST | `/documents/:documentId/process` | Process a UTF-8 text source for candidate SLA evidence |
 | POST | `/documents/:documentId/download-token` | Create a short-lived source download token |
 | GET | `/documents/download/:token` | Download a source using a tenant-scoped token |
+| GET | `/extracted-rules` | List extracted candidates for administrator review |
+| GET | `/extracted-rules/:id` | Read one extracted candidate |
 | POST | `/extracted-rules/:id/approve` | Approve candidate rule |
 | POST | `/extracted-rules/:id/reject` | Reject candidate rule |
+| POST | `/extracted-rules/:id/request-changes` | Return a candidate for changes with a reason |
 | GET/POST | `/policies` | List/create policies |
 | GET | `/policies/:id/versions` | List policy versions |
 | POST | `/policies/:id/activate` | Activate approved version |
@@ -136,7 +139,7 @@ action.
 | POST | `/tickets/:id/approve` | Approve proposed action |
 | POST | `/tickets/:id/reject` | Reject proposed action |
 | GET | `/tickets/:id/audit` | Ticket audit history |
-| GET | `/reports` | Available authorised reports |
+| GET | `/reports` | Read authorised organisation-wide or active-team-scoped operational aggregates |
 | GET | `/audit-logs` | Search permitted audit records |
 | GET | `/jobs/:jobId` | Check asynchronous job status |
 
@@ -150,7 +153,7 @@ Ticket, document, SLA, reporting and workflow endpoints use the shared Keycloak 
 
 Permission IDs in responses describe the shared policy for clients; they do not replace server-side authorization. Unknown roles receive no permissions, client-supplied permissions are rejected, and all access remains subject to active membership and resource/team scope.
 
-Document routes use `documents.read` or `documents.manage`; SLA policy routes use `policies.read`, `policies.manage`, `policies.approve`, or `policies.activate`. These grants currently belong only to `organisation_admin`. Extracted candidate records are generated and persisted, but a candidate-review API is not yet exposed; `policies.candidates.review` is reserved for that workflow.
+Document routes use `documents.read` or `documents.manage`; SLA policy routes use `policies.read`, `policies.manage`, `policies.approve`, or `policies.activate`. These grants currently belong only to `organisation_admin`. The extracted-candidate list, detail, approve, reject and request-changes routes are mounted on the integrated API and are restricted to active organisation administrators.
 
 ## 3. Example ticket creation
 
@@ -297,9 +300,9 @@ The unified backend uses the shared Keycloak bearer-token verifier and resolves 
 
 Every ticket, document, SLA, reporting, and workflow request must include `Authorization: Bearer <access-token>` and `X-Organisation-ID: <organisation-id>`. The organisation header only selects a tenant; backend membership records supply the roles and active team memberships. A user without active membership is denied. The Jira webhook remains authenticated with its per-organisation URL secret.
 
-Use `tickets.create.own` to create tickets. Ticket reads apply tenant, requester, and team scope. `tickets.audit.read` controls audit access; `tickets.approve` is required for reopen approvals; `reports.read.all` is required by the current organisation-wide report endpoint. Ticket workflow administration requires `configuration.manage`. Team assignment requires `tickets.routing.manage` and an allowed team membership.
+Use `tickets.create.own` to create tickets. Ticket reads apply tenant, requester, and team scope. `tickets.audit.read` controls audit access; `tickets.approve` is required for reopen approvals. Reports require `reports.read.all` for organisation-wide aggregates or `reports.read.team` for aggregates limited to the caller's active teams. Ticket workflow administration requires `configuration.manage`. Team assignment requires `tickets.routing.manage`; organisation administrators may assign to any existing team in their tenant, while other callers must belong to the target team.
 
-The shared permission catalogue does not yet define permissions for ticket status changes, reopen requests, general ticket edits, comments, or attachments. Those routes retain workflow/ownership checks and need team approval of their write capabilities before their RBAC contract is considered complete. `reports.read.team` is not granted access to the current organisation-wide report result; a team-filtered reporting contract is needed before using it.
+The shared permission catalogue does not yet define permissions for ticket status changes, reopen requests, general ticket edits, comments, or attachments. Those routes retain workflow/ownership checks and need team approval of their write capabilities before their RBAC contract is considered complete.
 
 See `docs/architecture/Role-Capability-Matrix.md` for the complete role grants, enforced endpoint mappings, and capability gaps.
 

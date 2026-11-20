@@ -131,12 +131,12 @@ becomes an explicitly uncertain candidate. Safe retryable/terminal failures foll
 existing batch envelope. Exact quotations do not prove semantic correctness of a rule;
 candidate review and evaluation are still required.
 
-Olerato's default document processor remains unchanged and still uses the provisional adapter.
-Her integration step is to agree the actual payload schemas and provider/data policy, then
-inject this adapter through the existing processor/worker dependencies. No interface redesign
-is needed; an explicit `ExtractionAdapter` annotation keeps composition clear. No automatic
-policy activation, ticket mutation, assignment, closure, customer comment or Jira writeback
-was added. PDF/DOCX/TXT conversion remains a separate existing component; OCR is not added.
+The integrated API injects this adapter for direct document processing and policy-bound
+extraction when live ticket AI is enabled. Demo/offline and standalone processing retain the
+provisional adapter. Confirm approved payload schemas, provider/model and data-handling policy
+before enabling real-document provider calls. No interface redesign is needed; no automatic
+policy activation, ticket mutation, assignment, closure, customer comment or Jira writeback was
+added. PDF/DOCX/TXT conversion remains a separate existing component; OCR is not added.
 
 ## Verification
 
@@ -213,8 +213,9 @@ Administrators can upload a TXT/PDF/DOCX file, call
 `POST /api/v1/documents/:documentId/extract-rules`, inspect candidates through
 `GET /api/v1/extracted-rules`, then approve or reject individual candidates.
 Live AI configuration selects the provider-backed extractor for this explicit extraction
-command; demo/offline mode uses provisional extraction. The existing `/process` behavior
-is preserved. Extraction creates draft candidates, not an active knowledge publication.
+command; direct document processing uses the same adapter. Both flows use the configured
+extraction schemas and provider runner in live mode, while demo/offline mode uses provisional
+extraction. Extraction creates draft candidates, not an active knowledge publication.
 
 After reviewing candidates, an administrator explicitly calls
 `POST /api/v1/documents/:documentId/publish-knowledge` with `ruleIds`, `reason`,

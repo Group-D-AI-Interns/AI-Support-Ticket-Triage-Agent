@@ -16,11 +16,19 @@ export class OperationalReportingService {
     tenant: TenantContext,
     from: string,
     to: string,
+    teamIds?: readonly string[],
   ): Promise<OperationalReport> {
-    const [tickets, evaluations] = await Promise.all([
+    const [tenantTickets, tenantEvaluations] = await Promise.all([
       this.tickets.listTickets(tenant),
       this.evaluations.list(tenant),
     ]);
+    const tickets = teamIds === undefined
+      ? tenantTickets
+      : tenantTickets.filter((ticket) => typeof ticket.teamId === 'string' && teamIds.includes(ticket.teamId));
+    const ticketIds = new Set(tickets.map((ticket) => ticket.id));
+    const evaluations = teamIds === undefined
+      ? tenantEvaluations
+      : tenantEvaluations.filter((evaluation) => ticketIds.has(evaluation.ticketId));
     return buildOperationalReport(tickets, evaluations, from, to);
   }
 }

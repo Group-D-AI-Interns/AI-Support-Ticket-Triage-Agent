@@ -6,7 +6,7 @@
 - Carry document and document-version provenance, evidence, confidence, ambiguity, and human-review flags on each candidate rule.
 - Store provider/model and timing metadata on the extraction job.
 - Bind each extraction job to a policy and policy version before it runs; reject missing or mismatched targets.
-- Support `text/plain` `.txt` documents in this integration. PDF and Word extraction remain deferred because no text extraction adapter is installed.
+- Convert supported TXT, PDF, and DOCX uploads to text and evidence segments before provider extraction.
 - Retry thrown/transient failures only up to the job's `maxAttempts`; adapter-reported non-retryable failures and unsupported document formats fail without retry.
 - `ProvisionalExtractionAdapter` remains a local deterministic placeholder. Do not treat it as an approved LLM provider.
 
@@ -35,10 +35,16 @@
 - **Created:** `docs/architecture/AI-Extraction-Adapter-Integration-Log.md`.
 - **Validation:** `npm test` passed **34/34**. `git diff --check` passed. `npx tsc --noEmit` remains blocked by `TS2688` because `@types/node` is missing; no dependency manifests were changed.
 
+### Entry 004 — Shared live-provider wiring
+
+- **Modified:** `backend/src/modules/tickets/api.ts` to resolve one extraction adapter for both direct document processing and policy-bound candidate extraction.
+- Live ticket-AI mode uses `ProviderDocumentExtractionAdapter` with Wandile's configured classification runner and the approved `documentExtractionSchemas`; demo/offline mode retains `ProvisionalExtractionAdapter`.
+- Both routes preserve the same validated output contract, exact-quotation evidence checks, source document/version provenance, and human-review requirement. Extraction does not publish or activate policy.
+- **Validation:** Integrated API coverage verifies that `/api/v1/documents/:documentId/process` invokes the configured provider adapter. The provider test uses a deterministic fake and makes no live external request.
+
 ## Remaining limitations
 
-- The provisional extractor is regex-based; no production provider is selected or integrated.
-- Only UTF-8 plain-text `.txt` files are supported by this worker path. PDF/DOC/DOCX uploads must not be sent through it.
+- Live provider calls remain opt-in through the existing development-only ticket-AI configuration; approved credentials, provider, and model must be configured before real documents are sent externally.
+- Demo/offline mode continues to use the deterministic provisional extractor.
 - The confidence review threshold remains the provisional `0.7` rule and is not calibrated.
-- There is no job-creation API/composition root in this change; callers enqueue jobs with a trusted tenant, document version, policy ID, and policy-version ID.
-- Candidate persistence uses the existing JSON store, whose broader concurrency and read-error behavior remains unchanged.
+- Provider output remains a draft candidate requiring human review; it is not an approval or publication.

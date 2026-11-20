@@ -121,6 +121,26 @@ async function createFixture(options: {
 } = {}) {
   const root = options.root ?? (await mkdtemp(join(tmpdir(), 'ticket-api-')));
   const fixtureSettings = { ...settings, dataDirectory: root };
+  if (options.root === undefined) {
+    const timestamp = new Date().toISOString();
+    await writeFile(
+      join(root, 'teams.json'),
+      JSON.stringify({
+        schemaVersion: 1,
+        records: [
+          {
+            id: 'team_support',
+            organisationId: 'org_support',
+            departmentId: null,
+            name: 'Support',
+            createdAt: timestamp,
+            updatedAt: timestamp,
+          },
+        ],
+      }),
+      'utf8',
+    );
+  }
   const app = createTicketApp({
     settings: fixtureSettings,
     ticketStore: new JsonTicketStore(root),

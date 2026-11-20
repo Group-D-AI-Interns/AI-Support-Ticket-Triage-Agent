@@ -53,8 +53,9 @@ tests/isolated demos. Do not use those standalone defaults as the production ent
 
 The AI-owned `ProviderDocumentExtractionAdapter` now implements the existing document
 batch port, validates configured payload schemas and exact quotations, and requires human
-review. Olerato's default processing path still uses the provisional adapter until she
-approves schemas and wiring; TXT/PDF/DOCX text conversion is separate from model extraction.
+review. The integrated API injects it into direct document processing and policy-bound
+extraction when live ticket AI is enabled. Demo/offline and standalone processing retain
+the provisional adapter. TXT/PDF/DOCX text conversion is separate from model extraction.
 Mistral embeddings remain an adapter, without a persistent semantic index. Real historical
 sources, background jobs, durable aggregate triage/reviewer outcomes and broader model
 evaluation remain further work. No checkpoint persistence is enabled.

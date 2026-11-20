@@ -16,7 +16,7 @@ const now = new Date().toISOString();
 const dates = { createdAt: now, updatedAt: now };
 await store.write('organisations.json', { schemaVersion: 1, records: [{ id: 'org_demo', name: 'Demo Support', status: 'active', settings: {}, ...dates }] });
 await store.write('users.json', { schemaVersion: 1, records: [{ id: 'demo_admin', email: 'admin@example.test', displayName: 'Demo Administrator', status: 'active', ...dates }] });
-await store.write('memberships.json', { schemaVersion: 1, records: [{ id: 'demo_membership', userId: 'demo_admin', organisationId: 'org_demo', status: 'active', roles: ['organisation_admin'], ...dates }] });
+await store.write('memberships.json', { schemaVersion: 1, records: [{ id: 'demo_membership', userId: 'demo_admin', organisationId: 'org_demo', status: 'active', roles: ['organisation_admin', 'requester'], ...dates }] });
 const { publicKey, privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const issuer = 'https://offline-demo.invalid/realms/support';
 const authenticator = new KeycloakAuthenticationProvider({ issuer, audience: 'support-api', jwksUri: `${issuer}/certs`,
@@ -65,7 +65,13 @@ try {
   const path = `/api/v1/sla-policies/${policy.policy.id}/versions/${policy.version.id}`;
   await request(`${path}/approve`, 'POST', { reason: 'Explicit local demo administrator approval' });
   await request(`${path}/activate`, 'POST', {});
-  await request(`/api/v1/tickets/${ticket.id}`, 'PATCH', { priority: 'high' });
+  await request(`/api/v1/tickets/${ticket.id}`, 'PATCH', {
+    priority: 'P2',
+    priorityOverride: {
+      reason: 'Synthetic local demo priority review.',
+      businessJustification: 'The requester is unable to access their account.',
+    },
+  });
   await request('/api/v1/sla/evaluations/run', 'POST', {});
   const report = await request('/api/v1/reports?from=2020-01-01T00:00:00.000Z&to=2099-01-01T00:00:00.000Z');
   console.log('Report:', JSON.stringify(report, null, 2));

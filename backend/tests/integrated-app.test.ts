@@ -213,6 +213,26 @@ test('document extraction denies requester/foreign access and permits an explici
   } finally { await f.close(); }
 });
 
+test('direct document processing uses the configured provider extraction adapter', async () => {
+  const adapters = documentAiAdapters();
+  const f = await fixture(null, adapters);
+  try {
+    const source = await uploadKnowledge(f, 'Account access requires an authorized password reset.');
+    const response = await f.request(
+      `/api/v1/documents/${source.document.id}/process`,
+      'admin',
+      { method: 'POST', body: '{}' },
+    );
+
+    assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+    const extraction = (await response.json()).data.extraction;
+    assert.equal(extraction.result.executionMetadata.provider, 'deterministic-fake');
+    assert.equal(extraction.result.rules.length, 1);
+    assert.equal(extraction.result.rules[0].requiresHumanReview, true);
+    assert.equal(adapters.calls(), 1);
+  } finally { await f.close(); }
+});
+
 test('parallel document requests process their own jobs and retain both human review records', async () => {
   const adapters = documentAiAdapters();
   const f = await fixture(null, adapters);

@@ -56,7 +56,8 @@ try {
       for (const path of ['/health/live', '/health/ready']) {
         assert.equal((await fetch(url + path, { signal: AbortSignal.timeout(5_000) })).status, 200);
       }
-      assert.equal((await fetch(url + '/api/v1/tickets', { signal: AbortSignal.timeout(5_000) })).status, 401);
+      const protectedRouteStatus = environment.authMode === 'disabled' ? 503 : 401;
+      assert.equal((await fetch(url + '/api/v1/tickets', { signal: AbortSignal.timeout(5_000) })).status, protectedRouteStatus);
       const counts: Record<string, number> = {};
       for (const collection of ['users', 'memberships', 'organisations']) {
         try {
@@ -181,7 +182,7 @@ try {
         assert.equal(resolution.requiresHumanReview, true);
         assert.ok(['recommendation', 'insufficient_evidence'].includes(resolution.status));
         assert.equal(await readFile(join(data, 'tickets.json'), 'utf8'), originalTickets);
-        console.log(JSON.stringify({ check: 'Live HTTP resolution citations and unchanged ticket', status: 'PASS', recommendationStatus: resolution.status, stepCount: resolution.steps.length }));
+        console.log(JSON.stringify({ check: 'Live HTTP resolution safe result and unchanged ticket', status: 'PASS', recommendationStatus: resolution.status, stepCount: resolution.steps.length }));
         for (const [fileName, mimeType, content] of [
           ['policy.pdf', 'application/pdf', policyPdf()],
           ['policy.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', policyDocx()],
@@ -191,14 +192,16 @@ try {
           upload.append('file', new Blob([new Uint8Array(content)], { type: mimeType }), fileName);
           const { data: uploaded } = await request('/api/v1/documents', 'POST', upload, 201);
           const { data: processed } = await request(`/api/v1/documents/${uploaded.document.id}/process`, 'POST', {});
-          assert.equal(processed.extraction.result.executionMetadata.provider, 'local-provisional');
-          assert.equal(processed.extraction.result.rules[0].payload.targetHours, 2);
+          const extraction = processed.extraction.result;
+          assert.equal(extraction.status, 'succeeded', `${fileName} extraction must produce validated provider output`);
+          assert.notEqual(extraction.executionMetadata.provider, 'local-provisional');
+          assert.ok(extraction.rules.some((rule: { ruleType: string; payload: { targetHours?: number } }) =>
+            rule.ruleType === 'response_time' && rule.payload.targetHours === 2));
         }
-        console.log(JSON.stringify({ check: 'HTTP PDF/DOCX processing', status: 'PASS', detail: 'Local text conversion and provisional regex extraction; no document LLM' }));
-        await request('/api/v1/extracted-rules/synthetic-rule/approve', 'POST', { reason: 'Synthetic probe' }, 404);
-        const candidateReview = { check: 'Candidate-review integration', status: 'BLOCKED', detail: 'Source audit found no main-server mounting of standalone candidate-review routes; missing-rule probe returns 404 (not proof of mounting by itself)' };
-        results.push(candidateReview);
-        console.log(JSON.stringify(candidateReview));
+        console.log(JSON.stringify({ check: 'HTTP PDF/DOCX processing', status: 'PASS', detail: 'Provider-backed extraction returned validated candidates' }));
+        const extractedRules = await request('/api/v1/extracted-rules');
+        assert.ok(Array.isArray(extractedRules.data));
+        console.log(JSON.stringify({ check: 'Candidate-review integration', status: 'PASS', detail: 'Authenticated candidate listing route is mounted' }));
         return 'Synthetic identity; real providers; isolated temporary storage; real-user login remains separate';
       } finally { await close(server); }
     });
@@ -209,6 +212,6 @@ try {
   if (dirname(root) !== localRoot || !root.startsWith(join(localRoot, 'verification-'))) throw new Error('Unexpected verification directory.');
   await rm(root, { recursive: true, force: true });
 }
-console.log(JSON.stringify({ results, liveRequested: live, documentLlmImplemented: true, documentLlmDefaultWired: false, candidateReviewMounted: false,
-  langGraphInstalled, note: 'Core analysis uses LangGraph. The AI extraction adapter exists; default document wiring, teammate data adapters and real-user onboarding remain separate integration work.' }, null, 2));
+console.log(JSON.stringify({ results, liveRequested: live, documentLlmImplemented: true, documentLlmDefaultWired: false, candidateReviewMounted: true,
+  langGraphInstalled, note: 'Core analysis uses LangGraph. Provider-backed document extraction is enabled only in live AI mode; offline/default extraction is provisional. Real-user onboarding still requires local verification.' }, null, 2));
 if (results.some(result => result.status === 'FAIL')) process.exitCode = 1;

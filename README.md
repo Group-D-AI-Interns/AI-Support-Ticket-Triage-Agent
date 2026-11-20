@@ -2,7 +2,8 @@
 
 The TypeScript backend runs foundation identity, organisations and teams together
 with tickets, documents, SLA policies/evaluation, operational reporting and ticket
-AI analysis on one HTTP server. LangGraph has not been introduced.
+AI analysis on one HTTP server. LangGraph orchestrates ticket classification,
+summarisation and the full AI triage workflow.
 
 ## Run the backend
 

@@ -16,7 +16,7 @@ SLA response now requires explicit acknowledgement, completed assessment, and fi
 
 The ticket, workflow and ticket/SLA-evidence endpoints now have a machine-readable OpenAPI contract at `docs/api/ticket-openapi.json`. The remaining integrated service domains are not yet represented in that contract.
 
-Ticket classification, summarisation, priority preview and resolution recommendation routes are connected to the integrated API. AI work is opt-in and does not change tickets automatically. Document processing supports TXT, PDF and DOCX text conversion, but still uses the deterministic provisional extraction adapter; a provider-backed `ExtractionAdapter` has not yet been implemented or wired.
+Ticket classification, summarisation, priority preview and resolution recommendation routes are connected to the integrated API. AI work is opt-in and does not change tickets automatically. Document processing supports TXT, PDF and DOCX text conversion. In live ticket-AI mode, both direct processing and policy-bound extraction use the provider-backed adapter; demo/offline mode remains provisional. Extracted rules remain review-required drafts.
 
 ## Six-item checklist
 
@@ -28,13 +28,13 @@ Ticket classification, summarisation, priority preview and resolution recommenda
 | Ticket/SLA event evidence | Implemented; entitlement and target verification remain | Response evidence, resolution events, pause/exclusion intervals, role restrictions, resolution reopening and overlapping interval accounting are tested. |
 | Ticket API contract | Ticket/workflow/SLA paths documented | `docs/api/ticket-openapi.json` covers ticket lifecycle, workflow configuration, evidence, attachments and Jira ingestion; full-service OpenAPI and automated contract conformance are still pending. |
 | Ticket AI | Service and API paths integrated | Demo/live classification and summarisation, priority preview, lexical retrieval and resolution recommendation are permission-gated. AI analysis and recommendations are read-only and require human review. |
-| Document policy extraction | Contract and processing path integrated; provider pending | Olerato's `ExtractionAdapter` contract, result validation, evidence provenance checks, and TXT/PDF/DOCX text conversion are present. The default remains `ProvisionalExtractionAdapter`; no provider-backed extractor is connected. |
+| Document policy extraction | Provider-backed in live AI mode; review required | Direct document processing and policy-bound extraction share `ProviderDocumentExtractionAdapter` and the approved extraction schemas when live ticket AI is enabled. Demo/offline mode uses the provisional adapter. Provider output remains a draft candidate with verified quotation and document-version evidence; it does not publish policy. |
 | Persistence | Shared guarantees integrated | Domain JSON persistence delegates to the validated shared store, preserving schema validation, atomic writes, locking and explicit errors. Multi-file workflows still are not transactional. |
 | Organisation creation rule | Implemented | An active organisation administrator can create another organisation and is granted an active `organisation_admin` membership in it; duplicate-name rollback and non-admin denial are tested. |
 
 ## Integration risks to close
 
-1. **Implement and wire a real extraction adapter.** Use the existing contract and approved policy schema; preserve document/version provenance and human-review rules. Confirm rule payloads and provider/model before sending customer documents externally.
+1. **Verify live extraction configuration per environment.** Live mode is opt-in and development-only. Confirm the approved provider/model and data-handling terms before sending customer documents externally; demo/offline mode remains provisional.
 2. **Complete per-developer live auth verification.** This machine's realm discovery, service-account token, and API health checks passed, but no real user's login, active membership, or role access was exercised. Use synthetic ticket/document data and private local credentials; no live LLM provider calls were made.
 3. **Harden multi-file workflows.** JSON collection operations are locked, but organisation creation, upload/version, policy approval and extraction result/status changes span files and are not transactional. Organisation creation compensates for a failed organisation write by removing its provisional membership; crash-level multi-file atomicity remains a limitation.
 
@@ -55,7 +55,7 @@ Ticket classification, summarisation, priority preview and resolution recommenda
 
 ## Next integration actions
 
-- Olerato/Wandile: agree on extraction rule schemas, provider/model, evidence format and review thresholds; implement the provider-backed adapter.
+- Olerato/Wandile: verify approved extraction schemas, provider/model and data-handling settings per environment before enabling real-document provider calls.
 - Team: verify human-user login and tenant authorization in each development realm.
 - AI owners: keep live provider calls disabled in production until external data handling and provider configuration are approved.
 
@@ -200,3 +200,53 @@ it does not imply that every live provider response meets the output contracts.
 Detailed local evidence: backend/.local-data/sla-merge-live-summary.json,
 sla-merge-live-workflow.log, sla-merge-live-capability-probe.json and
 sla-merge-live-combined-results.json. Synthetic raw model outputs are local and ignored.
+
+
+## Backend acceptance update (20 November 2026)
+
+The latest backend changes close two authorization gaps:
+
+- `reports.read.team` now returns only tickets assigned to the caller's active,
+  server-resolved teams; associated SLA evaluations are restricted to those tickets.
+  Organisation administrators with `reports.read.all` retain tenant-wide aggregates.
+- Ticket assignment validates that the target team belongs to the selected organisation.
+  Organisation administrators may assign across their tenant; other routing users remain
+  limited to their active teams.
+
+The full backend regression suite passes **212/212 tests**. The production TypeScript
+build, source type-check and `git diff --check` also pass. The affected ticket API cases
+and automatic-intake lifecycle test passed in isolation after the fixture correction.
+
+Earlier synthetic live-provider checks found successful Groq/Inception
+classification/summarisation, Mistral embeddings, priority preview, and PDF/DOCX
+extraction. The latest live verifier re-run on 20 November 2026 confirmed Groq
+classification/summarisation, Mistral embeddings, and integrated Inception
+classification/summarisation. Priority output passed schema validation but returned
+`insufficient_information` with no priority; resolution returned
+`insufficient_evidence` with two steps and did not modify the ticket. PDF extraction
+returned a validated `response_time` candidate, but DOCX extraction returned
+`INVALID_OUTPUT` and the API returned `422`, so the overall live verification failed.
+A real user's Keycloak login and effective tenant/team authorization were not exercised.
+
+### Remaining backend acceptance gaps
+
+- **General audit coverage:** ticket change history and policy/candidate audit records
+  exist, but identity, organisation and team mutations are not written to a shared audit
+  log. The draft `GET /api/v1/audit-logs` route is not implemented.
+- **Complete API contract:** ticket/workflow/SLA and AI OpenAPI documents exist, but the
+  foundation, document, policy, identity, team and reporting APIs do not yet have one
+  complete integrated contract.
+- **Operational controls:** approved public-intake rules and rate limits are not defined
+  or implemented. The API and background workers are not yet independently deployable
+  production processes.
+- **Production file handling:** private object storage, malware scanning, retention and
+  recovery policy still require infrastructure and operational decisions. Local file
+  storage is not production-ready for uploaded customer documents or attachments.
+- **Tenant acceptance:** verify a real developer user's Keycloak token, active local
+  membership, role grants and team membership. Do not use the service-account token as
+  an application user.
+- **Business configuration:** actual SLA targets/calendars and approved tenant policy
+  versions remain tenant-owned; none were invented or activated during these checks.
+
+Frontend work remains paused until these backend acceptance gaps are resolved or
+explicitly accepted by the project owner.

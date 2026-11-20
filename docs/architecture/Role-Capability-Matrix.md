@@ -36,12 +36,12 @@ These are the complete grants from `ROLE_PERMISSIONS`; no role receives a permis
 | Configure ticket workflow and organisation-owned configuration | `configuration.manage` | Active tenant context. |
 | Read/upload/process documents | `documents.read`, `documents.manage` | The resolved tenant scopes document metadata and private storage. |
 | Read/create/approve/activate policies | `policies.read`, `policies.manage`, `policies.approve`, `policies.activate` | Policy and source-document records must belong to the verified tenant. |
-| Review extracted policy candidates | `policies.candidates.review` | Candidate review endpoint is not implemented yet; use this permission when it is added. |
-| Assign/reroute ticket | `tickets.routing.manage` | Target team must be in the caller's active team scope. |
+| Review extracted policy candidates | `policies.candidates.review` | Current approve, reject and request-changes routes require an active organisation administrator. |
+| Assign/reroute ticket | `tickets.routing.manage` | Target team must belong to the active organisation; non-administrators must also belong to that team. |
 | Set/override ticket priority | `tickets.priority.manage` | Granted to `support_lead` and `organisation_admin`; a changed priority requires reason and business justification. The server audits actor, timestamp, and before/after values. |
 | Approve a reopen request | `tickets.approve` and approved workflow role rules | Ticket and request must belong to the verified tenant. |
 | Read ticket audit | `tickets.audit.read` | Ticket must be accessible in the verified tenant. |
-| Read current operational report | `reports.read.all` | Current report is organisation-wide. |
+| Read operational report | `reports.read.all` or `reports.read.team` | Administrators receive tenant-wide aggregates; support leads receive only tickets assigned to their active teams. |
 
 The API enforces membership and permission checks on the backend. Hiding UI controls is not an authorization mechanism.
 
@@ -55,7 +55,7 @@ grants; support agents and requesters cannot override priority.
 
 The project brief and current endpoints do not define shared permissions for direct status changes, reopen requests, general ticket edits, comments, or attachments. These routes still combine workflow configuration and ownership/access checks; their write capability grants need review before the shared RBAC contract is complete. Customer communication and ticket closure must continue to follow configured approval rules.
 
-`reports.read.team` is present in the role policy for Support Leads, but the current reporting service returns organisation-wide aggregates. The route therefore requires `reports.read.all`; implement team-filtered report data before granting the team-scoped permission to that endpoint.
+Support lead reports are filtered using active server-resolved team memberships. Unassigned tickets and tickets assigned to other teams are excluded.
 
 Ticket creation is currently granted to `requester` through `tickets.create.own`. An administrator or support worker who also needs requester-style ticket submission must have an explicitly approved additional role or grant; the API does not infer create permission from administrative access.
 

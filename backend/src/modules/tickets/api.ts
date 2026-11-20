@@ -333,11 +333,6 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     options.attachmentStorage ??
     createLocalPrivateStorageAdapter(settings.dataDirectory);
   const documentLifecycle = new DocumentLifecycleService(tenantStore, attachmentStorage);
-  const documentProcessing = new DocumentProcessingService(
-    tenantStore,
-    documentLifecycle,
-    attachmentStorage,
-  );
   const attachmentService = new TicketAttachmentService(
     store,
     attachmentStorage,
@@ -472,10 +467,26 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     try { await worker.intake(organisationId, ticketId, createdAt); }
     catch { console.warn('AI intake enqueue failed; background reconciliation will retry.'); }
   };
-  const documentKnowledge = new DocumentKnowledgeService(tenantStore, policyRepository, attachmentStorage,
-    options.documentExtractionAdapter ?? (ticketAiLive && ticketAiRuntime
-      ? new ProviderDocumentExtractionAdapter(ticketAiRuntime.priorityRunner, options.documentExtractionSchemas ?? documentExtractionSchemas)
-      : new ProvisionalExtractionAdapter()));
+  const documentExtractionAdapter = options.documentExtractionAdapter ?? (
+    ticketAiLive && ticketAiRuntime
+      ? new ProviderDocumentExtractionAdapter(
+          ticketAiRuntime.priorityRunner,
+          options.documentExtractionSchemas ?? documentExtractionSchemas,
+        )
+      : new ProvisionalExtractionAdapter()
+  );
+  const documentProcessing = new DocumentProcessingService(
+    tenantStore,
+    documentLifecycle,
+    attachmentStorage,
+    documentExtractionAdapter,
+  );
+  const documentKnowledge = new DocumentKnowledgeService(
+    tenantStore,
+    policyRepository,
+    attachmentStorage,
+    documentExtractionAdapter,
+  );
 
   const app = express();
   app.locals.aiWorker = worker;
@@ -1144,7 +1155,12 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/reports', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireSharedPermission(authenticated, authorization, 'reports.read.all');
+    const permissions = authorization.permissionsFor(authenticated.roles);
+    const canReadAll = permissions.has('reports.read.all');
+    const canReadTeam = permissions.has('reports.read.team');
+    if (!canReadAll && !canReadTeam) {
+      requireSharedPermission(authenticated, authorization, 'reports.read.all');
+    }
     const from = queryString(request, 'from');
     const to = queryString(request, 'to');
     if (!from || !to) {
@@ -1159,6 +1175,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         authenticated,
         from,
         to,
+        canReadAll ? undefined : authenticated.teamIds ?? [],
       );
     } catch (error) {
       if (error instanceof RangeError) {
@@ -1926,12 +1943,21 @@ export function createTicketApp(options: TicketAppOptions = {}) {
             'Only a support lead can assign a ticket team.',
           );
         }
-        if (value !== null && !authenticated.teamIds.includes(value)) {
-          throw new ApiError(
-            403,
-            'TEAM_SCOPE_FORBIDDEN',
-            "The requested team is outside the authenticated user's team scope.",
-          );
+        if (value !== null) {
+          const targetTeams = await operationTeams.listTeams(authenticated);
+          if (!targetTeams.some((team) => team.id === value)) {
+            throw new ApiError(404, 'NOT_FOUND', 'The requested support team was not found.');
+          }
+          if (
+            !authorization.permissionsFor(authenticated.roles).has('teams.manage') &&
+            !authenticated.teamIds.includes(value)
+          ) {
+            throw new ApiError(
+              403,
+              'TEAM_SCOPE_FORBIDDEN',
+              "The requested team is outside the authenticated user's team scope.",
+            );
+          }
         }
         changes.teamId = value;
       } else if (field === 'priority') {
