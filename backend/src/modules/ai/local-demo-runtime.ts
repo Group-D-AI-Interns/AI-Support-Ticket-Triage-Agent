@@ -1,6 +1,7 @@
 import type { TenantContext } from '../../shared/tenant.js';
 import { TicketAiTriageService, type AiTriageCapabilities } from './ticket-ai-triage.service.js';
 import type { AiWorkflowRun } from './workflow-run.js';
+import type { SampleEvaluator } from './quality-evaluation.js';
 import {
   AiExecutionRunner,
   type AiExecutionOptions,
@@ -103,6 +104,7 @@ export function createLocalDemoTicketAiRuntime(
   service: TicketAiAnalysisService;
   repository: AiAnalysisRepository;
   createTriageService(capabilities?: AiTriageCapabilities): TicketAiTriageService;
+  evaluateSample: SampleEvaluator;
 } {
   const runner = new AiExecutionRunner(
     new LocalDemoTicketAiProvider(),
@@ -117,6 +119,9 @@ export function createLocalDemoTicketAiRuntime(
   const summarizer = new TicketSummarizer(runner);
   return {
     priorityRunner: runner,
+    evaluateSample: (tenant, ticket, categories) => new TicketAiAnalysisService({ async getAuthorizedTicket(context, id) {
+      return context.organisationId === ticket.organisationId && id === ticket.id ? ticket : null;
+    } }, classifier, summarizer, new InMemoryAiAnalysisRepository()).analyze({ tenant, ticketId: ticket.id, categories }),
     createTriageService: (capabilities = {}) => new TicketAiTriageService(source, classifier, summarizer, repository,
       { resolutionRunner: runner, ...capabilities }),
     service: new TicketAiAnalysisService(

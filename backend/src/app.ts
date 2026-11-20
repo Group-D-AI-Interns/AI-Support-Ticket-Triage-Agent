@@ -157,7 +157,10 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const body = await readJson(request);
       rejectUnknown(body, ["name"]);
       const name = requireString(body, "name");
-      sendJson(response, 201, { data: await organisation.create({ name }), requestId });
+      sendJson(response, 201, {
+        data: await organisation.create({ name }, { userId: tenant.userId, role: ROLE_IDS.organisationAdmin }),
+        requestId,
+      });
       return;
     }
 
@@ -417,6 +420,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
 
 function isTicketModulePath(path: string): boolean {
   return [
+    "/api/v1/ai",
     "/api/v1/tickets",
     "/api/v1/documents",
     "/api/v1/extracted-rules",

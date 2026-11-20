@@ -48,17 +48,18 @@ async function uploadKnowledge(f: Awaited<ReturnType<typeof fixture>>, text = 'F
 }
 
 async function fixture(priorityPreview: PriorityPreviewConfiguration | null = null,
-  resolution: Pick<TicketAppOptions, 'knowledgeSource' | 'resolutionRunner' | 'documentExtractionAdapter' | 'routingSource' | 'slaInsightSource'> = {}) {
+  resolution: Pick<TicketAppOptions, 'knowledgeSource' | 'resolutionRunner' | 'documentExtractionAdapter' | 'routingSource' | 'slaInsightSource' | 'aiAutomation'> = {}) {
   const root = await mkdtemp(join(tmpdir(), 'integrated-triage-'));
   const store = new JsonFileStore(root);
   const now = new Date().toISOString();
   const dates = { createdAt: now, updatedAt: now };
   await store.write('organisations.json', { schemaVersion: 1, records: ['org-a', 'org-b'].map((id) => ({ id, name: id, status: 'active', settings: {}, ...dates })) });
-  await store.write('users.json', { schemaVersion: 1, records: ['admin', 'requester', 'other', 'agent'].map((id) => ({ id, email: `${id}@example.test`, displayName: id, status: 'active', ...dates })) });
+  await store.write('users.json', { schemaVersion: 1, records: ['admin', 'requester', 'other', 'agent', 'lead'].map((id) => ({ id, email: `${id}@example.test`, displayName: id, status: 'active', ...dates })) });
   await store.write('memberships.json', { schemaVersion: 1, records: [
     { id: 'm-admin', organisationId: 'org-a', userId: 'admin', roles: ['organisation_admin'], status: 'active', ...dates },
     { id: 'm-requester', organisationId: 'org-a', userId: 'requester', roles: ['requester'], status: 'active', ...dates },
     { id: 'm-agent', organisationId: 'org-a', userId: 'agent', roles: ['support_agent'], status: 'active', ...dates },
+    { id: 'm-lead', organisationId: 'org-a', userId: 'lead', roles: ['support_lead'], status: 'active', ...dates },
     { id: 'm-other', organisationId: 'org-b', userId: 'other', roles: ['organisation_admin'], status: 'active', ...dates },
   ] });
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -172,6 +173,9 @@ test('document AI extraction, human review, controlled publication and full tick
     const withdrawn = await f.request(`/api/v1/documents/${documentId}/publish-knowledge`, 'admin', { method: 'POST', body: JSON.stringify({ ...publication, effectiveFrom: '2022-01-01T00:00:00.000Z' }) });
     assert.equal(withdrawn.status, 200);
     assert.equal((await (await f.request(`${path}/evidence`, 'agent')).json()).data.length, 0);
+    const oldHistory = (await (await f.request(`${path}/triages`, 'agent')).json()).data;
+    assert.equal(oldHistory[0].redacted, true);
+    assert.equal(oldHistory[0].data, undefined);
     for (const user of ['requester', 'other']) {
       assert.equal((await f.request(`${path}/triage`, user, { method: 'POST', body: '{}' })).status, user === 'requester' ? 403 : 404);
       assert.equal((await f.request(`${path}/ai-runs`, user)).status, user === 'requester' ? 403 : 404);
@@ -454,9 +458,58 @@ test('document processing, human SLA approval, evaluation and reporting work on 
     assert.equal(imported.status, 201);
     const ticket = (await imported.json()).data;
     // Source priority is retained as evidence; a permitted human sets internal priority explicitly.
-    assert.equal((await f.request(`/api/v1/tickets/${ticket.id}`, 'requester', { method: 'PATCH', body: '{"priority":"high"}' })).status, 403);
-    const prioritised = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', { method: 'PATCH', body: '{"priority":"high"}' });
+    const jiraPriorityFilter = await f.request('/api/v1/tickets?priority=high', 'admin');
+    assert.ok((await jiraPriorityFilter.json()).data.some((item: { id: string }) => item.id === ticket.id));
+    assert.equal((await f.request(`/api/v1/tickets/${ticket.id}`, 'requester', { method: 'PATCH', body: '{"priority":"high","priorityOverride":{"reason":"classify","businessJustification":"business impact"}}' })).status, 403);
+    const missingOverrideEvidence = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', { method: 'PATCH', body: '{"priority":"high"}' });
+    assert.equal(missingOverrideEvidence.status, 400);
+    const incompleteOverrideEvidence = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', {
+      method: 'PATCH',
+      body: '{"priority":"P2","priorityOverride":{"reason":"Impact assessed"}}',
+    });
+    assert.equal(incompleteOverrideEvidence.status, 400);
+    const invalidPriority = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', {
+      method: 'PATCH',
+      body: '{"priority":"urgent","priorityOverride":{"reason":"Impact assessed","businessJustification":"Service impact"}}',
+    });
+    assert.equal(invalidPriority.status, 400);
+    const prioritised = await f.request(`/api/v1/tickets/${ticket.id}`, 'lead', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        priority: 'high',
+        priorityOverride: {
+          reason: 'Impact assessed by support lead.',
+          businessJustification: 'The service is unavailable to the user.',
+        },
+      }),
+    });
     assert.equal(prioritised.status, 200);
+    const prioritisedTicket = (await prioritised.json()).data;
+    assert.equal(prioritisedTicket.priority, 'P2');
+    assert.equal(prioritisedTicket.source.priority, 'high');
+    const beforeTriage = await readFile(join(f.root, 'tickets.json'), 'utf8');
+    const triaged = await f.request(`/api/v1/tickets/${ticket.id}/triage`, 'admin', { method: 'POST', body: '{}' });
+    assert.equal(triaged.status, 200);
+    const sla = (await triaged.json()).data.sla;
+    assert.equal(sla.status, 'completed');
+    assert.equal(sla.data.status, 'available');
+    assert.equal(sla.data.evaluation.ticketId, ticket.id);
+    assert.equal(sla.data.evaluation.policyVersionId, policy.version.id);
+    assert.equal(sla.data.evaluation.input.priority, 'P2');
+    assert.equal(await readFile(join(f.root, 'tickets.json'), 'utf8'), beforeTriage);
+    const savedEvaluations = (await (await f.request(`/api/v1/sla/evaluations?ticketId=${ticket.id}`)).json()).data;
+    assert.ok(savedEvaluations.some((record: { id: string }) => record.id === sla.data.evaluation.id));
+    const audit = await f.request(`/api/v1/tickets/${ticket.id}/audit`, 'admin');
+    const override = (await audit.json()).data.find(
+      (event: { action: string }) => event.action === 'ticket.priority.overridden',
+    );
+    assert.equal(override.actorId, 'lead');
+    assert.ok(Number.isFinite(Date.parse(override.createdAt)));
+    assert.deepEqual(override.changes.priority, { before: null, after: 'P2' });
+    assert.deepEqual(override.changes.priorityOverride, {
+      reason: 'Impact assessed by support lead.',
+      businessJustification: 'The service is unavailable to the user.',
+    });
     const evaluated = await f.request('/api/v1/sla/evaluations/run', 'admin', { method: 'POST', body: '{}' });
     assert.equal(evaluated.status, 200);
     assert.ok((await evaluated.json()).data.some((record: { ticketId: string }) => record.ticketId === ticket.id));
@@ -536,4 +589,162 @@ test('shared domain persistence preserves corruption and concurrent document wri
     await assert.rejects(createJsonTenantStore(root).readCollection('documents'), /invalid JSON/);
     assert.equal(await readFile(join(root, 'documents.json'), 'utf8'), broken);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+
+test('approved routing, durable triage history and immutable quality reviews use scoped APIs', async () => {
+  const f = await fixture();
+  try {
+    const post = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body) });
+    const team = (await (await f.request('/api/v1/teams', 'admin', post({name:'Access desk'}))).json()).data;
+    await f.request(`/api/v1/teams/${team.id}/members`, 'admin', { method:'PUT', body:JSON.stringify({userId:'agent',role:'support_agent',status:'active'}) });
+    const ticket = await new JsonTicketStore(f.root).createTicket({organisationId:'org-a',requesterId:'requester',teamId:team.id,title:'Account access problem',description:'Account locked after password reset.'}, {organisationId:'org-a',userId:'requester',roles:['requester']});
+    const path = `/api/v1/tickets/${ticket.id}`;
+    const input = {categoryIds:['ACCESS'],teamId:team.id,effectiveFrom:'2020-01-01T00:00:00.000Z'};
+    assert.equal((await f.request('/api/v1/ai/routing-rules','agent',post(input))).status,403);
+    assert.equal((await f.request('/api/v1/ai/routing-rules','admin',post({...input,categoryIds:['FORGED']}))).status,400);
+    const rule = (await (await f.request('/api/v1/ai/routing-rules','admin',post(input))).json()).data;
+    const draft = (await (await f.request(`${path}/triage`,'agent',post({}))).json()).data;
+    assert.equal(draft.routing.data.teamId,null);
+    assert.equal((await f.request(`/api/v1/ai/routing-rules/${rule.id}/approve`,'admin',post({reason:'Agreed by support lead'}))).status,200);
+    const triaged = await f.request(`${path}/triage`,'agent',post({}));
+    assert.equal(triaged.status,200,JSON.stringify(await triaged.clone().json()));
+    const result = (await triaged.json()).data;
+    assert.equal(result.routing.data.teamId,team.id);
+    assert.ok(result.triageId);
+    assert.equal((await f.request(`${path}/triages/${result.triageId}/reviews`,'agent',post({decision:'accepted',reason:'Checked'}))).status,403);
+    const decision = {decision:'accepted',reason:'Verified category and evidence',quality:{classificationCorrect:true,groundedness:'grounded'}};
+    const review = await f.request(`${path}/triages/${result.triageId}/reviews`,'admin',post(decision));
+    assert.equal(review.status,201,JSON.stringify(await review.clone().json()));
+    const reviewId = (await review.json()).data.id;
+    assert.equal((await (await f.request(`${path}/triages/${result.triageId}/reviews`,'admin',post(decision))).json()).data.id,reviewId);
+    assert.equal((await f.request(`${path}/triages/${result.triageId}/reviews`,'admin',post({...decision,decision:'rejected'}))).status,409);
+    const quality = (await (await f.request('/api/v1/ai/quality-summary')).json()).data;
+    assert.equal(quality.classificationAccuracy,1); assert.equal(quality.reviewedSamples,1);
+    await f.restart();
+    const history = (await (await f.request(`${path}/triages`,'agent')).json()).data;
+    assert.equal(history.length,2); assert.equal(history[1].reviews[0].id,reviewId);
+    assert.equal((await f.request(`${path}/triages`,'other')).status,404);
+    assert.equal((await f.request(`${path}/triages`,'requester')).status,403);
+    await f.request(`/api/v1/ai/routing-rules/${rule.id}/disable`,'admin',post({reason:'Rule withdrawn'}));
+    const hidden = (await (await f.request(`${path}/triages`,'agent')).json()).data[1];
+    assert.equal(hidden.redacted,true); assert.equal(hidden.data,undefined);
+    assert.equal((await new JsonTicketStore(f.root).findTicket({organisationId:'org-a',userId:'admin',roles:[]},ticket.id))?.teamId,team.id);
+  } finally { await f.close(); }
+});
+
+test('queued triage is durable, rejects actor injection and checks current membership', async () => {
+  const f = await fixture();
+  try {
+    const post = (body: unknown) => ({method:'POST',body:JSON.stringify(body)});
+    const ticket = (await (await f.request('/api/v1/tickets','requester',post({title:'Account access',description:'Cannot log in.'}))).json()).data;
+    const path = `/api/v1/tickets/${ticket.id}`;
+    assert.equal((await f.request(`${path}/triage-jobs`,'admin',post({actorId:'requester'}))).status,400);
+    const queued = await f.request(`${path}/triage-jobs`,'admin',post({}));
+    assert.equal(queued.status,202); const job = (await queued.json()).data;
+    assert.equal((await f.request(`/api/v1/ai/triage-jobs/${job.id}`,'other')).status,404);
+    await f.restart();
+    const completed = await f.request(`/api/v1/ai/triage-jobs/${job.id}/process`,'admin',post({}));
+    assert.equal(completed.status,200); const processed = (await completed.json()).data;
+    assert.equal(processed.data.status,'completed'); assert.equal(processed.data.attempts,1);
+    await f.request(`/api/v1/ai/triage-jobs/${job.id}/process`,'admin',post({}));
+    assert.equal((await (await f.request(`${path}/triages`)).json()).data.length,1);
+    const stale = (await (await f.request(`${path}/triage-jobs`,'admin',post({}))).json()).data;
+    await new JsonTicketStore(f.root).updateTicket({organisationId:'org-a',userId:'admin',roles:['organisation_admin']},ticket.id,{title:'Changed account access'});
+    const failed = (await (await f.request(`/api/v1/ai/triage-jobs/${stale.id}/process`,'admin',post({}))).json()).data;
+    assert.equal(failed.data.status,'failed'); assert.equal(failed.data.errorCode,'STALE_JOB');
+    const pending = (await (await f.request(`${path}/triage-jobs`,'admin',post({}))).json()).data;
+    await f.store.update('memberships.json', (value: unknown): value is {schemaVersion:1,records:Array<{userId:string,status:string}>} => !!value && typeof value === 'object' && Array.isArray((value as {records?:unknown}).records), envelope => { envelope.records.find(row => row.userId === 'admin')!.status = 'inactive'; });
+    const {AiOperationsStore} = await import('../src/modules/ai/operations-store.js');
+    const {TriageJobs} = await import('../src/modules/ai/triage-jobs.js');
+    const {AiOperationsService} = await import('../src/modules/ai/operations-service.js');
+    const dummy = new AiOperationsService(new AiOperationsStore(f.store), {} as never);
+    await new TriageJobs(dummy, async () => null).process(pending.id);
+    const revoked = (await dummy.store.list('org-a','job')).find(row => row.id === pending.id)!;
+    assert.equal(revoked.data.errorCode,'ACCESS_REVOKED');
+  } finally { await f.close(); }
+});
+
+test('evaluation APIs expose measured fixture outcomes and Swagger serves local assets', async () => {
+  const f = await fixture();
+  try {
+    const input = {version:'test-v1',cases:[{id:'access',title:'Account access',description:'Account locked.',expectedCategory:'ACCESS',requiredFacts:['locked'],prohibitedFacts:['ticket closed']},{id:'unknown',title:'Please help',description:'Something went wrong.',expectedCategory:null,requiredFacts:[],prohibitedFacts:[]}]};
+    const post = (body: unknown) => ({method:'POST',body:JSON.stringify(body)});
+    assert.equal((await f.request('/api/v1/ai/evaluations','agent',post(input))).status,403);
+    assert.equal((await f.request('/api/v1/ai/evaluations','admin',post({...input,cases:[{...input.cases[0],expectedCategory:'WRONG'}]}))).status,400);
+    const response = await f.request('/api/v1/ai/evaluations','admin',post(input));
+    assert.equal(response.status,201,JSON.stringify(await response.clone().json()));
+    const report = (await response.json()).data;
+    assert.equal(report.data.metrics.categoryAccuracy,1); assert.equal(report.data.metrics.requiredFactCoverage,1);
+    assert.equal(report.data.metrics.semanticGroundedness,'requires_human_review');
+    assert.equal((await (await f.request('/api/v1/ai/evaluations')).json()).data.length,1);
+    for (const path of ['/api/v1/ai/docs','/api/v1/ai/docs/swagger-ui.css','/api/v1/ai/docs/swagger-ui-bundle.js','/api/v1/ai/openapi.json']) {
+      const response = await f.request(path,'admin',{headers:{}});
+      assert.equal(response.status,200,path);
+      const publicResponse = await fetch(response.url);
+      assert.equal(publicResponse.status,200,'Documentation must work without a token');
+    }
+    const protectedResponse = await f.request('/api/v1/ai/routing-rules');
+    assert.equal((await fetch(protectedResponse.url)).status,401);
+  } finally { await f.close(); }
+});
+
+
+test('historical retrieval requires verified resolution evidence and stops after reopen or revocation', async () => {
+  const f = await fixture();
+  try {
+    const post = (body: unknown) => ({method:'POST',body:JSON.stringify(body)});
+    const actor = {organisationId:'org-a',userId:'admin',roles:['organisation_admin']};
+    const tickets = new JsonTicketStore(f.root);
+    const source = await tickets.createTicket({organisationId:'org-a',requesterId:'requester',title:'Account access restored',description:'Account locked after reset.'},actor);
+    const target = await tickets.createTicket({organisationId:'org-a',requesterId:'requester',title:'Account access lockout',description:'Account locked after reset.'},actor);
+    const verify = {resolution:'Account access restored after verifying identity and resetting the expired password link.',visibility:'organisation_staff',reason:'Verified the outcome with recorded evidence'};
+    const path = `/api/v1/tickets/${source.id}`;
+    assert.equal((await f.request(`${path}/verified-resolution`,'admin',post(verify))).status,409);
+    assert.equal((await f.request(`${path}/verified-resolution`,'agent',post(verify))).status,403);
+    assert.equal((await f.request(`${path}/verified-resolution`,'other',post(verify))).status,404);
+    const payload = {calendar:{timeZone:'UTC',weeklySchedule:Object.fromEntries(['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(day=>[day,[{startMinute:0,endMinute:1440}]])),holidays:[]},targetsByPriority:{P2:{firstResponseMinutes:120,resolutionMinutes:480}},pausedStatuses:['PENDING'],resolvedStatuses:['RESOLVED'],riskAtPercent:75};
+    const created = await f.request('/api/v1/sla-policies','admin',post({description:'Historical resolution verification SLA',effectiveFrom:'2020-01-01T00:00:00.000Z',payload}));
+    assert.equal(created.status,201,JSON.stringify(await created.clone().json()));
+    const policy = (await created.json()).data;
+    const policyPath = `/api/v1/sla-policies/${policy.policy.id}/versions/${policy.version.id}`;
+    await f.request(`${policyPath}/approve`,'admin',post({reason:'Verified test policy'}));
+    await f.request(`${policyPath}/activate`,'admin',post({}));
+    await tickets.updateTicket(actor,source.id,{priority:'P2'});
+    await tickets.changeStatus(actor,source.id,'new','RESOLVED','Human resolution','test-workflow');
+    assert.equal((await f.request(`${path}/verified-resolution`,'admin',post(verify))).status,409);
+    await tickets.changeStatus(actor,source.id,'RESOLVED','RESOLVED','Recorded resolution','test-workflow',{resolution:{outcome:'service_restored',note:'Access restored after resetting expired link.',customerConfirmation:'received',customerConfirmationEvidence:'Requester confirmed access.'}});
+    const verified = await f.request(`${path}/verified-resolution`,'admin',post(verify));
+    assert.equal(verified.status,201,JSON.stringify(await verified.clone().json()));
+    const verification = (await verified.json()).data;
+    const similar = (await (await f.request(`/api/v1/tickets/${target.id}/similar`)).json()).data;
+    assert.equal(similar[0].sourceId,source.id); assert.equal(similar[0].sourceType,'historical_ticket');
+    assert.equal((await (await f.request(`${path}/similar`)).json()).data.length,0);
+    assert.equal((await (await f.request(`/api/v1/tickets/${target.id}/similar`,'agent')).json()).data,undefined);
+    await f.restart();
+    assert.equal((await (await f.request(`/api/v1/tickets/${target.id}/similar`)).json()).data[0].version,verification.id);
+    await f.request(`/api/v1/ai/verified-resolutions/${verification.id}/revoke`,'admin',post({reason:'Withdraw outdated resolution'}));
+    assert.equal((await (await f.request(`/api/v1/tickets/${target.id}/similar`)).json()).data.length,0);
+    await f.request(`${path}/verified-resolution`,'admin',post(verify));
+    await tickets.changeStatus(actor,source.id,'RESOLVED','new','Reopened by human','test-workflow');
+    assert.equal((await (await f.request(`/api/v1/tickets/${target.id}/similar`)).json()).data.length,0);
+  } finally {await f.close();}
+});
+
+test('automatic intake is opt-in and idempotent without ticket mutations', async () => {
+  const f = await fixture(null,{aiAutomation:{enabled:true,actors:{'org-a':'admin'},intervalMs:60000,createdAfter:'2026-01-01T00:00:00.000Z'}});
+  try {
+    const created = await f.request('/api/v1/tickets','requester',{method:'POST',body:JSON.stringify({title:'Account access',description:'Account locked.'})});
+    assert.equal(created.status,201); const ticket = (await created.json()).data;
+    const {AiOperationsStore} = await import('../src/modules/ai/operations-store.js');
+    const ledger = new AiOperationsStore(f.store);
+    const queued = (await ledger.list('org-a','job')).filter(row => row.data.ticketId === ticket.id);
+    assert.equal(queued.length,1); assert.equal(queued[0]!.actorId,'admin');
+    const before = await readFile(join(f.root,'tickets.json'),'utf8');
+    const result = await f.request(`/api/v1/ai/triage-jobs/${queued[0]!.id}/process`,'admin',{method:'POST',body:'{}'});
+    assert.equal((await result.json()).data.data.status,'completed');
+    await f.restart();
+    assert.equal((await ledger.list('org-a','job')).filter(row => row.data.ticketId === ticket.id).length,1);
+    assert.equal(await readFile(join(f.root,'tickets.json'),'utf8'),before);
+  } finally {await f.close();}
 });

@@ -74,7 +74,7 @@ All listed endpoints require an authenticated identity. Tenant-scoped endpoints 
 |---|---|---|---|
 | `GET /api/v1/me` | Authenticated | Optional `organisationId` query. Returns safe user fields and active memberships/roles. | `401`, `403`, `503` |
 | `GET /api/v1/organisations` | Authenticated | Lists active organisations for the current user. | `401`, `503` |
-| `POST /api/v1/organisations` | `organisations.create` in selected tenant | `{ "name": "..." }`; returns created organisation. | `400`, `403`, `409` |
+| `POST /api/v1/organisations` | `organisations.create` in selected tenant | `{ "name": "..." }`; the active organisation administrator becomes an active `organisation_admin` member of the new organisation. | `400`, `403`, `409` |
 | `GET /api/v1/organisations/:organisationId` | `organisation.read` + active membership | Returns organisation. | `403`, `404` |
 | `PATCH /api/v1/organisations/:organisationId` | `organisation.update` | Permitted fields: `name`, `settings`, `status` (`active`, `inactive`, `suspended`). An active organisation admin may restore an inactive/suspended organisation; other tenant APIs deny inactive tenants. | `400`, `403`, `404`, `409` |
 | `GET /api/v1/users?organisationId=...` | `users.read` + active membership | Lists active users with active membership in tenant. | `400`, `403` |

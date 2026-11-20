@@ -31,5 +31,8 @@ export function createIntegratedApp(
     listTeamIdsForUser: (tenant, userId) => teams.listTeamIdsForUser(tenant, userId),
     ...(dependencies.authorization ? { authorization: dependencies.authorization } : {}),
   });
-  return createApp(environment, { ...dependencies, tenantResolver: resolver, moduleHandler: modules });
+  const server = createApp(environment, { ...dependencies, tenantResolver: resolver, moduleHandler: modules });
+  server.on('listening', () => modules.locals.aiWorker.start());
+  server.on('close', () => modules.locals.aiWorker.stop());
+  return server;
 }

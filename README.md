@@ -96,3 +96,7 @@ Draft priority preview is available at `POST /api/v1/tickets/:ticketId/recommend
 with `{}` for authorised support reviewers. The offline demo enables it automatically
 and honestly returns missing information. Normal startup requires explicit preview
 configuration; see [the priority guide](backend/src/modules/ai/priority-recommendations.md).
+
+The ticket, workflow, and ticket/SLA-evidence routes have a machine-readable
+[OpenAPI contract](docs/api/ticket-openapi.json). It does not yet cover every integrated
+identity, document, policy, AI, SLA administration, or reporting endpoint.

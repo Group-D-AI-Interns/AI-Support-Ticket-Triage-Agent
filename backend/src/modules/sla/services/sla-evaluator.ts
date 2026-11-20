@@ -9,6 +9,12 @@ export type SlaPausePeriod = {
   endedAt: string;
 };
 
+export type SlaResponseEvidence = {
+  acknowledgementEventId: string;
+  assessmentEventId: string;
+  assignmentEventId: string;
+};
+
 export type SlaMetricResult = {
   targetMinutes: number;
   elapsedMinutes: number;
@@ -26,10 +32,14 @@ export type SlaEvaluationInput = {
   createdAt: string;
   firstResponseAt?: string;
   resolvedAt?: string;
+  resolutionPauses?: SlaPausePeriod[];
   now: string;
   isPaused?: boolean;
   activePauseStartedAt?: string;
+  activeResolutionPauseStartedAt?: string;
   pauses?: SlaPausePeriod[];
+  responseEvidence?: SlaResponseEvidence;
+  resolutionEvidenceEventId?: string;
 };
 
 export type SlaEvaluation = {
@@ -85,14 +95,16 @@ export function evaluateTicketSla(
     start: parseTimestamp(pause.startedAt, 'pause.startedAt'),
     end: parseTimestamp(pause.endedAt, 'pause.endedAt'),
   }));
-  if (
-    pauses.some(
-      (pause) =>
-        pause.end < pause.start ||
-        pause.start < createdAt ||
-        pause.end > evaluatedAt,
-    )
-  ) {
+  const resolutionPauses = (input.resolutionPauses ?? []).map((pause) => ({
+    start: parseTimestamp(pause.startedAt, 'resolutionPause.startedAt'),
+    end: parseTimestamp(pause.endedAt, 'resolutionPause.endedAt'),
+  }));
+  if ([...pauses, ...resolutionPauses].some(
+    (pause) =>
+      pause.end < pause.start ||
+      pause.start < createdAt ||
+      pause.end > evaluatedAt,
+  )) {
     throw new SlaEvaluationError(
       'Completed SLA pauses must be within the ticket and evaluation time range.',
     );
@@ -109,10 +121,33 @@ export function evaluateTicketSla(
       'Active pause must be between ticket creation and evaluation time.',
     );
   }
+  const activeResolutionPauseStartedAt =
+    input.activeResolutionPauseStartedAt === undefined
+      ? undefined
+      : parseTimestamp(
+          input.activeResolutionPauseStartedAt,
+          'activeResolutionPauseStartedAt',
+        );
+  if (
+    activeResolutionPauseStartedAt !== undefined &&
+    (activeResolutionPauseStartedAt < createdAt ||
+      activeResolutionPauseStartedAt > evaluatedAt)
+  ) {
+    throw new SlaEvaluationError(
+      'Active resolved interval must be between ticket creation and evaluation time.',
+    );
+  }
   const effectivePauses =
     activePauseStartedAt === undefined
       ? pauses
       : [...pauses, { start: activePauseStartedAt, end: evaluatedAt }];
+  const effectiveResolutionPauses = [
+    ...effectivePauses,
+    ...resolutionPauses,
+    ...(activeResolutionPauseStartedAt === undefined
+      ? []
+      : [{ start: activeResolutionPauseStartedAt, end: evaluatedAt }]),
+  ];
 
   const firstResponseAt = input.firstResponseAt
     ? parseTimestamp(input.firstResponseAt, 'firstResponseAt')
@@ -155,8 +190,9 @@ export function evaluateTicketSla(
     now: input.now,
     targetMinutes: targets.resolutionMinutes,
     policy,
-    pauses: effectivePauses,
-    isPaused,
+    pauses: effectiveResolutionPauses,
+    isPaused:
+      isPaused || activeResolutionPauseStartedAt !== undefined,
   });
 
   return {
@@ -202,7 +238,7 @@ function evaluateMetric(input: {
         : 'Completed after the configured working-time target.';
   } else if (input.isPaused) {
     state = 'paused';
-    explanation = 'The SLA clock is paused by the active ticket status.';
+    explanation = 'The SLA clock is paused by an active, evidenced interval.';
   } else if (elapsedMinutes >= input.targetMinutes) {
     state = 'breached';
     explanation = 'The configured working-time target has elapsed.';

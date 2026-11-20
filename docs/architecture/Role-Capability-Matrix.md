@@ -35,11 +35,18 @@ These are the complete grants from `ROLE_PERMISSIONS`; no role receives a permis
 | Read ticket/list | `tickets.read.all`, `tickets.read.team`, `tickets.read.assigned`, or `tickets.read.own` | Organisation, requester ownership, and team membership filters. |
 | Configure ticket workflow and organisation-owned configuration | `configuration.manage` | Active tenant context. |
 | Assign/reroute ticket | `tickets.routing.manage` | Target team must be in the caller's active team scope. |
+| Set/override ticket priority | `tickets.priority.manage` | Granted to `support_lead` and `organisation_admin`; a changed priority requires reason and business justification. The server audits actor, timestamp, and before/after values. |
 | Approve a reopen request | `tickets.approve` and approved workflow role rules | Ticket and request must belong to the verified tenant. |
 | Read ticket audit | `tickets.audit.read` | Ticket must be accessible in the verified tenant. |
 | Read current operational report | `reports.read.all` | Current report is organisation-wide. |
 
 The API enforces membership and permission checks on the backend. Hiding UI controls is not an authorization mechanism.
+
+The project priority contract uses P1 (Critical), P2 (High), P3 (Medium), and P4 (Low).
+Legacy internal labels map by name (`high`→P2, `medium`→P3, `low`→P4); Jira source
+priority is retained separately and is never mapped automatically. The source policy's
+override authority is represented by the existing support-lead and organisation-admin
+grants; support agents and requesters cannot override priority.
 
 ## Capability gaps requiring team approval
 

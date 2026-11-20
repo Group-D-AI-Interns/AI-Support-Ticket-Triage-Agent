@@ -16,24 +16,28 @@ Implement or adapt tenant context, authentication/authorisation, configuration, 
 
 Implement organisations, users, roles, departments, teams, document upload/storage, extraction job tracking, policy versions and human approval.
 
-## Phase 3 — SLA and ticket domain
+## Phase 3 — Ticket management
 
-Implement ticket CRUD/intake, comments, attachments, queue/search, SLA policy configuration, calendar-aware evaluation and escalation records.
+Implement ticket CRUD/intake, comments, attachments, queue/search, approved workflow changes, audit history, and stable ticket interfaces for SLA, AI and reporting consumers.
 
-## Phase 4 — AI workflows
+## Phase 4 — SLA engine
+
+Implement versioned SLA policy configuration, business-calendar evaluation, evidenced response/resolution/pause/exclusion events, and explainable evaluation history. Keep reference targets inactive until tenant entitlement and contractual terms are verified.
+
+## Phase 5 — AI workflows and knowledge retrieval
 
 Implement provider adapters, typed agent components, retrieval, execution tracking, confidence/evidence handling and AI evaluation tests.
 
-## Phase 5 — Frontend and reporting
+## Phase 6 — Performance, coaching and reporting
 
-Build role-specific screens and connect them to real APIs. Avoid static mock data in final workflows.
+Implement only approved and verified performance calculations; deliver authorised operational reporting and dashboards using tenant-scoped ticket, AI and SLA data.
 
-## Phase 6 — Verification
+## Phase 7 — System integration, verification and hardening
 
-Run unit, integration, API contract, end-to-end, security and domain-specific AI evaluation. Document results and limitations.
+Verify reviewed module contracts, critical end-to-end flows, API contracts, tenant isolation, permission boundaries, failure recovery and operational health. Record evidence and known limitations.
 
-## Phase 7 — Deployment and handover
+## Phase 8 — Deployment and handover
 
-Provide Docker setup, `.env.example`, migrations/setup notes, Swagger/OpenAPI, README, deployment instructions, test evidence and known issues.
+Provide approved deployment configuration, `.env.example`, setup notes, complete Swagger/OpenAPI, runbooks, backup/restore and rollback instructions, test evidence and known issues.
 
 At each gate: demonstrate deliverables, list changed files, show tests and known issues, and wait for coach approval before proceeding.

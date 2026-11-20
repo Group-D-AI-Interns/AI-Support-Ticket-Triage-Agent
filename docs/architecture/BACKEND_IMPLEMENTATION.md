@@ -378,7 +378,7 @@ This catalogue follows the supplied API Specification draft. It is a starting co
 | POST | `/auth/login` | Identity | Authenticate if local authentication is selected |
 | POST | `/auth/refresh` | Identity | Refresh session/token if supported |
 | GET | `/me` | Identity | Current user and permitted organisation context |
-| GET/POST | `/organisations` | Organisations | List/create organisations; platform admin only |
+| GET/POST | `/organisations` | Organisations | List organisations; an active Organisation Administrator may create another and becomes its administrator |
 | GET/PATCH | `/organisations/:organisationId` | Organisations | Read/update permitted organisation |
 | GET/POST | `/users` | Identity | List/invite or create users |
 | PATCH | `/users/:id` | Identity | Update permitted user |
@@ -1205,7 +1205,7 @@ Each member owns a defined set of modules. Shared contracts and integration poin
 |---|---|---|---|
 | **Thuto** | Backend foundation, identity, tenant context, organisations, teams, shared API contracts | 0, 1, 2 foundation | Reviews security boundaries and shared integration |
 | **Olerato** | Documents, private file handling, policy lifecycle, extraction review and policy approval | 2, 7 | Coordinates with Wandile on AI extraction |
-| **Fhulu** | Ticket domain, ticket API, comments, attachments, queue/search and ticket history | 3, 7 | Provides stable ticket interfaces to Faith and Wandile |
+| **Fhulu** | Ticket domain, ticket API, comments, attachments, queue/search and ticket history | 3, 6, 7 | Provides stable ticket interfaces to Faith and Wandile |
 | **Faith** | SLA engine, performance assessments, coaching and operational reporting | 4, 6, 7 | Consumes ticket events/data; coordinates with Thuto on access controls |
 | **Wandile** | AI orchestration, provider adapters, knowledge retrieval, AI workers and AI evaluation | 5, 7 | Integrates with Olerato's document/policy provenance and Fhulu's ticket contracts |
 

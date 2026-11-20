@@ -14,6 +14,16 @@ import type {
   TicketSource,
 } from '../domain/ticket.js';
 import type { TicketReopenRequest } from '../domain/ticket-workflow.js';
+import {
+  normalizeStoredTicketPriority,
+  normalizeTicketPriority,
+} from '../domain/priority.js';
+import {
+  SLA_EVIDENCE_ACTIONS,
+  type SlaEvidenceWrite,
+  type SlaPauseEvidence,
+  type SlaResolutionEvidence,
+} from '../../sla/domain/sla-evidence.js';
 
 export class TicketStoreError extends Error {}
 export class TicketConflictError extends Error {}
@@ -23,6 +33,10 @@ type NewTicket = Omit<
   'id' | 'createdAt' | 'updatedAt' | 'comments' | 'history'
 >;
 type JiraOutcome = 'created' | 'updated' | 'duplicate';
+type PriorityOverrideAudit = {
+  reason: string;
+  businessJustification: string;
+};
 
 export class JsonTicketStore {
   private readonly ticketsPath: string;
@@ -34,22 +48,23 @@ export class JsonTicketStore {
   }
 
   async upsertJiraTicket(ticket: NewTicket): Promise<[TicketRecord, JiraOutcome]> {
+    const normalizedTicket = normalizeTicketRecordPriority(ticket);
     return this.withLock(async () => {
       const records = await this.readRecords();
-      const source = ticket.source;
+      const source = normalizedTicket.source;
       if (!source) {
         throw new TicketStoreError('Jira ticket source metadata is required.');
       }
 
       const existing = records.find(
         (record) =>
-          record.organisationId === ticket.organisationId &&
+          record.organisationId === normalizedTicket.organisationId &&
           record.source?.system === 'jira' &&
           record.source.issueId === source.issueId,
       );
       const issueKeyCollision = records.some(
         (record) =>
-          record.organisationId === ticket.organisationId &&
+          record.organisationId === normalizedTicket.organisationId &&
           record.source?.system === 'jira' &&
           record.source.issueKey === source.issueKey &&
           record.source.issueId !== source.issueId,
@@ -62,11 +77,11 @@ export class JsonTicketStore {
 
       const now = new Date().toISOString();
       if (existing) {
-        if (Object.entries(ticket).every(([key, value]) => isDeepStrictEqual(existing[key as keyof TicketRecord], value))) {
+        if (Object.entries(normalizedTicket).every(([key, value]) => isDeepStrictEqual(existing[key as keyof TicketRecord], value))) {
           return [existing, 'duplicate'];
         }
 
-        const jiraChanges = { ...ticket };
+        const jiraChanges = { ...normalizedTicket };
         delete jiraChanges.status;
         delete jiraChanges.workflowId;
         const changes = changedValues(existing, jiraChanges);
@@ -83,6 +98,21 @@ export class JsonTicketStore {
           history: existing.history ?? [],
         };
         appendHistory(updated, 'jira.issue_updated', 'jira_webhook', changes);
+        if (
+          existing.teamId == null &&
+          typeof updated.teamId === 'string' &&
+          !(existing.history ?? []).some(
+            (event) => event.action === SLA_EVIDENCE_ACTIONS.assignment,
+          )
+        ) {
+          appendHistory(
+            updated,
+            SLA_EVIDENCE_ACTIONS.assignment,
+            'jira_webhook',
+            { teamId: updated.teamId },
+            now,
+          );
+        }
         records[records.indexOf(existing)] = updated;
         await this.writeRecords(records);
         return [updated, 'updated'];
@@ -90,7 +120,7 @@ export class JsonTicketStore {
 
       const created: TicketRecord = {
         id: `ticket_${randomUUID().replace(/-/g, '')}`,
-        ...ticket,
+        ...normalizedTicket,
         createdAt: now,
         updatedAt: now,
         comments: [],
@@ -98,6 +128,15 @@ export class JsonTicketStore {
         history: [],
       };
       appendHistory(created, 'jira.issue_created', 'jira_webhook', {});
+      if (created.teamId) {
+        appendHistory(
+          created,
+          SLA_EVIDENCE_ACTIONS.assignment,
+          'jira_webhook',
+          { teamId: created.teamId },
+          now,
+        );
+      }
       records.push(created);
       await this.writeRecords(records);
       return [created, 'created'];
@@ -139,7 +178,7 @@ export class JsonTicketStore {
       const now = new Date().toISOString();
       const created: TicketRecord = {
         id: `ticket_${randomUUID().replace(/-/g, '')}`,
-        ...ticket,
+        ...normalizeTicketRecordPriority(ticket),
         createdAt: now,
         updatedAt: now,
         comments: [],
@@ -147,6 +186,15 @@ export class JsonTicketStore {
         history: [],
       };
       appendHistory(created, 'ticket.created', tenant.userId, {});
+      if (created.teamId) {
+        appendHistory(
+          created,
+          SLA_EVIDENCE_ACTIONS.assignment,
+          tenant.userId,
+          { teamId: created.teamId },
+          now,
+        );
+      }
       records.push(created);
       await this.writeRecords(records);
       return created;
@@ -162,6 +210,7 @@ export class JsonTicketStore {
         'title' | 'description' | 'product' | 'affectedService' | 'teamId' | 'priority'
       >
     >,
+    priorityOverride?: PriorityOverrideAudit,
   ): Promise<TicketRecord | null> {
     return this.withLock(async () => {
       const records = await this.readRecords();
@@ -174,20 +223,58 @@ export class JsonTicketStore {
         return null;
       }
 
-      const changed = changedValues(ticket, changes);
+      const normalizedChanges = changes.priority === undefined
+        ? changes
+        : {
+            ...changes,
+            priority: normalizeTicketPriority(changes.priority) ?? changes.priority,
+          };
+      if (
+        changes.priority !== undefined &&
+        !normalizeTicketPriority(changes.priority)
+      ) {
+        throw new TicketStoreError('Ticket priority must be P1, P2, P3, or P4.');
+      }
+      const changed = changedValues(ticket, normalizedChanges);
       if (Object.keys(changed).length === 0) {
         return ticket;
       }
 
       const updated: TicketRecord = {
         ...ticket,
-        ...changes,
+        ...normalizedChanges,
         updatedAt: new Date().toISOString(),
         comments: ticket.comments ?? [],
         reopenRequests: ticket.reopenRequests ?? [],
         history: ticket.history ?? [],
       };
-      appendHistory(updated, 'ticket.updated', tenant.userId, changed);
+      appendHistory(
+        updated,
+        priorityOverride ? 'ticket.priority.overridden' : 'ticket.updated',
+        tenant.userId,
+        {
+          ...changed,
+          ...(priorityOverride === undefined
+            ? {}
+            : { priorityOverride }),
+        },
+        updated.updatedAt,
+      );
+      if (
+        ticket.teamId == null &&
+        typeof normalizedChanges.teamId === 'string' &&
+        !(ticket.history ?? []).some(
+          (event) => event.action === SLA_EVIDENCE_ACTIONS.assignment,
+        )
+      ) {
+        appendHistory(
+          updated,
+          SLA_EVIDENCE_ACTIONS.assignment,
+          tenant.userId,
+          { teamId: normalizedChanges.teamId },
+          updated.updatedAt,
+        );
+      }
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
       return updated;
@@ -201,6 +288,11 @@ export class JsonTicketStore {
     status: string,
     reason: string | undefined,
     workflowId: string,
+    slaEvidence?: {
+      pauseStart?: SlaPauseEvidence;
+      pauseEnd?: boolean;
+      resolution?: SlaResolutionEvidence;
+    },
   ): Promise<TicketRecord | null> {
     return this.withLock(async () => {
       const records = await this.readRecords();
@@ -220,6 +312,25 @@ export class JsonTicketStore {
       }
 
       const now = new Date().toISOString();
+      const history = ticket.history ?? [];
+      const activePause = findActiveSlaInterval(
+        history,
+        SLA_EVIDENCE_ACTIONS.pauseStarted,
+        SLA_EVIDENCE_ACTIONS.pauseEnded,
+      );
+      const activeExclusion = findActiveSlaInterval(
+        history,
+        SLA_EVIDENCE_ACTIONS.exclusionStarted,
+        SLA_EVIDENCE_ACTIONS.exclusionEnded,
+      );
+      if (slaEvidence?.pauseStart && (activePause || activeExclusion)) {
+        throw new TicketConflictError(
+          'An SLA pause or exclusion interval is already active.',
+        );
+      }
+      if (slaEvidence?.pauseEnd && (!activePause || activeExclusion)) {
+        throw new TicketConflictError('There is no active SLA pause to resume.');
+      }
       const updated: TicketRecord = {
         ...ticket,
         workflowId: ticket.workflowId ?? workflowId,
@@ -229,13 +340,51 @@ export class JsonTicketStore {
         reopenRequests: ticket.reopenRequests ?? [],
         history: ticket.history ?? [],
       };
-      appendHistory(updated, 'ticket.status_changed', tenant.userId, {
-        status: {
-          before: currentStatus,
-          after: status,
+      const statusEvent = appendHistory(
+        updated,
+        'ticket.status_changed',
+        tenant.userId,
+        {
+          status: {
+            before: currentStatus,
+            after: status,
+          },
+          ...(reason !== undefined ? { reason } : {}),
         },
-        ...(reason !== undefined ? { reason } : {}),
-      });
+        now,
+      );
+      if (slaEvidence?.resolution) {
+        appendHistory(
+          updated,
+          SLA_EVIDENCE_ACTIONS.resolution,
+          tenant.userId,
+          {
+            ...slaEvidence.resolution,
+            statusEventId: statusEvent.id,
+          },
+          now,
+        );
+      }
+      if (slaEvidence?.pauseStart) {
+        appendHistory(
+          updated,
+          SLA_EVIDENCE_ACTIONS.pauseStarted,
+          tenant.userId,
+          {
+            ...slaEvidence.pauseStart,
+            intervalId: `sla_pause_${randomUUID().replace(/-/g, '')}`,
+          },
+          now,
+        );
+      } else if (slaEvidence?.pauseEnd && activePause) {
+        appendHistory(
+          updated,
+          SLA_EVIDENCE_ACTIONS.pauseEnded,
+          tenant.userId,
+          { intervalId: activePause.intervalId },
+          now,
+        );
+      }
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
       return updated;
@@ -365,6 +514,7 @@ export class JsonTicketStore {
     tenant: TenantContext,
     ticketId: string,
     comment: Omit<TicketComment, 'id' | 'createdAt'>,
+    recordAsSlaAcknowledgement = false,
   ): Promise<[TicketRecord, TicketComment] | null> {
     return this.withLock(async () => {
       const records = await this.readRecords();
@@ -388,13 +538,114 @@ export class JsonTicketStore {
         comments: [...(ticket.comments ?? []), storedComment],
         history: [...(ticket.history ?? [])],
       };
-      appendHistory(updated, 'ticket.comment_added', tenant.userId, {
-        commentId: storedComment.id,
-        visibility: comment.visibility,
-      });
+      appendHistory(
+        updated,
+        'ticket.comment_added',
+        tenant.userId,
+        {
+          commentId: storedComment.id,
+          visibility: comment.visibility,
+        },
+        storedComment.createdAt,
+      );
+      if (
+        recordAsSlaAcknowledgement &&
+        !(ticket.history ?? []).some(
+          (event) => event.action === SLA_EVIDENCE_ACTIONS.acknowledgement,
+        )
+      ) {
+        appendHistory(
+          updated,
+          SLA_EVIDENCE_ACTIONS.acknowledgement,
+          tenant.userId,
+          { commentId: storedComment.id },
+          storedComment.createdAt,
+        );
+      }
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
       return [updated, storedComment];
+    });
+  }
+
+  async recordSlaEvidence(
+    tenant: TenantContext,
+    ticketId: string,
+    evidence: SlaEvidenceWrite,
+  ): Promise<[TicketRecord, TicketHistoryEvent] | null> {
+    return this.withLock(async () => {
+      const records = await this.readRecords();
+      const ticket = records.find(
+        (record) =>
+          record.id === ticketId &&
+          record.organisationId === tenant.organisationId,
+      );
+      if (!ticket) {
+        return null;
+      }
+      const history = ticket.history ?? [];
+      let action: string;
+      let changes: Record<string, JsonValue>;
+      if (evidence.type === 'assessment_completed') {
+        if (
+          history.some(
+            (event) => event.action === SLA_EVIDENCE_ACTIONS.assessment,
+          )
+        ) {
+          throw new TicketConflictError(
+            'Initial assessment evidence has already been recorded.',
+          );
+        }
+        action = SLA_EVIDENCE_ACTIONS.assessment;
+        changes = { evidence: evidence.evidence };
+      } else if (evidence.type === 'exclusion_started') {
+        const activePause = findActiveSlaInterval(
+          history,
+          SLA_EVIDENCE_ACTIONS.pauseStarted,
+          SLA_EVIDENCE_ACTIONS.pauseEnded,
+        );
+        const activeExclusion = findActiveSlaInterval(
+          history,
+          SLA_EVIDENCE_ACTIONS.exclusionStarted,
+          SLA_EVIDENCE_ACTIONS.exclusionEnded,
+        );
+        if (activePause || activeExclusion) {
+          throw new TicketConflictError(
+            'An SLA pause or exclusion interval is already active.',
+          );
+        }
+        action = SLA_EVIDENCE_ACTIONS.exclusionStarted;
+        changes = {
+          intervalId: evidence.intervalId,
+          reasonCode: evidence.reasonCode,
+          evidence: evidence.evidence,
+          contractReference: evidence.contractReference,
+        };
+      } else {
+        const activeExclusion = findActiveSlaInterval(
+          history,
+          SLA_EVIDENCE_ACTIONS.exclusionStarted,
+          SLA_EVIDENCE_ACTIONS.exclusionEnded,
+        );
+        if (!activeExclusion || activeExclusion.intervalId !== evidence.intervalId) {
+          throw new TicketConflictError(
+            'The specified SLA exclusion is not active.',
+          );
+        }
+        action = SLA_EVIDENCE_ACTIONS.exclusionEnded;
+        changes = { intervalId: evidence.intervalId };
+      }
+      const now = new Date().toISOString();
+      const updated: TicketRecord = {
+        ...ticket,
+        updatedAt: now,
+        comments: ticket.comments ?? [],
+        history: [...history],
+      };
+      const event = appendHistory(updated, action, tenant.userId, changes, now);
+      records[records.indexOf(ticket)] = updated;
+      await this.writeRecords(records);
+      return [updated, event];
     });
   }
 
@@ -496,7 +747,7 @@ export class JsonTicketStore {
         'Ticket storage does not match the supported schema.',
       );
     }
-    return document.records;
+    return document.records.map(normalizeTicketRecordPriority);
   }
 
   private async writeRecords(records: TicketRecord[]): Promise<void> {
@@ -534,6 +785,14 @@ export class JsonTicketStore {
   }
 }
 
+function normalizeTicketRecordPriority<T extends { priority?: string | null }>(
+  ticket: T,
+): T {
+  if (typeof ticket.priority !== 'string') return ticket;
+  const priority = normalizeStoredTicketPriority(ticket.priority);
+  return priority === ticket.priority ? ticket : { ...ticket, priority };
+}
+
 function changedValues(
   existing: TicketRecord,
   changes: Partial<TicketRecord>,
@@ -554,15 +813,48 @@ function appendHistory(
   action: string,
   actorId: string,
   changes: Record<string, JsonValue>,
-): void {
+  createdAt = new Date().toISOString(),
+): TicketHistoryEvent {
   const event: TicketHistoryEvent = {
     id: `history_${randomUUID().replace(/-/g, '')}`,
     action,
     actorId,
-    createdAt: new Date().toISOString(),
+    createdAt,
     changes,
   };
   ticket.history = [...(ticket.history ?? []), event];
+  return event;
+}
+
+function findActiveSlaInterval(
+  history: TicketHistoryEvent[],
+  startAction: string,
+  endAction: string,
+): { intervalId: string } | null {
+  let active: { intervalId: string } | null = null;
+  for (const event of history) {
+    if (event.action === startAction) {
+      const intervalId = event.changes.intervalId;
+      if (typeof intervalId !== 'string' || !intervalId) {
+        throw new TicketStoreError(
+          'SLA interval history is missing its interval identifier.',
+        );
+      }
+      if (active) {
+        throw new TicketStoreError('SLA interval history contains overlapping intervals.');
+      }
+      active = { intervalId };
+    } else if (event.action === endAction) {
+      const intervalId = event.changes.intervalId;
+      if (!active || intervalId !== active.intervalId) {
+        throw new TicketStoreError(
+          'SLA interval history contains an unmatched end event.',
+        );
+      }
+      active = null;
+    }
+  }
+  return active;
 }
 
 function isTicketRecord(value: unknown): value is TicketRecord {

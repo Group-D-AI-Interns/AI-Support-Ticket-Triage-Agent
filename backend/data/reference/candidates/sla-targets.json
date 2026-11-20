@@ -106,7 +106,6 @@
     "Actual contractual targets not approved",
     "No effective date",
     "Calendar/timezone/holiday and business-day definitions required",
-    "Client/account entitlement model missing",
-    "Response/resolution event definitions require agreement"
+    "Client/account entitlement model missing"
   ]
 }

@@ -4,6 +4,8 @@ import { recommendRouting, verifiedSlaInsight } from '../src/modules/ai/team-rec
 import type { AuthorizedRoutingContext } from '../src/modules/ai/team-capability-ports.js';
 import type { SlaEvaluationRecord } from '../src/modules/sla/domain/sla-evaluation.js';
 import { createLocalDemoTicketAiRuntime } from '../src/modules/ai/local-demo-runtime.js';
+import { FreshVerifiedSlaSource } from '../src/modules/ai/verified-sla-source.js';
+import type { SlaPolicy } from '../src/modules/sla/domain/sla-policy.js';
 
 const tenant = { organisationId: 'org-a', userId: 'agent', roles: ['support_agent'] };
 const ticket = { id: 'ticket-a', organisationId: 'org-a', title: 'Account access locked', description: 'Account locked after reset.' };
@@ -14,6 +16,30 @@ const metric = { targetMinutes: 120, elapsedMinutes: 30, remainingMinutes: 90, d
 const evaluation: SlaEvaluationRecord = { id: 'evaluation-a', organisationId: tenant.organisationId, ticketId: ticket.id, policyId: 'policy-a', policyVersionId: 'version-a', evaluatedAt: '2026-01-01T00:30:00.000Z',
   input: { ticketId: ticket.id, organisationId: tenant.organisationId, priority: 'high', createdAt: '2026-01-01T00:00:00.000Z', now: '2026-01-01T00:30:00.000Z' },
   result: { ticketId: ticket.id, organisationId: tenant.organisationId, policyId: 'policy-a', policyVersionId: 'version-a', policyVersion: 1, evaluatedAt: '2026-01-01T00:30:00.000Z', metrics: { firstResponse: metric, resolution: metric } } };
+
+test('fresh SLA adapter respects permission, ticket revisions and policy changes without an LLM', async () => {
+  let calls = 0;
+  let allowed = false;
+  let mode = 'current';
+  const state = { ticket, revision: 'v1', domain: { priority: 'P2', createdAt: evaluation.input.createdAt } };
+  const source = new FreshVerifiedSlaSource({
+    async evaluateTicket() { calls++; if (mode === 'changed') state.revision = 'v2'; return mode === 'missing' ? null : evaluation; },
+    async resolvePolicyForTicket() { return { id: evaluation.policyId, versionId: mode === 'policy-changed' ? 'new-policy-version' : evaluation.policyVersionId } as SlaPolicy; },
+  }, async () => state, () => allowed);
+  assert.equal(await source.getAuthorizedEvaluation(tenant, ticket), null);
+  assert.equal(calls, 0);
+  allowed = true;
+  assert.equal(await source.getAuthorizedEvaluation(tenant, { ...ticket, organisationId: 'foreign' }), null);
+  assert.equal(await source.getAuthorizedEvaluation(tenant, { ...ticket, description: 'Old snapshot' }), null);
+  assert.equal(calls, 0);
+  assert.equal((await source.getAuthorizedEvaluation(tenant, ticket))?.isCurrent, true);
+  mode = 'changed';
+  assert.equal((await source.getAuthorizedEvaluation(tenant, ticket))?.isCurrent, false);
+  mode = 'policy-changed';
+  assert.equal((await source.getAuthorizedEvaluation(tenant, ticket))?.isCurrent, false);
+  mode = 'missing';
+  assert.equal(await source.getAuthorizedEvaluation(tenant, ticket), null);
+});
 
 test('routing uses only one unambiguous approved rule and permitted team; never assigns it', async () => {
   const before = structuredClone(ticket);

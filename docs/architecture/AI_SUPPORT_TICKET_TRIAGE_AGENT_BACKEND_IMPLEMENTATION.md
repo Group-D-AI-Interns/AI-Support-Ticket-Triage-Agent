@@ -422,7 +422,7 @@ This catalogue follows the supplied API Specification draft. It is a starting co
 | POST | `/auth/login` | Identity | Authenticate if local authentication is selected |
 | POST | `/auth/refresh` | Identity | Refresh session/token if supported |
 | GET | `/me` | Identity | Current user and permitted organisation context |
-| GET/POST | `/organisations` | Organisations | List/create organisations; Organisation Administrator only |
+| GET/POST | `/organisations` | Organisations | List organisations; an active Organisation Administrator may create another and becomes its administrator |
 | GET/PATCH | `/organisations/:organisationId` | Organisations | Read/update permitted organisation |
 | GET/POST | `/users` | Identity | List/invite or create users |
 | PATCH | `/users/:id` | Identity | Update permitted user |
@@ -1123,48 +1123,53 @@ Phases are ordered by dependency. Within a phase, the five owners can work in pa
 - Data minimisation and sensitive-data redaction.
 - Human approval enforcement.
 
-### Phase 6 — Operational reporting and system verification
+### Phase 6 — Performance, coaching and reporting
 
-**Objective:** Deliver authorised operational reporting for ticket flow, AI triage outcomes and SLA status, then verify the integrated backend.
+**Objective:** Deliver deterministic assessments from verified data and authorised operational reporting. AI must not assign numeric performance scores.
 
 **Components:**
-- Ticket-volume and ticket-status reporting.
-- Classification and priority distribution summaries.
-- Routing outcomes and queue visibility.
-- SLA compliance/risk reporting based on verified SLA evaluations.
-- Tenant-scoped report queries and exports where already required.
+- Role/KPA/KPI assignments and verified performance measurements.
+- Versioned deterministic assessment calculations and snapshots.
+- Coaching records with restricted access.
+- Tenant-scoped ticket, triage and SLA reports.
 
 **Implementation steps:**
-1. Confirm the operational reports required by the existing project scope.
-2. Define report filters, date ranges, grouping and pagination using existing ticket/SLA fields.
-3. Implement authorised report queries using tenant-scoped repositories.
-4. Ensure reports expose operational workflow data only.
-5. Add tests for aggregation accuracy, tenant isolation and access permissions.
-6. Integrate all modules through reviewed pull requests.
-7. Run end-to-end document/policy, ticket/AI triage and SLA flows.
-8. Run security, failure-recovery and API contract suites.
-9. Record test evidence and known limitations.
+1. Confirm KPI/KPA definitions, formulas, weights, periods and effective versions with the approved owners.
+2. Confirm permitted measurement sources and provenance.
+3. Implement role-specific assignments and verified measurement ingestion.
+4. Calculate reproducible assessment snapshots using approved formulas only.
+5. Separate individual performance records from team operational metrics.
+6. Implement authorised report queries using tenant-scoped repositories.
+7. Test aggregation accuracy, tenant isolation and permissions.
 
 **Expected files/deliverables:**
-- `modules/reporting/`
-- Operational reporting APIs/queries and OpenAPI updates.
-- Integration and E2E test suites.
-- Security test report and known-issues list.
+- `modules/performance/`, `modules/coaching/` and `modules/reporting/`.
+- Versioned calculation and report APIs with OpenAPI updates.
+- Formula, access-control and aggregation tests.
 
-**Dependencies:** Phases 1–5; ticket, AI and SLA interfaces.
+**Dependencies:** Phase 1; approved performance formulas and source data; ticket, AI and SLA interfaces where used.
 
-**Completion criteria:**
-- Authorised users can view operational ticket, triage and SLA reports.
-- All report queries enforce tenant and permission scope.
-- Core end-to-end flows pass the agreed verification suite.
+**Completion criteria:** Performance results are reproducible from verified inputs and approved formula versions; reports enforce tenant and role scope; AI does not determine employee scores.
 
-**Testing:**
-- Report filter and aggregation correctness.
-- Tenant and role permission tests.
-- Ticket-to-triage and ticket-to-SLA E2E tests.
-- Worker retry, provider failure and audit tests.
+### Phase 7 — System integration, verification and hardening
 
-### Phase 7 — Deployment and handover
+**Objective:** Verify independently developed modules operate as one secure backend.
+
+**Implementation steps:**
+1. Integrate module changes through reviewed pull requests and validate shared contracts.
+2. Run end-to-end document/policy, ticket/AI triage and SLA flows.
+3. Verify reports and performance calculations using approved fixture/source data.
+4. Run API contract, tenant isolation, privilege-boundary and security tests.
+5. Exercise provider/storage failure handling and recovery.
+6. Record test evidence, deployment blockers and known limitations.
+
+**Deliverables:** Integrated backend, API contract and E2E test evidence, security verification results, and a known-issues list.
+
+**Dependencies:** Phases 1–6.
+
+**Completion criteria:** Agreed end-to-end flows and critical security checks pass; API contracts are consistent; limitations are documented.
+
+### Phase 8 — Deployment and handover
 
 **Objective:** Prepare a repeatable deployment and support handover.
 
@@ -1210,7 +1215,7 @@ Each member owns a defined set of modules. Shared contracts and integration poin
 | **Faith** | SLA engine and operational reporting | 4, 6, 7 | Consumes ticket events/data; coordinates with Thuto on access controls |
 | **Wandile** | AI orchestration, provider adapters, knowledge retrieval, AI workers and AI evaluation | 5, 6, 7 | Integrates with Olerato's document/policy provenance and Fhulu's ticket contracts |
 
-All members participate in Phase 0 contract review, Phase 6 integration and Phase 7 handover. Ownership does not permit changing another member's module without agreement.
+All members participate in Phase 0 contract review, Phase 7 integration/verification and Phase 8 deployment handover. Ownership does not permit changing another member's module without agreement.
 
 ### 11.2 Thuto — Foundation, identity and organisation services
 
@@ -1388,7 +1393,7 @@ All members participate in Phase 0 contract review, Phase 6 integration and Phas
 - Faith: ticket event timestamps and ticket read interface for SLA.
 - Wandile: ticket content and stable read interface for AI analysis.
 
-**Current repository boundary:** The shared tenant type and private local-storage adapter are present, but Phase 1/2 identity and team-membership services are not. A configured development principal is available only when `APP_ENV=development`; it is not production authentication and must be replaced before deployment. Comment visibility is `internal` or `public`. Ticket workflow configurations are tenant-scoped and require organisation-admin approval; this Phase 3 API accepts structured document-derived configuration but does not parse uploaded documents. SLA and priority policy extraction (including the attached priority policy) remains outside this Phase 3 change. Ticket attachments reuse the local private-storage adapter and document upload policy as a development-only prototype; malware scanning and production storage are not implemented.
+**Current repository boundary:** The integrated Node/TypeScript server uses the shared Keycloak bearer-token verifier, membership-resolved `TenantContext`, team membership and shared permission policy. The static development principal is available only to isolated API tests; the integrated server does not accept it. Ticket workflow configurations are tenant-scoped and require administrator approval; configuration is submitted as structured JSON rather than parsed from an uploaded workflow document. The agreed P1–P4 priority contract and explicit ticket/SLA evidence events are implemented, but actual SLA entitlement, targets and calendars remain unverified; the reference SLA candidate stays inactive. Ticket attachments use the shared private local-storage adapter and upload validation as a development prototype; malware scanning and production storage are not implemented.
 
 **Ticket consumer interface:** `src/modules/tickets/application/ticket-read.service.ts` exports a tenant-scoped `TicketReadService` and stable `TicketReadModel` for AI, SLA and reporting consumers. It intentionally excludes comments, audit history and private attachment storage keys. No event broker or asynchronous ticket event publisher is selected or implemented.
 
@@ -2084,3 +2089,30 @@ Where the source documents are incomplete or contradictory, this guide marks the
 ---
 
 **End of document.**
+
+
+### AI completion integration status ? 20 November 2026
+
+The current Node/TypeScript implementation retains the existing LangGraph core and provider
+adapters. AI-owned routing governance, verified historical resolution retrieval, combined
+triage/reviewer history, labeled evaluation and durable processing jobs are implemented.
+The full triage endpoint is the current routing recommendation interface; the separately
+listed recommend-routing endpoint above remains a proposed convenience API. No shared
+/jobs API or teammate runtime has been introduced.
+
+AI operations use an atomic versioned ai-operations.json ledger alongside the existing
+core analysis/workflow and SLA files. The current ticket API provides authorized ticket
+projections and intake notifications; source lifecycle/permissions remain with their owners.
+The integrated server starts an explicitly opted-in AI worker, using server-resolved actor
+membership on every attempt. JSON jobs are application records, not LangGraph checkpoints.
+
+See the AI module README for the exact contracts, scope restrictions, evidence withdrawal,
+review behavior, test sequence and environment settings. The dedicated AI completion Postman
+collection and docs/api/ai-openapi.json describe the executable APIs; /api/v1/ai/docs serves
+local Swagger UI. Authentication/Keycloak and existing role capabilities are unchanged.
+
+The implementation supplies mechanisms, not business approval: real category/team mappings,
+reviewed resolutions, source visibility, evaluation acceptance thresholds, automatic processing
+account/budget/intake timestamp and storage retention remain team decisions. Automatic intake
+stays disabled until explicitly configured. No automatic ticket assignment, priority update,
+policy activation, customer-visible comment, closure or Jira writeback is performed.

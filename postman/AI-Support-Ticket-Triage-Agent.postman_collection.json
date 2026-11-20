@@ -1389,6 +1389,68 @@
           }
         },
         {
+          "name": "Override ticket priority (admin or support lead)",
+          "description": "Requires an active organisation_admin or support_lead membership. Use a target priority different from the ticket's current value when rerunning. Legacy high normalizes to P2.",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"priority\":\"high\",\"priorityOverride\":{\"reason\":\"Postman contract test\",\"businessJustification\":\"Validating the priority override using synthetic ticket data.\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('priority override succeeds', function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) { pm.test('legacy high input normalizes to P2', function () { pm.expect(pm.response.json().data.priority).to.eql('P2'); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
           "name": "Change ticket status",
           "request": {
             "auth": {

@@ -16,6 +16,11 @@ const tenant = {
   userId: 'requester-1',
   roles: ['requester'],
 };
+const supportActor = {
+  ...tenant,
+  userId: 'agent-1',
+  roles: ['support_agent'],
+};
 
 const payload = {
   calendar: {
@@ -86,14 +91,15 @@ test('evaluates a tenant ticket against its active policy version and persists i
         title: 'Unable to access service',
         status: 'OPEN',
         priority: 'high',
+        teamId: 'team-support',
       },
       tenant,
     );
-    await tickets.addComment(tenant, ticket.id, {
+    await tickets.addComment(supportActor, ticket.id, {
       authorId: 'agent-1',
       body: 'We are investigating.',
       visibility: 'public',
-    });
+    }, true);
 
     const evaluationRepository = new JsonSlaEvaluationRepository(
       createJsonTenantStore(root),
@@ -103,18 +109,143 @@ test('evaluates a tenant ticket against its active policy version and persists i
       new RepositorySlaPolicyResolver(policyRepository),
       evaluationRepository,
     );
+    const incompleteRecord = await service.evaluateTicket(
+      tenant,
+      ticket.id,
+      new Date(Date.now() + 1000).toISOString(),
+    );
+    assert.equal(incompleteRecord?.input.firstResponseAt, undefined);
+    await tickets.recordSlaEvidence(supportActor, ticket.id, {
+      type: 'assessment_completed',
+      evidence: 'Impact and affected service assessed.',
+    });
     const record = await service.evaluateTicket(
       tenant,
       ticket.id,
       new Date(Date.now() + 1000).toISOString(),
     );
+    const updatedTicket = await tickets.findTicket(tenant, ticket.id);
+    const assessmentEvent = updatedTicket?.history?.find(
+      (event) => event.action === 'ticket.sla.assessment_recorded',
+    );
 
     assert.equal(record?.policyVersionId, 'sla-policy-v1');
-    assert.equal(record?.input.firstResponseAt !== undefined, true);
+    assert.equal(record?.input.firstResponseAt, assessmentEvent?.createdAt);
+    assert.deepEqual(
+      Object.keys(record?.input.responseEvidence ?? {}).sort(),
+      [
+        'acknowledgementEventId',
+        'assessmentEventId',
+        'assignmentEventId',
+      ].sort(),
+    );
     assert.equal(
       (await evaluationRepository.list(tenant, ticket.id)).length,
-      1,
+      2,
     );
+    const resolved = await tickets.changeStatus(
+      tenant,
+      ticket.id,
+      'OPEN',
+      'RESOLVED',
+      undefined,
+      'workflow-test',
+      {
+        resolution: {
+          outcome: 'service_restored',
+          note: 'Service access was restored.',
+          customerConfirmation: 'not_applicable',
+          customerConfirmationEvidence:
+            'No customer confirmation was required by the agreed process.',
+        },
+      },
+    );
+    assert.ok(resolved);
+    const resolutionEvent = resolved.history?.find(
+      (event) => event.action === 'ticket.sla.resolution_recorded',
+    );
+    assert.ok(resolutionEvent);
+    const resolvedEvaluation = await service.evaluateTicket(
+      tenant,
+      ticket.id,
+      new Date(Date.now() + 1000).toISOString(),
+    );
+    assert.equal(
+      resolvedEvaluation?.input.resolvedAt,
+      resolutionEvent.createdAt,
+    );
+    assert.equal(
+      resolvedEvaluation?.input.resolutionEvidenceEventId,
+      resolutionEvent.id,
+    );
+    const reopenRequest = {
+      id: 'reopen_sla_evidence_test',
+      requestedBy: tenant.userId,
+      fromStatus: 'RESOLVED',
+      toStatus: 'REOPENED',
+      reason: 'Issue returned.',
+      status: 'pending' as const,
+      createdAt: new Date().toISOString(),
+    };
+    const requestedReopen = await tickets.requestReopen(
+      tenant,
+      ticket.id,
+      'RESOLVED',
+      reopenRequest,
+      'workflow-test',
+    );
+    assert.ok(requestedReopen);
+    const reopened = await tickets.approveReopen(
+      supportActor,
+      ticket.id,
+      reopenRequest.id,
+      supportActor.userId,
+    );
+    assert.ok(reopened);
+    const reopenedEvaluation = await service.evaluateTicket(
+      tenant,
+      ticket.id,
+      new Date(Date.now() + 1000).toISOString(),
+    );
+    assert.equal(reopenedEvaluation?.input.resolvedAt, undefined);
+    assert.equal(reopenedEvaluation?.input.resolutionPauses?.length, 1);
+    assert.equal(
+      reopenedEvaluation?.input.resolutionPauses?.[0]?.startedAt,
+      resolutionEvent.createdAt,
+    );
+    assert.ok(
+      Date.parse(
+        reopenedEvaluation?.input.resolutionPauses?.[0]?.endedAt ?? '',
+      ) >= Date.parse(resolutionEvent.createdAt),
+    );
+    const exclusion = await tickets.recordSlaEvidence(tenant, ticket.id, {
+      type: 'exclusion_started',
+      intervalId: 'sla_exclusion_test',
+      reasonCode: 'approved_waiting_period',
+      evidence: 'Customer-approved waiting period.',
+      contractReference: 'CONTRACT-TEST',
+    });
+    assert.ok(exclusion);
+    const activeExclusionEvaluation = await service.evaluateTicket(
+      tenant,
+      ticket.id,
+      new Date(Date.now() + 1000).toISOString(),
+    );
+    assert.equal(activeExclusionEvaluation?.input.isPaused, true);
+    assert.equal(
+      activeExclusionEvaluation?.input.activePauseStartedAt,
+      exclusion[1].createdAt,
+    );
+    await tickets.recordSlaEvidence(tenant, ticket.id, {
+      type: 'exclusion_ended',
+      intervalId: 'sla_exclusion_test',
+    });
+    const completedExclusionEvaluation = await service.evaluateTicket(
+      tenant,
+      ticket.id,
+      new Date(Date.now() + 1000).toISOString(),
+    );
+    assert.equal(completedExclusionEvaluation?.input.pauses?.length, 1);
     assert.equal(
       (await evaluationRepository.list({
         ...tenant,

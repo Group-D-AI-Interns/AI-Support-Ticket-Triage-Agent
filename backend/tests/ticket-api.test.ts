@@ -223,6 +223,364 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
   }
 });
 
+test('records SLA assessment and exclusion evidence with role restrictions', async () => {
+  const managerFixture = await createFixture();
+  let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    const managerTicket = await new JsonTicketStore(
+      managerFixture.root,
+    ).createTicket(
+      {
+        organisationId: 'org_support',
+        requesterId: 'requester-1',
+        title: 'Evidence workflow test',
+        teamId: 'team_support',
+      },
+      {
+        organisationId: 'org_support',
+        userId: 'requester-1',
+        roles: ['requester'],
+      },
+    );
+    const ticketId = managerTicket.id;
+
+    const assessment = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'assessment_completed',
+          evidence: 'Impact and affected service assessed.',
+        }),
+      },
+    );
+    assert.equal(assessment.status, 201);
+    const duplicateAssessment = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'assessment_completed',
+          evidence: 'Duplicate assessment.',
+        }),
+      },
+    );
+    assert.equal(duplicateAssessment.status, 409);
+
+    const exclusionStart = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'exclusion_started',
+          reasonCode: 'approved_waiting_period',
+          evidence: 'Customer requested a service postponement.',
+          contractReference: 'CONTRACT-123',
+        }),
+      },
+    );
+    assert.equal(exclusionStart.status, 201);
+    const startEvent = (await exclusionStart.json()).data;
+    const exclusionEnd = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'exclusion_ended',
+          intervalId: startEvent.changes.intervalId,
+        }),
+      },
+    );
+    assert.equal(exclusionEnd.status, 201);
+
+    agentFixture = await createFixture({
+      principal: principal('support-agent', ['support_agent']),
+    });
+    const agentTicket = await new JsonTicketStore(agentFixture.root).createTicket(
+      {
+        organisationId: 'org_support',
+        requesterId: 'requester-1',
+        title: 'Agent evidence authorization test',
+        teamId: 'team_support',
+      },
+      {
+        organisationId: 'org_support',
+        userId: 'requester-1',
+        roles: ['requester'],
+      },
+    );
+    const agentAssessment = await agentFixture.request(
+      `/api/v1/tickets/${agentTicket.id}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'assessment_completed',
+          evidence: 'Agent completed impact assessment.',
+        }),
+      },
+    );
+    assert.equal(agentAssessment.status, 201);
+    const forbiddenExclusion = await agentFixture.request(
+      `/api/v1/tickets/${agentTicket.id}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'exclusion_started',
+          reasonCode: 'approved_waiting_period',
+          evidence: 'Evidence',
+          contractReference: 'CONTRACT-123',
+        }),
+      },
+    );
+    assert.equal(forbiddenExclusion.status, 403);
+  } finally {
+    if (agentFixture) {
+      await agentFixture.close();
+    }
+    await managerFixture.close();
+  }
+});
+
+test('requires pause and resolution evidence on SLA-governed status transitions', async () => {
+  const adminFixture = await createFixture({
+    principal: principal('sla-admin', ['organisation_admin']),
+  });
+  let requesterFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  let leadFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    const adminTenant = {
+      organisationId: 'org_support',
+      userId: 'sla-admin',
+      roles: ['organisation_admin'],
+    };
+    const policies = new JsonPolicyRepository(
+      createJsonTenantStore(adminFixture.root),
+    );
+    await policies.createPolicy(
+      {
+        id: 'sla-contract-policy',
+        organisationId: 'org_support',
+        policyType: 'sla',
+        ownerId: adminTenant.userId,
+        status: 'active',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        version: 1,
+        description: 'SLA evidence transition test.',
+      },
+      adminTenant,
+    );
+    await policies.createVersion(
+      'sla-contract-policy',
+      {
+        id: 'sla-contract-policy-v1',
+        organisationId: 'org_support',
+        policyId: 'sla-contract-policy',
+        version: 1,
+        status: 'active',
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        payload: {
+          calendar: {
+            timeZone: 'UTC',
+            weeklySchedule: Object.fromEntries(
+              [
+                'monday',
+                'tuesday',
+                'wednesday',
+                'thursday',
+                'friday',
+                'saturday',
+                'sunday',
+              ].map((day) => [day, [{ startMinute: 0, endMinute: 1440 }]]),
+            ),
+            holidays: [],
+          },
+          targetsByPriority: {
+            P2: { firstResponseMinutes: 60, resolutionMinutes: 240 },
+          },
+          pausedStatuses: ['PENDING'],
+          resolvedStatuses: ['RESOLVED', 'CLOSED'],
+          riskAtPercent: 75,
+        },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      adminTenant,
+    );
+    const workflowResponse = await adminFixture.request(
+      '/api/v1/ticket-workflows',
+      {
+        method: 'POST',
+        body: JSON.stringify({ config: workflowConfig }),
+      },
+    );
+    const workflow = (await workflowResponse.json()).data;
+    await adminFixture.request(
+      `/api/v1/ticket-workflows/${workflow.id}/approve`,
+      { method: 'POST' },
+    );
+    requesterFixture = await createFixture({
+      root: adminFixture.root,
+      principal: principal('sla-requester', ['requester']),
+    });
+    agentFixture = await createFixture({
+      root: adminFixture.root,
+      principal: principal('sla-agent', ['support_agent']),
+    });
+    leadFixture = await createFixture({
+      root: adminFixture.root,
+      principal: principal('sla-lead', ['support_lead']),
+    });
+
+    const created = await requesterFixture.request('/api/v1/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'SLA evidence transition test',
+        description: 'Exercise evidence-aware SLA status transitions.',
+      }),
+    });
+    const ticket = (await created.json()).data;
+    assert.equal(created.status, 201);
+    const assigned = await adminFixture.request(
+      `/api/v1/tickets/${ticket.id}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          teamId: 'team_support',
+          priority: 'P2',
+          priorityOverride: {
+            reason: 'Initial triage completed.',
+            businessJustification: 'Priority required for SLA evaluation.',
+          },
+        }),
+      },
+    );
+    assert.equal(assigned.status, 200);
+    const opened = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'OPEN' }),
+      },
+    );
+    assert.equal(opened.status, 200);
+
+    const agentPauseAttempt = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'PENDING',
+          pauseEvidence: {
+            reasonCode: 'waiting_for_requester_information',
+            evidence: 'Requested missing diagnostic information.',
+            contractReference: 'CONTRACT-SLA-1',
+          },
+        }),
+      },
+    );
+    assert.equal(agentPauseAttempt.status, 403);
+    const missingPauseEvidence = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'PENDING' }),
+      },
+    );
+    assert.equal(missingPauseEvidence.status, 400);
+    const paused = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'PENDING',
+          pauseEvidence: {
+            reasonCode: 'waiting_for_requester_information',
+            evidence: 'Requested missing diagnostic information.',
+            contractReference: 'CONTRACT-SLA-1',
+          },
+        }),
+      },
+    );
+    assert.equal(paused.status, 200);
+    const resumed = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'IN_PROGRESS' }),
+      },
+    );
+    assert.equal(resumed.status, 200);
+
+    const missingResolutionEvidence = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'RESOLVED' }),
+      },
+    );
+    assert.equal(missingResolutionEvidence.status, 400);
+    const resolved = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'RESOLVED',
+          resolutionEvidence: {
+            outcome: 'service_restored',
+            note: 'Service access was restored.',
+            customerConfirmation: 'received',
+            customerConfirmationEvidence: 'Requester confirmed access.',
+          },
+        }),
+      },
+    );
+    assert.equal(resolved.status, 200);
+    const resolvedRun = await adminFixture.request(
+      '/api/v1/sla/evaluations/run',
+      { method: 'POST', body: '{}' },
+    );
+    const resolvedEvaluation = (await resolvedRun.json()).data.find(
+      (record: { ticketId: string }) => record.ticketId === ticket.id,
+    );
+    assert.equal(resolvedEvaluation.input.resolutionEvidenceEventId !== undefined, true);
+
+    const reopened = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'REOPENED',
+          reason: 'The service issue returned.',
+        }),
+      },
+    );
+    assert.equal(reopened.status, 200);
+    const reopenedRun = await adminFixture.request(
+      '/api/v1/sla/evaluations/run',
+      { method: 'POST', body: '{}' },
+    );
+    const reopenedEvaluation = (await reopenedRun.json()).data.find(
+      (record: { ticketId: string }) => record.ticketId === ticket.id,
+    );
+    assert.equal(reopenedEvaluation.input.resolvedAt, undefined);
+    assert.equal(reopenedEvaluation.input.resolutionPauses.length, 1);
+  } finally {
+    if (leadFixture) {
+      await leadFixture.close(false);
+    }
+    if (agentFixture) {
+      await agentFixture.close(false);
+    }
+    if (requesterFixture) {
+      await requesterFixture.close(false);
+    }
+    await adminFixture.close();
+  }
+});
+
 test('ticket workflow drafts require organisation-admin approval and stay tenant-scoped', async () => {
   const admin = await createFixture({
     principal: principal('user_admin', ['organisation_admin', 'requester']),
@@ -770,8 +1128,19 @@ test('ticket changes are audited and comments honor visibility and role rules', 
     );
     assert.equal(internalAttempt.status, 403);
     assert.equal(audit.status, 200);
-    assert.equal(auditResult.data.at(-1).action, 'ticket.comment_added');
-    assert.equal(auditResult.data.at(-1).actorId, 'user_requester_1');
+    assert.ok(
+      auditResult.data.some(
+        (event: { action: string; actorId: string }) =>
+          event.action === 'ticket.comment_added' &&
+          event.actorId === 'user_requester_1',
+      ),
+    );
+    assert.ok(
+      auditResult.data.some(
+        (event: { action: string }) =>
+          event.action === 'ticket.sla.acknowledgement_recorded',
+      ),
+    );
   } finally {
     if (requesterFixture) {
       await requesterFixture.close(false);
