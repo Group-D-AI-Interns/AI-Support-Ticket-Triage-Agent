@@ -15,7 +15,7 @@ const schemas = [
   z.strictObject({ ...base, kind: z.literal('report'), data: z.strictObject({ ticketId: text, snapshot: z.strictObject({ id: text, organisationId: text, title: text, description: z.string() }), result: z.json() }) }),
   z.strictObject({ ...base, kind: z.literal('review'), data: reviewInput.extend({ reportId: text }) }),
   z.strictObject({ ...base, kind: z.literal('job'), data: z.strictObject({ ticketId: text, snapshotHash: text, status: z.enum(['queued', 'running', 'completed', 'failed']),
-    attempts: z.number().int().nonnegative(), maxAttempts: z.number().int().min(1).max(5), availableAt: stamp, leaseUntil: stamp.nullable(), leaseToken: text.nullable(), reportId: text.nullable(), errorCode: text.nullable() }) }),
+    automatic: z.boolean().optional(), attempts: z.number().int().nonnegative(), maxAttempts: z.number().int().min(1).max(5), availableAt: stamp, leaseUntil: stamp.nullable(), leaseToken: text.nullable(), reportId: text.nullable(), errorCode: text.nullable() }) }),
   z.strictObject({ ...base, kind: z.literal('evaluation'), data: z.json() }),
   z.strictObject({ ...base, kind: z.literal('audit'), data: z.strictObject({ action: text, targetId: text, reason: text }) }),
 ] as const;

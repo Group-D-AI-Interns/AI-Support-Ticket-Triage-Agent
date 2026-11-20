@@ -1,0 +1,66 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "requiresHumanReview": true,
+  "automaticIntakeEnabled": false,
+  "routingProposals": [
+    {
+      "categoryId": "ACCOUNT_ACCESS",
+      "proposedTeamName": "Account Support",
+      "approvedTeamId": null
+    },
+    {
+      "categoryId": "BILLING",
+      "proposedTeamName": "Billing Support",
+      "approvedTeamId": null
+    }
+  ],
+  "processingActor": {
+    "approvedUserId": null,
+    "approvedOrganisationId": null,
+    "requiredPermissions": [
+      "tickets.ai.review",
+      "tickets.resolution.review"
+    ],
+    "note": "Use an active, approved application processing account with only the intended ticket/team access. Do not persist a bearer token or assume a new service account can access tickets."
+  },
+  "intake": {
+    "approvedCreatedAfter": null,
+    "intervalMs": 2000,
+    "note": "Choose an explicit ISO timestamp; older tickets are excluded from automatic reconciliation."
+  },
+  "workloadBudgetProposal": {
+    "maxJobsPerUtcDayPerOrganisation": 10,
+    "maxAttemptsPerJob": 1,
+    "monetaryBudgetApproved": false,
+    "note": "Job limits are not a currency cap: core/optional tasks, one core validation regeneration, provider retries and fallback can each add provider requests. Confirm provider pricing and account spending controls separately."
+  },
+  "qualityAcceptanceProposal": {
+    "rounds": 2,
+    "completionRate": 1,
+    "categoryAccuracyOverAllCases": 0.9,
+    "firstPassCompletionRate": 0.9,
+    "prohibitedPhraseHits": 0,
+    "semanticGroundedness": "human_review_required",
+    "note": "Starter engineering thresholds for review, not an approved production quality standard."
+  },
+  "requiredBeforeEnablement": [
+    "Human approval of real team IDs for both categories.",
+    "An approved effective SLA policy including client tier, calendar, holidays and business-day conversion; do not activate source candidates automatically.",
+    "Legitimate requester-submitted tickets and reviewed resolution evidence for the historical corpus.",
+    "Passing ticket triage/history/review/job/SLA acceptance with the intended user permissions.",
+    "Approved processing user, organisation, intake timestamp, workload limits and monetary provider budget."
+  ],
+  "approvals": {
+    "routingTeamNames": {
+      "status": "approved_for_local_testing",
+      "approvedBy": "Wandile",
+      "date": "2026-11-20"
+    },
+    "workloadLimits": {
+      "status": "approved_for_local_pilot",
+      "approvedBy": "Wandile",
+      "date": "2026-11-20"
+    }
+  }
+}

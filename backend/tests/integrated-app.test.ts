@@ -748,3 +748,51 @@ test('automatic intake is opt-in and idempotent without ticket mutations', async
     assert.equal(await readFile(join(f.root,'tickets.json'),'utf8'),before);
   } finally {await f.close();}
 });
+
+
+test('requester intake, reviewed history, approved routing, SLA, triage reviews and queued processing form one API flow', async () => {
+  const f=await fixture(null,documentAiAdapters());
+  try{
+    async function api(path:string,method='GET',body?:unknown,user='admin',expected=200){
+      const response=await f.request('/api/v1'+path,user,{method,...(body===undefined?{}:{body:JSON.stringify(body)})});
+      const result=await response.json();assert.equal(response.status,expected,JSON.stringify(result.error));return result.data;
+    }
+    const workflow=await api('/ticket-workflows','POST',{config:{sourceReference:'Synthetic acceptance workflow',initialStatus:'NEW',reopenStatus:'REOPENED',statuses:['NEW','OPEN','RESOLVED','CLOSED','REOPENED'],
+      transitions:{NEW:['OPEN'],OPEN:['RESOLVED'],RESOLVED:['CLOSED','REOPENED'],CLOSED:['REOPENED'],REOPENED:['OPEN']},requestableReopenFrom:['RESOLVED'],restrictedReopenFrom:['CLOSED'],
+      permissions:{directStatusChangeRoles:['support_agent','support_lead'],closedReopenRoles:['support_lead','organisation_admin'],reopenRequestRoles:['requester'],reopenApprovalRoles:['support_lead','organisation_admin'],administratorOverrideRoles:['organisation_admin']}}},'admin',201);
+    await api(`/ticket-workflows/${workflow.id}/approve`,'POST',{});
+    const team=await api('/teams','POST',{name:'Synthetic approved Account Support'},'admin',201);
+    await api(`/teams/${team.id}/members`,'PUT',{userId:'admin',role:'support_lead',status:'active'});
+    const payload={calendar:{timeZone:'UTC',weeklySchedule:Object.fromEntries(['sunday','monday','tuesday','wednesday','thursday','friday','saturday'].map(day=>[day,[{startMinute:0,endMinute:1440}]])),holidays:[]},targetsByPriority:{P2:{firstResponseMinutes:120,resolutionMinutes:480}},pausedStatuses:['PENDING'],resolvedStatuses:['RESOLVED'],riskAtPercent:75};
+    const policy=await api('/sla-policies','POST',{description:'Synthetic approved acceptance SLA',effectiveFrom:'2020-01-01T00:00:00.000Z',payload},'admin',201);
+    const policyPath=`/sla-policies/${policy.policy.id}/versions/${policy.version.id}`;
+    await api(policyPath+'/approve','POST',{reason:'Fixture human approval of synthetic targets'});await api(policyPath+'/activate','POST',{});
+    const rule=await api('/ai/routing-rules','POST',{categoryIds:['ACCESS'],teamId:team.id,effectiveFrom:'2020-01-01T00:00:00.000Z'},'admin',201);
+    await api(`/ai/routing-rules/${rule.id}/approve`,'POST',{reason:'Fixture human approval of synthetic routing'});
+    async function createTicket(title:string){
+      const ticket=await api('/tickets','POST',{title,description:'Account locked after password reset.'},'requester',201);
+      await api(`/tickets/${ticket.id}`,'PATCH',{teamId:team.id,priority:'P2',priorityOverride:{reason:'Fixture human assessment',businessJustification:'Only this account is blocked'}});
+      return ticket;
+    }
+    const historical=await createTicket('Historical account access lockout');
+    await api(`/tickets/${historical.id}/status`,'PATCH',{status:'OPEN'});
+    await api(`/tickets/${historical.id}/status`,'PATCH',{status:'RESOLVED',resolutionEvidence:{outcome:'service_restored',note:'Account access restored after authorized reset.',customerConfirmation:'received',customerConfirmationEvidence:'Synthetic requester confirmed login.'}});
+    await api(`/tickets/${historical.id}/verified-resolution`,'POST',{resolution:'For this account access lockout, verify the account owner and request an authorized password reset. Confirm account access is restored.',visibility:'organisation_staff',reason:'Fixture reviewer checked the recorded resolution evidence'},'admin',201);
+    const target=await createTicket('Account access lockout');const path=`/tickets/${target.id}`;
+    const before=await api(path);const triage=await api(path+'/triage','POST',{});
+    assert.equal(triage.core.orchestration.engine,'langgraph');assert.equal(triage.routing.data.teamId,team.id);
+    assert.equal(triage.sla.data.status,'available');assert.equal(triage.sla.data.evaluation.policyVersionId,policy.version.id);
+    assert.equal(triage.resolution.data.status,'recommendation');assert.ok(triage.resolution.data.steps[0].citations.length);
+    assert.ok((await api(path+'/similar')).some((row:{sourceId:string})=>row.sourceId===historical.id));
+    const review=await api(`${path}/triages/${triage.triageId}/reviews`,'POST',{decision:'accepted',reason:'Synthetic reviewer verified the fixture evidence'},'admin',201);
+    const job=await api(path+'/triage-jobs','POST',{},'admin',202);
+    const completed=await api(`/ai/triage-jobs/${job.id}/process`,'POST',{});assert.equal(completed.data.status,'completed');
+    const repeated=await api(`/ai/triage-jobs/${job.id}/process`,'POST',{});assert.equal(repeated.data.reportId,completed.data.reportId);
+    await f.restart();
+    const history=await api(path+'/triages');assert.equal(history.length,2);
+    assert.ok(history.find((row:{id:string})=>row.id===triage.triageId).reviews.some((row:{id:string})=>row.id===review.id));
+    const queued=history.find((row:{id:string})=>row.id===completed.data.reportId);
+    assert.equal(queued.data.result.sla.data.status,'available');assert.equal(queued.data.result.routing.data.teamId,team.id);
+    assert.deepEqual(await api(path),before);
+  }finally{await f.close();}
+});

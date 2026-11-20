@@ -107,3 +107,36 @@ Final completion verification:
 The full test log is local and ignored: backend/.local-data/ai-completion-final-tests.log.
 The backend was started for manual testing. Existing staged development-merge work remains
 preserved and the completion changes have not been committed.
+
+
+## Reliability and pilot hardening ? 20 November 2026
+
+The expanded 12-case live dataset ran twice: 24/24 completed, 24/24 matched their
+expected categories, 23/24 completed on the first pass, one recovered through the bounded
+core-output regeneration, and zero prohibited phrase hits were observed. Semantic
+summary/resolution groundedness still requires human review. These are synthetic sample
+results, not a production-quality guarantee. Original failures remain in their prior logs.
+
+The final automated suite passed 206 tests in 11 suites, including a joined HTTP flow from
+requester intake through approved fixture routing/SLA, resolution evidence verification,
+historical retrieval, triage, review persistence, job processing/idempotency and restart
+recovery. Typecheck, build and the new CLI typechecks passed. The running backend was
+restarted; health/spec returned 200 and a live evaluation through the updated API returned
+201 with the new completion/recovery metrics.
+
+Wandile approved Account Support / ACCOUNT_ACCESS and Billing Support / BILLING for local
+testing. These teams and rules were created/approved through authenticated APIs using the
+refreshed administrator token. Approval reasons are retained in the AI ledger. The older
+synthetic smoke rule remains disabled. No operational SLA/knowledge policy was activated.
+
+Wandile approved a local workload limit of ten automatic jobs per organisation per UTC day
+and one attempt per job. Atomic budget reservations and duplicate/retry tests now enforce
+those limits; this is not a currency budget. Automatic intake remains disabled pending
+processing-account, intake-timestamp, provider-budget and live acceptance decisions.
+
+The actual local organisation still needs a legitimate requester submission, a separately
+resolved/reviewed historical ticket, and an approved applicable SLA tier/calendar before
+live joined acceptance can pass. No accounts/roles or verified resolutions were fabricated.
+See backend/.local-data/ai-pilot-readiness.json and approved-ai-pilot.json for local IDs and
+current gates. Those files and token files remain ignored; no tokens were copied into the
+Postman environment or source control.

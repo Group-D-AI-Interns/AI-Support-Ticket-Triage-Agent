@@ -28,6 +28,7 @@ export async function runQualityEvaluation(store: AiOperationsStore, tenant: Ten
         requiredFacts: sample.requiredFacts.length, matchedFacts: sample.requiredFacts.filter(fact => output.includes(normalized(fact))).length,
         prohibitedFacts: sample.prohibitedFacts.length, prohibitedFactsPresent: sample.prohibitedFacts.filter(fact => output.includes(normalized(fact))).length,
         classification: analysis.classification, summary: analysis.summary,
+        recoveredValidation: analysis.executions.some(execution => !!execution.validationRetryOf),
         executions: analysis.executions, promptVersions: analysis.orchestration?.promptVersions ?? {} });
     } catch (error) { cases.push({ caseId: sample.id, status: 'failed',
       errorCode: error instanceof AiExecutionError ? error.code : 'EVALUATION_CASE_FAILED',
@@ -40,6 +41,10 @@ export async function runQualityEvaluation(store: AiOperationsStore, tenant: Ten
   const data = { datasetVersion: dataset.version, datasetHash: createHash('sha256').update(JSON.stringify(dataset)).digest('hex'),
     metrics: { totalCases: cases.length, successfulCases: successful.length, failedCases: cases.length - successful.length,
       categoryAccuracy: successful.length ? successful.filter(item => item.categoryCorrect).length / successful.length : null,
+      completionRate: successful.length / cases.length,
+      recoveredCases: successful.filter(item => item.recoveredValidation).length,
+      firstPassCompletionRate: successful.filter(item => !item.recoveredValidation).length / cases.length,
+      categoryAccuracyOverAllCases: successful.filter(item => item.categoryCorrect).length / cases.length,
       requiredFactCoverage: facts ? matched / facts : null, prohibitedPhraseHits: successful.reduce((sum, item) => sum + (item.prohibitedFactsPresent ?? 0), 0),
       groundingMethod: 'lexical_proxy_only', semanticGroundedness: 'requires_human_review' }, cases };
   const record: OfKind<'evaluation'> = { id: `evaluation_${randomUUID()}`, kind: 'evaluation', organisationId: tenant.organisationId,
