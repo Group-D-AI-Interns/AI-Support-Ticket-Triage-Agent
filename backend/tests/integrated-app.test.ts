@@ -48,7 +48,7 @@ async function uploadKnowledge(f: Awaited<ReturnType<typeof fixture>>, text = 'F
 }
 
 async function fixture(priorityPreview: PriorityPreviewConfiguration | null = null,
-  resolution: Pick<TicketAppOptions, 'knowledgeSource' | 'resolutionRunner' | 'documentExtractionAdapter' | 'routingSource' | 'slaInsightSource' | 'aiAutomation'> = {}) {
+  resolution: Pick<TicketAppOptions, 'knowledgeSource' | 'resolutionRunner' | 'documentExtractionAdapter' | 'routingSource' | 'slaInsightSource' | 'aiAutomation' | 'slaEvaluationWorker'> = {}) {
   const root = await mkdtemp(join(tmpdir(), 'integrated-triage-'));
   const store = new JsonFileStore(root);
   const now = new Date().toISOString();
@@ -751,7 +751,8 @@ test('automatic intake is opt-in and idempotent without ticket mutations', async
 
 
 test('requester intake, reviewed history, approved routing, SLA, triage reviews and queued processing form one API flow', async () => {
-  const f=await fixture(null,documentAiAdapters());
+  const workerErrors:string[]=[];
+  const f=await fixture(null,{...documentAiAdapters(),slaEvaluationWorker:{intervalMs:1000,listOrganisationIds:async()=>['org-a','org-b'],logger:{error(message){workerErrors.push(message);}}}});
   try{
     async function api(path:string,method='GET',body?:unknown,user='admin',expected=200){
       const response=await f.request('/api/v1'+path,user,{method,...(body===undefined?{}:{body:JSON.stringify(body)})});
@@ -779,7 +780,23 @@ test('requester intake, reviewed history, approved routing, SLA, triage reviews 
     await api(`/tickets/${historical.id}/status`,'PATCH',{status:'RESOLVED',resolutionEvidence:{outcome:'service_restored',note:'Account access restored after authorized reset.',customerConfirmation:'received',customerConfirmationEvidence:'Synthetic requester confirmed login.'}});
     await api(`/tickets/${historical.id}/verified-resolution`,'POST',{resolution:'For this account access lockout, verify the account owner and request an authorized password reset. Confirm account access is restored.',visibility:'organisation_staff',reason:'Fixture reviewer checked the recorded resolution evidence'},'admin',201);
     const target=await createTicket('Account access lockout');const path=`/tickets/${target.id}`;
-    const before=await api(path);const triage=await api(path+'/triage','POST',{});
+    // No manual evaluation or AI call yet: the event worker must persist a real Faith-engine result.
+    async function waitForEvaluation(after?:number){
+      const deadline=Date.now()+5000;
+      while(Date.now()<deadline){
+        const rows=await api(`/sla/evaluations?ticketId=${target.id}`);
+        const row=rows.find((value:{evaluatedAt:string;policyVersionId:string})=>value.policyVersionId===policy.version.id&&(after===undefined||Date.parse(value.evaluatedAt)>after));
+        if(row)return row;
+        await new Promise(resolve=>setTimeout(resolve,25));
+      }
+      assert.fail('Background SLA worker did not persist the expected current evaluation.');
+    }
+    const eventEvaluation=await waitForEvaluation();assert.equal(eventEvaluation.input.priority,'P2');
+    const before=await api(path);
+    // With no further writes or AI calls, an evaluation after this timestamp must come from polling.
+    await waitForEvaluation(Date.now());
+    assert.deepEqual(await api(path),before);
+    const triage=await api(path+'/triage','POST',{});
     assert.equal(triage.core.orchestration.engine,'langgraph');assert.equal(triage.routing.data.teamId,team.id);
     assert.equal(triage.sla.data.status,'available');assert.equal(triage.sla.data.evaluation.policyVersionId,policy.version.id);
     assert.equal(triage.resolution.data.status,'recommendation');assert.ok(triage.resolution.data.steps[0].citations.length);
@@ -794,5 +811,7 @@ test('requester intake, reviewed history, approved routing, SLA, triage reviews 
     const queued=history.find((row:{id:string})=>row.id===completed.data.reportId);
     assert.equal(queued.data.result.sla.data.status,'available');assert.equal(queued.data.result.routing.data.teamId,team.id);
     assert.deepEqual(await api(path),before);
+    assert.deepEqual(await api('/sla/evaluations','GET',undefined,'other'),[]);
+    assert.deepEqual(workerErrors,[],'The real SLA worker must not log hidden evaluation or persistence failures.');
   }finally{await f.close();}
 });

@@ -140,3 +140,63 @@ live joined acceptance can pass. No accounts/roles or verified resolutions were 
 See backend/.local-data/ai-pilot-readiness.json and approved-ai-pilot.json for local IDs and
 current gates. Those files and token files remain ignored; no tokens were copied into the
 Postman environment or source control.
+
+
+## Faith SLA worker and AI merge verification ? 20 November 2026
+
+Verified merged source 45931be with 209 passing tests in 11 suites, source typecheck,
+full build and whitespace checks. The joined HTTP integration fixture now explicitly
+enables the real SlaEvaluationWorker and SlaEvaluationService instead of leaving the
+worker disabled. Before calling AI/manual evaluation it verifies that a ticket-change
+event persists a P2 evaluation with the applicable approved fixture policy version.
+It then verifies a later periodic evaluation without further ticket writes or AI calls,
+unchanged ticket data, current SLA in AI triage, cited historical resolution retrieval,
+review history, queued/idempotent processing, restart recovery and empty results for
+the unrelated tenant. The worker logger must remain free of hidden evaluation errors.
+
+The local backend process was confirmed to predate the merge and restarted with the
+updated source. Liveness/readiness/versioned health/Swagger/OpenAPI returned 200;
+unauthenticated SLA and AI governance requests returned 401. The production-configured
+SLA polling default is five minutes, and event-driven writes enqueue evaluation sooner.
+SLA background work and automatic AI/provider processing remain separate mechanisms.
+
+The actual local organisation still has zero tickets and zero active SLA versions.
+An applicable approved/effective tenant SLA policy and actual internal ticket priority
+remain prerequisites for live evaluations. Missing input legitimately yields no evaluation
+or unavailable AI SLA insight. Existing configuration.manage restrictions on exposed SLA
+metrics remain enforced. No customer SLA policy, role or Keycloak configuration was
+changed, and no live LLM/Jira request was made for this merge verification.
+
+Local evidence: backend/.local-data/sla-worker-final-verification.log,
+sla-ai-worker-joined-test.log and sla-merge-runtime-verification.json. The strengthened
+test and this note are uncommitted follow-up verification changes after the last push.
+
+
+### Additional real-provider checks ? 20 November 2026
+
+Real Inception mercury-3 calls were made using synthetic data. The expanded 12-case
+classification/summary set ran twice: 24/24 completed on the first pass with expected
+categories and zero prohibited phrase hits. This does not establish semantic groundedness.
+
+A separate isolated integration used the real SLA policy repository, simulated policy
+review/activation, Faith's resolver/service/event-periodic worker, durable evaluation
+repository, FreshVerifiedSlaSource and live LangGraph components. Classification and
+summarization passed, AI received available SLA insight for the expected fixture version,
+seven evaluations persisted during the run, and the source ticket stayed unchanged.
+
+The first complete provider workflow failed because a resolution response was rejected
+as INVALID_OUTPUT after classification/summary/priority-factor calls had passed. An
+independent resolution probe validated its output but returned insufficient_evidence;
+the combined SLA run did likewise, requesting missing service desk contact information.
+These results must not be described as fully passing resolution acceptance.
+
+The independent live extraction returned a two-hour candidate but omitted the required
+top-level warnings array. Strict validation rejected it and the adapter returned failed
+with no accepted rules. Validators were preserved. No production prompt/schema/retry
+behavior was changed to conceal these outcomes. Groq fallback was not exercised by these
+successful Inception calls. The deterministic regression suite remains 209/209 passing;
+it does not imply that every live provider response meets the output contracts.
+
+Detailed local evidence: backend/.local-data/sla-merge-live-summary.json,
+sla-merge-live-workflow.log, sla-merge-live-capability-probe.json and
+sla-merge-live-combined-results.json. Synthetic raw model outputs are local and ignored.
