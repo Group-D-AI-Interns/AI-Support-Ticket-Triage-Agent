@@ -14,6 +14,13 @@ An "Approved Template" heading is not application approval.
 - `performance/support-lead-kpa-kpi.md`: HR-KPA-SL-001 v1.0, nine lead KPAs.
 - `candidates/`: manually prepared structured draft transcriptions for review, not runtime seeds.
 
+`candidates/sla-targets.json` includes a normalized Gold example using temporary
+Africa/Johannesburg weekday hours and provisional statuses. It is an illustration
+only: no organisation is assigned, holidays are not excluded, and it is not loaded
+or activated by the application. Its escalation and retention sections are also
+draft-only: they propose report-only review with outbound notifications disabled,
+and preserving development snapshots without automatic deletion.
+
 No startup script loads these references or candidates. `data/seed/` remains structured
 synthetic initial data; no active SLA seed targets were replaced. Source checksums are
 tested. If a source changes, create/review a new version and regenerate its candidates;

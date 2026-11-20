@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import express, {
+  type Express,
   type ErrorRequestHandler,
   type NextFunction,
   type Request,
@@ -65,6 +66,10 @@ import { OperationalReportingService } from '../reporting/services/operational-r
 import type { SlaEvaluationRepository } from '../sla/repositories/sla-evaluation.repository.js';
 import { JsonSlaEvaluationRepository } from '../sla/repositories/sla-evaluation.repository.js';
 import { SlaEvaluationService } from '../sla/services/sla-evaluation.service.js';
+import {
+  SlaEvaluationWorker,
+  type SlaEvaluationWorkerOptions,
+} from '../sla/services/sla-evaluation-worker.js';
 import { RepositorySlaPolicyResolver } from '../sla/services/sla-policy-resolver.js';
 import { parseSlaPolicy, SlaPolicyValidationError } from '../sla/domain/sla-policy.js';
 import {
@@ -124,6 +129,7 @@ import {
 } from './services/ticket-workflow-validation.js';
 
 type ApiErrorField = { field: string; message: string };
+const ticketAppDisposers = new WeakMap<Express, () => void>();
 
 class ApiError extends Error {
   constructor(
@@ -150,6 +156,7 @@ export type TicketAppOptions = {
   policyRepository?: PolicyRepository;
   slaEvaluationRepository?: SlaEvaluationRepository;
   slaEvaluationService?: SlaEvaluationServiceType;
+  slaEvaluationWorker?: SlaEvaluationWorkerOptions;
   analysisRepository?: AiAnalysisRepository;
   ticketAiDemo?: TicketAiDemoConfiguration | null;
   ticketAiLive?: LiveTicketAiConfiguration | null;
@@ -157,6 +164,11 @@ export type TicketAppOptions = {
   resolutionRunner?: AiExecutionRunner;
   knowledgeSource?: AuthorizedKnowledgeSource;
 };
+
+export function stopTicketApp(app: Express): void {
+  ticketAppDisposers.get(app)?.();
+  ticketAppDisposers.delete(app);
+}
 
 export function createTicketApp(options: TicketAppOptions = {}) {
   const settings = options.settings ?? jiraSettingsFromEnvironment();
@@ -383,6 +395,13 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     : null;
 
   const app = express();
+  const slaEvaluationWorker = options.slaEvaluationWorker
+    ? new SlaEvaluationWorker(
+        slaEvaluationService,
+        store,
+        options.slaEvaluationWorker,
+      )
+    : undefined;
   const fallbackRequestId = () => `req_${randomUUID().replace(/-/g, '')}`;
   const attachmentUpload = multer({
     storage: multer.memoryStorage(),
@@ -2051,6 +2070,16 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   });
 
   app.use(errorHandler);
+  if (slaEvaluationWorker) {
+    const unsubscribe = store.subscribeToTicketChanges(({ organisationId, ticketId }) => {
+      slaEvaluationWorker.enqueue(organisationId, ticketId);
+    });
+    slaEvaluationWorker.start();
+    ticketAppDisposers.set(app, () => {
+      unsubscribe();
+      slaEvaluationWorker.stop();
+    });
+  }
   return app;
 }
 
