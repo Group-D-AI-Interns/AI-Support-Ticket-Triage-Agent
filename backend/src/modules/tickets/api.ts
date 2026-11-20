@@ -74,7 +74,7 @@ import {
   DocumentValidationError,
   MAX_DOCUMENT_SIZE_BYTES,
 } from '../documents/validators/document-validation.js';
-import { createJsonTenantStore } from '../../infrastructure/persistence/json/json-store.js';
+import { createJsonTenantStore, type JsonTenantStore } from '../../infrastructure/persistence/json/json-store.js';
 import type { PolicyRepository } from '../policies/repositories/policy.repository.js';
 import { JsonPolicyRepository } from '../policies/repositories/json-policy.repository.js';
 import { OperationalReportingService } from '../reporting/services/operational-reporting.service.js';
@@ -167,6 +167,7 @@ export type TicketAppOptions = {
   tenantResolver?: TenantResolver;
   listTeamIdsForUser?: (tenant: TenantContext, userId: string) => Promise<string[]>;
   authorization?: RolePermissionPolicy;
+  tenantStore?: JsonTenantStore;
   attachmentStorage?: DocumentStorageAdapter;
   policyRepository?: PolicyRepository;
   slaEvaluationRepository?: SlaEvaluationRepository;
@@ -198,7 +199,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     new JsonTicketWorkflowStore(settings.dataDirectory);
   const ticketReadService =
     options.ticketReadService ?? new JsonTicketReadService(store);
-  const tenantStore = createJsonTenantStore(settings.dataDirectory);
+  const tenantStore = options.tenantStore ?? createJsonTenantStore(settings.dataDirectory);
   const policyRepository =
     options.policyRepository ?? new JsonPolicyRepository(tenantStore);
   const documentRepository = new JsonDocumentRepository(tenantStore);
@@ -505,13 +506,13 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       parts: 2,
     },
   });
-  const requireDocumentAdministrator = (
+  const requireDocumentManager = (
     request: Request,
     _response: Response,
     next: NextFunction,
   ) => {
     try {
-      requireOrganisationAdmin(authenticatedPrincipal(request, principal), authorization);
+      requireSharedPermission(authenticatedPrincipal(request, principal), authorization, 'documents.manage');
       next();
     } catch (error) {
       next(error);
@@ -573,7 +574,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/documents', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated, authorization);
+    requireSharedPermission(authenticated, authorization, 'documents.read');
     const documents = await documentLifecycle.listDocuments(authenticated);
     const data = await Promise.all(
       documents.map(async (document) => {
@@ -592,7 +593,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.post(
     '/api/v1/documents',
-    requireDocumentAdministrator,
+    requireDocumentManager,
     documentUpload.single('file'),
     async (request, response) => {
       const authenticated = authenticatedPrincipal(request, principal);
@@ -624,7 +625,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/documents/:documentId', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated, authorization);
+    requireSharedPermission(authenticated, authorization, 'documents.read');
     const documentId = routeParam(request, 'documentId');
     const document = await documentLifecycle.getDocument(
       authenticated,
@@ -666,7 +667,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     '/api/v1/documents/:documentId/process',
     async (request, response) => {
       const authenticated = authenticatedPrincipal(request, principal);
-      requireOrganisationAdmin(authenticated, authorization);
+      requireSharedPermission(authenticated, authorization, 'documents.manage');
       parseObjectBody(request.body ?? {}, []);
       const processed = await documentProcessing.processDocument(
         authenticated,
@@ -717,7 +718,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     '/api/v1/documents/:documentId/download-token',
     async (request, response) => {
       const authenticated = authenticatedPrincipal(request, principal);
-      requireOrganisationAdmin(authenticated, authorization);
+      requireSharedPermission(authenticated, authorization, 'documents.read');
       parseObjectBody(request.body ?? {}, []);
       const token = await documentLifecycle.createDownloadToken(
         authenticated,
@@ -739,7 +740,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/documents/download/:token', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated, authorization);
+    requireSharedPermission(authenticated, authorization, 'documents.read');
     const token = routeParam(request, 'token');
     const validated = await documentLifecycle.validateDownloadToken(
       authenticated,
@@ -770,7 +771,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/sla-policies', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated, authorization);
+    requireSharedPermission(authenticated, authorization, 'policies.read');
     const policies = (await policyRepository.listPolicies(authenticated)).filter(
       (policy) => policy.policyType === 'sla',
     );
@@ -788,7 +789,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.post('/api/v1/sla-policies', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireOrganisationAdmin(authenticated, authorization);
+    requireSharedPermission(authenticated, authorization, 'policies.manage');
     const body = parseObjectBody(request.body, [
       'description',
       'sourceDocumentId',
@@ -958,7 +959,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     '/api/v1/sla-policies/:policyId/versions/:versionId/approve',
     async (request, response) => {
       const authenticated = authenticatedPrincipal(request, principal);
-      requireOrganisationAdmin(authenticated, authorization);
+      requireSharedPermission(authenticated, authorization, 'policies.approve');
       const body = parseObjectBody(request.body ?? {}, ['reason']);
       const reason = requiredText(body, 'reason');
       const policy = await policyRepository.getPolicyById(
@@ -1049,7 +1050,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     '/api/v1/sla-policies/:policyId/versions/:versionId/activate',
     async (request, response) => {
       const authenticated = authenticatedPrincipal(request, principal);
-      requireOrganisationAdmin(authenticated, authorization);
+      requireSharedPermission(authenticated, authorization, 'policies.activate');
       parseObjectBody(request.body ?? {}, []);
       const policy = await policyRepository.getPolicyById(
         authenticated,
@@ -2920,11 +2921,11 @@ const errorHandler: ErrorRequestHandler = (
     return;
   }
   if (error instanceof JsonStorageError) {
-    console.error('Ticket AI data storage failed', { code: error.code });
+    console.error('Application data storage error', { code: error.code });
     response.status(503).json({
       error: {
         code: error.code,
-        message: 'The data store is temporarily unavailable.',
+        message: 'The application data store is temporarily unavailable.',
         requestId: id,
         fields: [],
       },

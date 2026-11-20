@@ -150,6 +150,8 @@ Ticket, document, SLA, reporting and workflow endpoints use the shared Keycloak 
 
 Permission IDs in responses describe the shared policy for clients; they do not replace server-side authorization. Unknown roles receive no permissions, client-supplied permissions are rejected, and all access remains subject to active membership and resource/team scope.
 
+Document routes use `documents.read` or `documents.manage`; SLA policy routes use `policies.read`, `policies.manage`, `policies.approve`, or `policies.activate`. These grants currently belong only to `organisation_admin`. Extracted candidate records are generated and persisted, but a candidate-review API is not yet exposed; `policies.candidates.review` is reserved for that workflow.
+
 ## 3. Example ticket creation
 
 ### Request

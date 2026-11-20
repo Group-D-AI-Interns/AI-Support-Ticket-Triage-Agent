@@ -168,9 +168,9 @@ export class DocumentProcessingService {
         createdAt: new Date().toISOString(),
         result,
       };
-      const extractions = await this.store.readCollection<DocumentExtractionRecord>('documentExtractions');
-      extractions.push(extraction);
-      await this.store.writeCollection('documentExtractions', extractions);
+      await this.store.updateCollection<DocumentExtractionRecord, void>('documentExtractions', (extractions) => {
+        extractions.push(extraction);
+      });
 
       const processedDocument = await this.lifecycle.updateProcessingStatus(
         tenant,

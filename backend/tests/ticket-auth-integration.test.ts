@@ -81,6 +81,25 @@ test('unified server authenticates tickets and enforces active organisation memb
     const deniedPermission = await request('/api/v1/ticket-workflows', 'Bearer valid-user-a');
     assert.equal(deniedPermission.status, 403, 'shared permission policy denies support agent workflow administration');
 
+    assert.equal((await request('/api/v1/documents', 'Bearer valid-user-a')).status, 403, 'support agent cannot read organisation documents');
+    assert.equal((await request('/api/v1/documents', 'Bearer admin')).status, 200, 'organisation administrator can read tenant documents');
+    assert.equal((await request('/api/v1/sla-policies', 'Bearer valid-user-a')).status, 403, 'support agent cannot read organisation policies');
+    assert.equal((await request('/api/v1/sla-policies', 'Bearer admin')).status, 200, 'organisation administrator can read tenant policies');
+    const roleCapabilities = await request('/api/v1/roles', 'Bearer admin');
+    const roleBody = await roleCapabilities.json() as { data: Array<{ id: string; permissions: Array<{ id: string }> }> };
+    const administratorRole = roleBody.data.find((role) => role.id === 'organisation_admin');
+    assert.ok(administratorRole?.permissions.some((permission) => permission.id === 'policies.candidates.review'));
+    assert.ok(administratorRole?.permissions.some((permission) => permission.id === 'policies.activate'));
+    const deniedActivation = await fetch(`${baseUrl}/api/v1/sla-policies/policy-a/versions/version-a/activate`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer valid-user-a', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(deniedActivation.status, 403, 'support agent cannot activate an organisation policy');
+    await writeFile(join(directory, 'documents.json'), '{malformed', 'utf8');
+    assert.equal((await request('/api/v1/documents', 'Bearer admin')).status, 503, 'malformed document storage is surfaced, not treated as an empty collection');
+    await writeCollection('documents.json', []);
+
     const requesterCreate = await fetch(`${baseUrl}/api/v1/tickets`, {
       method: 'POST',
       headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
