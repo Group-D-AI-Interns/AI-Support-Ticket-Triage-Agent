@@ -156,7 +156,10 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const body = await readJson(request);
       rejectUnknown(body, ["name"]);
       const name = requireString(body, "name");
-      sendJson(response, 201, { data: await organisation.create({ name }), requestId });
+      sendJson(response, 201, {
+        data: await organisation.create({ name }, { userId: tenant.userId, role: ROLE_IDS.organisationAdmin }),
+        requestId,
+      });
       return;
     }
 

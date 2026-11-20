@@ -1,6 +1,10 @@
 import type { PolicyRepository } from '../../policies/repositories/policy.repository.js';
 import type { TenantContext } from '../../../shared/tenant.js';
 import { parseSlaPolicy, type SlaPolicy } from '../domain/sla-policy.js';
+import {
+  legacySlaPriorityFor,
+  normalizeTicketPriority,
+} from '../../tickets/domain/priority.js';
 
 export class SlaPolicyResolutionError extends Error {}
 
@@ -16,6 +20,7 @@ export class RepositorySlaPolicyResolver {
     },
   ): Promise<SlaPolicy | null> {
     const createdAt = Date.parse(ticket.createdAt);
+    const priority = normalizeTicketPriority(ticket.priority) ?? ticket.priority;
     if (!Number.isFinite(createdAt)) {
       throw new SlaPolicyResolutionError(
         'Ticket creation time must be a valid date-time.',
@@ -53,9 +58,24 @@ export class RepositorySlaPolicyResolver {
           effectiveFrom: version.effectiveFrom,
           effectiveTo: version.effectiveTo,
         });
-        if (!policy.targetsByPriority[ticket.priority]) {
+        const exactTarget = policy.targetsByPriority[priority];
+        const legacyPriority = legacySlaPriorityFor(priority);
+        const target = exactTarget ??
+          (legacyPriority === undefined
+            ? undefined
+            : policy.targetsByPriority[legacyPriority]);
+        if (!target) {
           continue;
         }
+        const resolvedPolicy = exactTarget
+          ? policy
+          : {
+              ...policy,
+              targetsByPriority: {
+                ...policy.targetsByPriority,
+                [priority]: target,
+              },
+            };
         const scoped = policy.teamIds !== undefined;
         if (
           scoped &&
@@ -63,7 +83,7 @@ export class RepositorySlaPolicyResolver {
         ) {
           continue;
         }
-        candidates.push({ policy, scoped });
+        candidates.push({ policy: resolvedPolicy, scoped });
       }
     }
 

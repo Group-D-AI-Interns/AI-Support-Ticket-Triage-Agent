@@ -138,7 +138,16 @@ function subtractPauses(
       end: Number.isFinite(pause.end) ? pause.end : end,
     }))
     .sort((left, right) => left.start - right.start);
+  const mergedPauses: PauseInterval[] = [];
   for (const pause of orderedPauses) {
+    const previous = mergedPauses[mergedPauses.length - 1];
+    if (previous && pause.start <= previous.end) {
+      previous.end = Math.max(previous.end, pause.end);
+    } else {
+      mergedPauses.push({ ...pause });
+    }
+  }
+  for (const pause of mergedPauses) {
     const next: Array<[number, number]> = [];
     for (const [segmentStart, segmentEnd] of segments) {
       const overlapStart = Math.max(segmentStart, pause.start);

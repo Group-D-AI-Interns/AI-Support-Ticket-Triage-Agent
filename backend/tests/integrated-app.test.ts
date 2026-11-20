@@ -26,11 +26,12 @@ async function fixture(priorityPreview: PriorityPreviewConfiguration | null = nu
   const now = new Date().toISOString();
   const dates = { createdAt: now, updatedAt: now };
   await store.write('organisations.json', { schemaVersion: 1, records: ['org-a', 'org-b'].map((id) => ({ id, name: id, status: 'active', settings: {}, ...dates })) });
-  await store.write('users.json', { schemaVersion: 1, records: ['admin', 'requester', 'other', 'agent'].map((id) => ({ id, email: `${id}@example.test`, displayName: id, status: 'active', ...dates })) });
+  await store.write('users.json', { schemaVersion: 1, records: ['admin', 'requester', 'other', 'agent', 'lead'].map((id) => ({ id, email: `${id}@example.test`, displayName: id, status: 'active', ...dates })) });
   await store.write('memberships.json', { schemaVersion: 1, records: [
     { id: 'm-admin', organisationId: 'org-a', userId: 'admin', roles: ['organisation_admin'], status: 'active', ...dates },
     { id: 'm-requester', organisationId: 'org-a', userId: 'requester', roles: ['requester'], status: 'active', ...dates },
     { id: 'm-agent', organisationId: 'org-a', userId: 'agent', roles: ['support_agent'], status: 'active', ...dates },
+    { id: 'm-lead', organisationId: 'org-a', userId: 'lead', roles: ['support_lead'], status: 'active', ...dates },
     { id: 'm-other', organisationId: 'org-b', userId: 'other', roles: ['organisation_admin'], status: 'active', ...dates },
   ] });
   const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
@@ -284,9 +285,46 @@ test('document processing, human SLA approval, evaluation and reporting work on 
     assert.equal(imported.status, 201);
     const ticket = (await imported.json()).data;
     // Source priority is retained as evidence; a permitted human sets internal priority explicitly.
-    assert.equal((await f.request(`/api/v1/tickets/${ticket.id}`, 'requester', { method: 'PATCH', body: '{"priority":"high"}' })).status, 403);
-    const prioritised = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', { method: 'PATCH', body: '{"priority":"high"}' });
+    const jiraPriorityFilter = await f.request('/api/v1/tickets?priority=high', 'admin');
+    assert.ok((await jiraPriorityFilter.json()).data.some((item: { id: string }) => item.id === ticket.id));
+    assert.equal((await f.request(`/api/v1/tickets/${ticket.id}`, 'requester', { method: 'PATCH', body: '{"priority":"high","priorityOverride":{"reason":"classify","businessJustification":"business impact"}}' })).status, 403);
+    const missingOverrideEvidence = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', { method: 'PATCH', body: '{"priority":"high"}' });
+    assert.equal(missingOverrideEvidence.status, 400);
+    const incompleteOverrideEvidence = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', {
+      method: 'PATCH',
+      body: '{"priority":"P2","priorityOverride":{"reason":"Impact assessed"}}',
+    });
+    assert.equal(incompleteOverrideEvidence.status, 400);
+    const invalidPriority = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', {
+      method: 'PATCH',
+      body: '{"priority":"urgent","priorityOverride":{"reason":"Impact assessed","businessJustification":"Service impact"}}',
+    });
+    assert.equal(invalidPriority.status, 400);
+    const prioritised = await f.request(`/api/v1/tickets/${ticket.id}`, 'lead', {
+      method: 'PATCH',
+      body: JSON.stringify({
+        priority: 'high',
+        priorityOverride: {
+          reason: 'Impact assessed by support lead.',
+          businessJustification: 'The service is unavailable to the user.',
+        },
+      }),
+    });
     assert.equal(prioritised.status, 200);
+    const prioritisedTicket = (await prioritised.json()).data;
+    assert.equal(prioritisedTicket.priority, 'P2');
+    assert.equal(prioritisedTicket.source.priority, 'high');
+    const audit = await f.request(`/api/v1/tickets/${ticket.id}/audit`, 'admin');
+    const override = (await audit.json()).data.find(
+      (event: { action: string }) => event.action === 'ticket.priority.overridden',
+    );
+    assert.equal(override.actorId, 'lead');
+    assert.ok(Number.isFinite(Date.parse(override.createdAt)));
+    assert.deepEqual(override.changes.priority, { before: null, after: 'P2' });
+    assert.deepEqual(override.changes.priorityOverride, {
+      reason: 'Impact assessed by support lead.',
+      businessJustification: 'The service is unavailable to the user.',
+    });
     const evaluated = await f.request('/api/v1/sla/evaluations/run', 'admin', { method: 'POST', body: '{}' });
     assert.equal(evaluated.status, 200);
     assert.ok((await evaluated.json()).data.some((record: { ticketId: string }) => record.ticketId === ticket.id));

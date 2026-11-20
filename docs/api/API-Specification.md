@@ -29,12 +29,24 @@ Example response fields (abbreviated):
 
 ## Integrated ticket priority update
 
-`PATCH /api/v1/tickets/:ticketId` also accepts `{ "priority": "<configured-priority>" }`.
-The caller needs ticket access and `tickets.priority.manage` (administrator or support
-lead in the shared role catalogue). Priority must be a non-empty string. SLA evaluation
-uses the exact priority key in the approved policy; unknown keys do not receive invented
-targets. Source Jira priority stays separate. This is a human operational update, not
-an AI action. The existing ticket history records the change.
+Internal ticket priority uses the canonical values `P1` (Critical), `P2` (High),
+`P3` (Medium), and `P4` (Low), with the impact/urgency matrix in ITSM-POL-001.
+Existing internal `high`, `medium`, and `low` values normalize to `P2`, `P3`, and
+`P4`; Jira `source.priority` remains verbatim and is never mapped automatically.
+
+`PATCH /api/v1/tickets/:ticketId` accepts a priority update with
+`priorityOverride.reason` and `priorityOverride.businessJustification`, both required
+and non-empty whenever the internal priority changes. The caller needs ticket access
+and `tickets.priority.manage`, currently granted to `support_lead` and
+`organisation_admin`, not agents or requesters. The server records authenticated
+`actorId`, timestamp, old/new priority, reason, and business justification in ticket
+history; actor and timestamp are not client-controlled.
+
+SLA resolution prefers an exact P1-P4 target. For compatibility only, P2/P3/P4 may
+use legacy `high`/`medium`/`low` SLA target keys respectively; P1 requires an explicit
+target. The adopted project contract does not activate a tenant policy: tenant approval
+and effective dates are still required. This is a human operational update, not an AI
+action.
 
 > **Current integrated application (2026-11-19):** All default startup commands now serve foundation and domain routes together. Protected routes use verified foundation identity plus active server-side memberships, selected with `X-Organisation-ID` or `organisationId`. The static ticket development principal applies only to isolated legacy tests. AI history persists through the shared JSON store. See [Integration-Verification.md](Integration-Verification.md) and the root README; older standalone startup/auth examples below are historical.
 
@@ -76,7 +88,7 @@ an AI action. The existing ticket history records the change.
 | POST | `/auth/login` | Authenticate, if local authentication is selected |
 | POST | `/auth/refresh` | Refresh session/token, if supported |
 | GET | `/me` | Current user and permitted organisation context |
-| GET/POST | `/organisations` | List/create organisations (platform admin only) |
+| GET/POST | `/organisations` | List organisations; an active organisation administrator may create another organisation and becomes its administrator |
 | GET/PATCH | `/organisations/:organisationId` | Read/update permitted organisation |
 | GET/POST | `/users` | List/invite or create users |
 | GET/PATCH | `/users/:id` | Read or update permitted user |
@@ -111,6 +123,7 @@ an AI action. The existing ticket history records the change.
 | GET | `/tickets/:id` | Ticket details |
 | PATCH | `/tickets/:id` | Update permitted ticket fields |
 | PATCH | `/tickets/:id/status` | Apply an approved tenant workflow transition |
+| POST | `/tickets/:id/sla-events` | Record assessment or exclusion evidence |
 | POST | `/tickets/:id/reopen-requests` | Request reopening of an eligible resolved ticket |
 | POST | `/tickets/:id/reopen-requests/:requestId/approve` | Approve a pending reopen request |
 | POST | `/tickets/:id/comments` | Add comment |
@@ -352,11 +365,16 @@ Content-Type: application/json
 ```json
 {
   "title": "Sign-in error after password reset",
-  "teamId": "team_support"
+  "teamId": "team_support",
+  "priority": "P2",
+  "priorityOverride": {
+    "reason": "Incident manager reviewed the impact.",
+    "businessJustification": "The service is unavailable to multiple users."
+  }
 }
 ```
 
-Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured development `teamIds`. Status changes use the tenant's approved ticket workflow; priority changes remain unavailable. Jira status/priority remain source metadata and are not overwritten by internal workflow changes.
+Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured team scope. Priority changes require `tickets.priority.manage` and the override evidence above. Status changes use the tenant's approved ticket workflow; Jira status/priority remain source metadata and are not overwritten by internal workflow changes.
 
 ### Configure and approve a tenant ticket workflow
 
@@ -492,6 +510,53 @@ Expected response — `200 OK`:
 
 An unlisted transition returns `409 INVALID_STATUS_TRANSITION`; a role restriction returns `403 FORBIDDEN`. A requester cannot directly change status. Customers may request reopening from `RESOLVED`, with a reason:
 
+When an active SLA policy configures the destination as paused, the status request must
+include evidence and a contract reference, and only a support lead or organisation
+administrator may enter or leave that pause:
+
+```json
+{
+  "status": "PENDING",
+  "pauseEvidence": {
+    "reasonCode": "waiting_for_requester_information",
+    "evidence": "Requested the missing diagnostic logs.",
+    "contractReference": "CONTRACT-123"
+  }
+}
+```
+
+Entering a configured resolved status likewise requires support staff to provide a
+`resolutionEvidence` object with `outcome` (`service_restored` or `agreed_solution`),
+`note`, `customerConfirmation` (`received` or `not_applicable`) and
+`customerConfirmationEvidence`. Customer confirmation is recorded but is not a gate.
+The resolution event is written atomically with the status transition.
+
+The server starts both clocks at ticket `createdAt`. A first-response timestamp is
+recorded only after acknowledgement, completed assessment and first team assignment;
+it is the latest of those three event timestamps. A public comment alone is not enough.
+Resolution time excludes evidenced resolved intervals; reopening resumes the same clock
+without resetting it. Status names alone never pause an SLA.
+
+Support staff can record one-time assessment evidence:
+
+```http
+POST /api/v1/tickets/{{ticketId}}/sla-events
+Authorization: Bearer {{agentToken}}
+Content-Type: application/json
+
+{
+  "type": "assessment_completed",
+  "evidence": "Impact and affected service assessed."
+}
+```
+
+Only support leads and organisation administrators can start/end SLA exclusions. Starts
+require an allowed `reasonCode` (`approved_maintenance_window`, `outside_agreed_scope`,
+`force_majeure`, `requester_requested_postponement` or `approved_waiting_period`), evidence,
+and contract reference. The start response contains the generated `intervalId`; submit it
+to end that interval. Exclusions subtract only their recorded interval and the ticket
+remains in reports. Both pause and exclusion timestamps and actors come from the server.
+
 ```http
 POST http://localhost:3000/api/v1/tickets/{{ticketId}}/reopen-requests
 Authorization: Bearer {{requesterToken}}
@@ -540,6 +605,10 @@ The response contains the document's completed processing status and a version-b
 ### Configure tenant-specific SLA policies
 
 Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar, statuses, and optional team scope through the API; no policy document upload is required. When an SLA is derived from a processed document, the request may also include both `sourceDocumentId` and `sourceDocumentVersionId`. The server verifies that the document and version belong to the authenticated tenant and retains that provenance on the policy version; the fields must be provided together. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
+
+The reference SLA candidate remains draft: this event contract does not verify client
+entitlement, contractual targets, or calendars, and is not approval to activate those
+candidate values.
 
 The following values are illustrative test data only, not defaults or recommendations. Replace them with values chosen by the tenant administrator. Missing priority targets do not fall back to another tenant or an invented value.
 
@@ -815,6 +884,12 @@ The calculation must use approved formula and weighting versions and verified me
 
 ## 9. OpenAPI draft excerpt
 
+The ticket and ticket/SLA-evidence paths have a machine-readable OpenAPI contract at
+[ticket-openapi.json](./ticket-openapi.json). It covers ticket CRUD/search, workflow
+configuration and status changes, comments, audit, attachments, reopen requests, SLA
+evidence and Jira ingestion. It is a ticket-domain contract, not yet a complete OpenAPI
+description of identity, documents, policies, AI, SLA administration or reporting.
+
 ```yaml
 openapi: 3.0.3
 info:
@@ -1086,6 +1161,22 @@ paths:
                 teamId:
                   type: string
                   nullable: true
+                priority:
+                  type: string
+                  enum: [P1, P2, P3, P4, high, medium, low]
+                  description: Required with priorityOverride when changing priority. Legacy high/medium/low inputs normalize to P2/P3/P4.
+                priorityOverride:
+                  type: object
+                  additionalProperties: false
+                  required: [reason, businessJustification]
+                  properties:
+                    reason:
+                      type: string
+                      minLength: 1
+                    businessJustification:
+                      type: string
+                      minLength: 1
+                  description: Required for a priority change; actor and time are captured by the server.
       responses:
         "200":
           description: Ticket updated

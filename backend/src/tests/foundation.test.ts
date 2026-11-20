@@ -8,7 +8,9 @@ import { createApp } from "../app.ts";
 import { loadEnvironment } from "../config/env.ts";
 import { JsonFileStore, JsonStorageError } from "../infrastructure/persistence/json/json-file-store.ts";
 import { JsonIdentityRepository } from "../modules/identity/repositories.ts";
+import { isEnvelope, isMembership } from "../modules/identity/model.ts";
 import { IdentityService } from "../modules/identity/service.ts";
+import { isOrganisation } from "../modules/organisations/model.ts";
 import { KeycloakAuthenticationProvider } from "../infrastructure/auth/keycloak-authentication.ts";
 import { KeycloakUserProvisioningProvider } from "../infrastructure/auth/keycloak-user-provisioning.ts";
 import { DenyByDefaultAuthorization, RolePermissionAuthorization, ROLE_DISPLAY_NAMES, ROLE_PERMISSIONS, requirePermission } from "../shared/auth/authorization.ts";
@@ -226,6 +228,73 @@ describe("role-based user management API", () => {
     assert.equal(membershipUpdate.status, 200);
     const membershipBody = await membershipUpdate.json() as { data: { permissions: string[] } };
     assert.deepEqual(membershipBody.data.permissions, ["tickets.create.own", "tickets.read.own"]);
+  });
+});
+
+describe("organisation creation", () => {
+  it("allows an organisation admin to create another organisation and grants admin membership", async () => {
+    const directory = await makeDirectory();
+    const store = new JsonFileStore(directory);
+    const timestamp = new Date().toISOString();
+    await store.write("users.json", { schemaVersion: 1, records: [
+      { id: "admin", email: "admin@example.test", displayName: "Admin", status: "active", createdAt: timestamp, updatedAt: timestamp },
+      { id: "agent", email: "agent@example.test", displayName: "Agent", status: "active", createdAt: timestamp, updatedAt: timestamp },
+    ] });
+    await store.write("memberships.json", { schemaVersion: 1, records: [
+      { id: "m-admin", organisationId: "org-a", userId: "admin", status: "active", roles: ["organisation_admin"], createdAt: timestamp, updatedAt: timestamp },
+      { id: "m-agent", organisationId: "org-a", userId: "agent", status: "active", roles: ["support_agent"], createdAt: timestamp, updatedAt: timestamp },
+    ] });
+    await store.write("organisations.json", { schemaVersion: 1, records: [
+      { id: "org-a", name: "Organisation A", status: "active", settings: {}, createdAt: timestamp, updatedAt: timestamp },
+    ] });
+    const identity = new IdentityService(new JsonIdentityRepository(store));
+    const server = createApp(loadEnvironment({ NODE_ENV: "test", DATA_DIRECTORY: directory, PORT: "0" }), {
+      authenticator: {
+        authenticate: async (request) => ({
+          userId: typeof request.headers["x-test-user"] === "string" ? request.headers["x-test-user"] : "admin",
+        }),
+      },
+    });
+    servers.push(server);
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    assert.ok(address && typeof address !== "string");
+    const base = `http://127.0.0.1:${address.port}`;
+    const headers = { "content-type": "application/json", "x-organisation-id": "org-a" };
+
+    const createdResponse = await fetch(`${base}/api/v1/organisations`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Organisation B" }),
+    });
+    assert.equal(createdResponse.status, 201);
+    const createdBody = await createdResponse.json() as { data: { id: string; name: string } };
+    assert.equal(createdBody.data.name, "Organisation B");
+    assert.deepEqual(await identity.resolve("admin", createdBody.data.id), {
+      organisationId: createdBody.data.id,
+      userId: "admin",
+      roles: ["organisation_admin"],
+    });
+
+    const duplicateResponse = await fetch(`${base}/api/v1/organisations`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ name: "Organisation B" }),
+    });
+    assert.equal(duplicateResponse.status, 409);
+
+    const deniedResponse = await fetch(`${base}/api/v1/organisations`, {
+      method: "POST",
+      headers: { ...headers, "x-test-user": "agent" },
+      body: JSON.stringify({ name: "Organisation C" }),
+    });
+    assert.equal(deniedResponse.status, 403);
+
+    const memberships = await store.read("memberships.json", isEnvelope(isMembership));
+    assert.equal(memberships.records.filter((membership) => membership.organisationId === createdBody.data.id).length, 1);
+    assert.equal(memberships.records.some((membership) => membership.organisationId !== "org-a" && membership.organisationId !== createdBody.data.id), false);
+    const organisations = await store.read("organisations.json", isEnvelope(isOrganisation));
+    assert.deepEqual(organisations.records.map((organisation) => organisation.name), ["Organisation A", "Organisation B"]);
   });
 });
 
