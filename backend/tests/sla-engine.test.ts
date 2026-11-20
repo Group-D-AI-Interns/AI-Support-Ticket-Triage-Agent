@@ -144,6 +144,28 @@ test('pauses are excluded from elapsed working time and extend deadlines', () =>
   );
 });
 
+test('overlapping pause and exclusion intervals are subtracted only once', () => {
+  const policy = parseSlaPolicy(payload, source);
+  assert.equal(
+    businessMinutesBetween(
+      '2026-01-06T14:00:00.000Z',
+      '2026-01-06T18:00:00.000Z',
+      policy.calendar,
+      [
+        {
+          start: Date.parse('2026-01-06T15:00:00.000Z'),
+          end: Date.parse('2026-01-06T17:00:00.000Z'),
+        },
+        {
+          start: Date.parse('2026-01-06T16:00:00.000Z'),
+          end: Date.parse('2026-01-06T18:00:00.000Z'),
+        },
+      ],
+    ),
+    60,
+  );
+});
+
 test('evaluates response and resolution against versioned targets', () => {
   const policy = parseSlaPolicy(payload, source);
   const evaluation = evaluateTicketSla(policy, {

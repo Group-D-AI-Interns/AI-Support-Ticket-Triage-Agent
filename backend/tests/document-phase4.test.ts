@@ -60,7 +60,7 @@ test('validates extraction output and persists candidate rules with provenance',
     assert.ok(storedEvidence);
     assert.equal(storedEvidence.sourceId, 'doc-42');
     assert.equal(stored.confidence, 0.91);
-    assert.equal(stored.ambigous, false);
+    assert.equal(stored.ambiguous, false);
     assert.equal(stored.requiresHumanReview, false);
     assert.equal(stored.executionId, 'exec-42');
     assert.equal(stored.documentVersionId, 'doc-version-42');
@@ -264,7 +264,7 @@ test('worker fails unsupported document formats without retrying', async () => {
     const failed = await worker.processNextForTenant(tenantA);
     assert.equal(failed?.status, 'failed');
     assert.equal(failed?.attempts, 1);
-    assert.equal(failed?.lastError, 'UNSUPPORTED_DOCUMENT_TYPE');
+    assert.equal(failed?.lastError, 'DOCUMENT_CONVERSION_FAILED');
     assert.equal((await store.readCollection('extractedRules')).length, 0);
   } finally {
     rmSync(root, { recursive: true, force: true });

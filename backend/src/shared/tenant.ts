@@ -1,6 +1,5 @@
-import type { TenantContext } from "./auth/authentication.ts";
-
-export type { TenantContext } from "./auth/authentication.ts";
+import type { TenantContext } from './auth/authentication.js';
+export type { TenantContext } from './auth/authentication.js';
 
 export function assertTenantAccess<T extends { organisationId: string }>(
   tenant: TenantContext,

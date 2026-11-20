@@ -7,11 +7,10 @@ export class JsonDocumentRepository implements DocumentRepository {
   constructor(private readonly store: JsonTenantStore) {}
 
   async create(document: DocumentRecord, tenant: TenantContext): Promise<DocumentRecord> {
-    if (document.organisationId !== tenant.organisationId) {
-      throw new Error('Document organisation does not match tenant context.');
-    }
-
     return this.store.updateCollection<DocumentRecord, DocumentRecord>('documents', (documents) => {
+      if (document.organisationId !== tenant.organisationId) {
+        throw new Error('Document organisation does not match tenant context.');
+      }
       if (documents.some((item) => item.id === document.id)) {
         throw new Error(`Document ${document.id} already exists.`);
       }
@@ -66,11 +65,10 @@ export class JsonDocumentRepository implements DocumentRepository {
   }
 
   async addVersion(version: DocumentVersionRecord, tenant: TenantContext): Promise<DocumentVersionRecord> {
-    if (version.organisationId !== tenant.organisationId) {
-      throw new Error('Version organisation does not match tenant context.');
-    }
-
     return this.store.updateCollection<DocumentVersionRecord, DocumentVersionRecord>('documentVersions', (versions) => {
+      if (version.organisationId !== tenant.organisationId) {
+        throw new Error('Version organisation does not match tenant context.');
+      }
       if (versions.some((item) => item.id === version.id)) {
         throw new Error(`Document version ${version.id} already exists.`);
       }

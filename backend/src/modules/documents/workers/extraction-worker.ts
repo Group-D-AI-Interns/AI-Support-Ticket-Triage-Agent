@@ -7,6 +7,12 @@ import type { ExtractionAdapter } from '../services/extraction-adapter.js';
 import { validateExtractionAdapterResult } from '../services/extraction-adapter.js';
 import type { DocumentStorageAdapter } from '../storage/document-storage.js';
 import type { CandidateRuleService } from '../services/candidate-rule-service.js';
+import type { DocumentExtractionRecord } from '../services/document-processing.service.js';
+import type { DocumentRecord } from '../domain/document.js';
+import {
+  LocalDocumentTextConverter,
+  type DocumentTextConverter,
+} from '../services/document-text-converter.js';
 
 class PermanentExtractionError extends Error {
   constructor(readonly code: string, message: string) {
@@ -22,6 +28,7 @@ export class ExtractionWorker {
     private readonly adapter: ExtractionAdapter,
     private readonly storage: DocumentStorageAdapter,
     private readonly candidateRules: CandidateRuleService,
+    private readonly textConverter: DocumentTextConverter = new LocalDocumentTextConverter(),
   ) {}
 
   private get documentRepository(): JsonDocumentRepository {
@@ -48,6 +55,7 @@ export class ExtractionWorker {
         !version
         || version.documentId !== document.id
         || version.organisationId !== tenant.organisationId
+        || version.version !== document.version
       ) {
         throw new PermanentExtractionError(
           'DOCUMENT_VERSION_NOT_FOUND',
@@ -55,12 +63,11 @@ export class ExtractionWorker {
         );
       }
       if (
-        version.mimeType !== 'text/plain'
-        || version.fileName.split('.').pop()?.toLowerCase() !== 'txt'
+        !['txt', 'pdf', 'docx'].includes(version.fileName.split('.').pop()?.toLowerCase() ?? '')
       ) {
         throw new PermanentExtractionError(
           'UNSUPPORTED_DOCUMENT_TYPE',
-          'Only text/plain documents are supported by the provisional extraction adapter.',
+          'Only TXT, PDF and DOCX documents are supported. Legacy DOC conversion remains deferred.',
         );
       }
 
@@ -81,13 +88,14 @@ export class ExtractionWorker {
       if (!storedContent) {
         throw new Error('Document content could not be loaded from private storage.');
       }
-      let content: string;
+
+      let converted;
       try {
-        content = new TextDecoder('utf-8', { fatal: true }).decode(storedContent);
-      } catch {
+        converted = await this.textConverter.convert(storedContent, version);
+      } catch (error) {
         throw new PermanentExtractionError(
-          'INVALID_DOCUMENT_ENCODING',
-          'Text documents must contain valid UTF-8 content.',
+          'DOCUMENT_CONVERSION_FAILED',
+          error instanceof Error ? error.message : 'Document text conversion failed.',
         );
       }
 
@@ -96,7 +104,8 @@ export class ExtractionWorker {
         documentId: job.documentId,
         documentVersionId: job.documentVersionId,
         executionId: job.executionId,
-        content,
+        content: converted.content,
+        segments: converted.segments,
       }));
       if (result.executionId !== job.executionId) {
         throw new Error('Extraction result execution ID does not match the claimed job.');
@@ -127,12 +136,27 @@ export class ExtractionWorker {
         );
       }
 
+      const currentDocument = await this.documentRepository.getById(tenant, job.documentId);
+      if (!currentDocument || currentDocument.version !== version.version) {
+        throw new PermanentExtractionError('DOCUMENT_VERSION_CHANGED', 'The source document version changed during extraction.');
+      }
       await this.candidateRules.persistCandidateRules({
         tenant,
         policyId: job.policyId,
         policyVersionId: job.policyVersionId,
         executionId: job.executionId,
         rules: result.rules,
+      });
+
+      // Make worker extraction visible through the existing document detail/history API.
+      await this.store.withCollectionLock('documentExtractions', async () => {
+        const records = await this.store.readCollection<DocumentExtractionRecord>('documentExtractions');
+        const id = `document-extraction-${job.executionId}`;
+        if (!records.some(record => record.id === id && record.organisationId === tenant.organisationId)) {
+          records.push({ id, organisationId: tenant.organisationId, documentId: job.documentId,
+            documentVersionId: job.documentVersionId, createdAt: new Date().toISOString(), result });
+          await this.store.writeCollection('documentExtractions', records);
+        }
       });
 
       const completed = await this.queue.update(job.id, {
@@ -147,7 +171,7 @@ export class ExtractionWorker {
         return null;
       }
 
-      await this.documentRepository.updateStatus(tenant, job.documentId, 'processed', 'completed');
+      await this.updateJobDocument(tenant, job, 'processed', 'completed');
       return completed;
     } catch (error) {
       const retryable = !(error instanceof PermanentExtractionError);
@@ -178,12 +202,19 @@ export class ExtractionWorker {
       return null;
     }
 
-    await this.documentRepository.updateStatus(
-      tenant,
-      job.documentId,
+    await this.updateJobDocument(
+      tenant, job,
       shouldRetry ? 'processing' : 'failed',
       shouldRetry ? 'queued' : 'failed',
     );
     return updated;
+  }
+
+  private async updateJobDocument(tenant: TenantContext, job: ExtractionJobRecord, status: DocumentRecord['status'], processingStatus: DocumentRecord['processingStatus']) {
+    const document = await this.documentRepository.getById(tenant, job.documentId);
+    const version = await this.documentRepository.getVersionById(tenant, job.documentVersionId);
+    if (document && version && document.version === version.version) {
+      await this.documentRepository.updateStatus(tenant, document.id, status, processingStatus);
+    }
   }
 }

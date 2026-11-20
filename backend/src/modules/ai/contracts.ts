@@ -1,4 +1,6 @@
-export type AiTask = 'ticket_classification' | 'ticket_summarization';
+import type { AnalysisOrchestration } from './ticket-analysis.graph.js';
+
+export type AiTask = 'ticket_classification' | 'ticket_summarization' | 'ticket_priority_factors' | 'ticket_resolution' | 'document_rule_extraction';
 
 export type TicketAiView = {
   id: string;
@@ -51,6 +53,7 @@ export type TicketAiAnalysis = {
   summary: TicketSummary;
   executions: AiTaskExecution[];
   createdAt: string;
+  orchestration?: AnalysisOrchestration;
 };
 
 export class AiOutputValidationError extends Error {

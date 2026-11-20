@@ -1,5 +1,6 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import express, {
+  type Express,
   type ErrorRequestHandler,
   type NextFunction,
   type Request,
@@ -8,6 +9,55 @@ import express, {
 import multer from 'multer';
 import type { AuthenticationProvider, TenantContext, TenantResolver } from '../../shared/auth/authentication.js';
 import { applicationAuthorization, type Permission, type RolePermissionPolicy } from '../../shared/auth/authorization.js';
+import {
+  AiExecutionError,
+  type AiExecutionRunner,
+} from '../ai/ai-execution-runner.js';
+import { TicketAiAnalysisError } from '../ai/ticket-ai-analysis.service.js';
+import type { TicketAiView } from '../ai/contracts.js';
+import type {
+  AiAnalysisRepository,
+  AuthorizedTicketAnalysisSource,
+} from '../ai/ports.js';
+import { PriorityRecommender } from '../ai/components/priority-recommender.js';
+import { PriorityRecommendationService } from '../ai/priority-recommendation.service.js';
+import {
+  priorityPreviewFromEnvironment,
+  type PriorityPreviewConfiguration,
+} from '../ai/priority-preview-config.js';
+import {
+  createLocalDemoTicketAiRuntime,
+  TicketAiDemoConfigurationError,
+  ticketAiDemoConfigurationFromEnvironment,
+  type TicketAiDemoConfiguration,
+} from '../ai/local-demo-runtime.js';
+import {
+  createLiveTicketAiRuntime,
+  LiveTicketAiConfigurationError,
+  liveTicketAiConfigurationFromEnvironment,
+  type LiveTicketAiConfiguration,
+} from '../ai/live-ticket-ai-runtime.js';
+import {
+  KnowledgeRetriever,
+  type AuthorizedKnowledgeSource,
+} from '../knowledge/retrieval.js';
+import { ResolutionRecommendationService } from '../ai/resolution-recommendation.service.js';
+import type { AuthorizedRoutingSource, VerifiedSlaInsightSource } from '../ai/team-capability-ports.js';
+import { AiOperationsStore } from '../ai/operations-store.js';
+import { AiOperationsService, AiOperationsError } from '../ai/operations-service.js';
+import { operationsApi } from '../ai/operations-api.js';
+import { TriageJobs, automationFromEnvironment, type AutomationConfiguration } from '../ai/triage-jobs.js';
+import { createTriageWorker } from '../ai/triage-worker.js';
+import { aiDocumentation } from '../ai/ai-documentation.js';
+import { JsonTeamRepository } from '../teams/repositories.js';
+import { JsonFileStore } from '../../infrastructure/persistence/json/json-file-store.js';
+import { FreshVerifiedSlaSource } from '../ai/verified-sla-source.js';
+import { ProviderDocumentExtractionAdapter, type ApprovedExtractionSchemas } from '../ai/provider-document-extraction.adapter.js';
+import { documentExtractionSchemas } from '../ai/document-extraction-schemas.js';
+import { GovernedKnowledgeSource } from '../knowledge/published-knowledge.js';
+import type { ExtractionAdapter } from '../documents/services/extraction-adapter.js';
+import { ProvisionalExtractionAdapter } from '../documents/services/provisional-extraction-adapter.js';
+import { DocumentKnowledgeService, DocumentKnowledgeError } from '../documents/services/document-knowledge.service.js';
 import { JsonStorageError } from '../../infrastructure/persistence/json/json-file-store.js';
 
 import {
@@ -31,8 +81,19 @@ import { OperationalReportingService } from '../reporting/services/operational-r
 import type { SlaEvaluationRepository } from '../sla/repositories/sla-evaluation.repository.js';
 import { JsonSlaEvaluationRepository } from '../sla/repositories/sla-evaluation.repository.js';
 import { SlaEvaluationService } from '../sla/services/sla-evaluation.service.js';
+import {
+  SlaEvaluationWorker,
+  type SlaEvaluationWorkerOptions,
+} from '../sla/services/sla-evaluation-worker.js';
 import { RepositorySlaPolicyResolver } from '../sla/services/sla-policy-resolver.js';
 import { parseSlaPolicy, SlaPolicyValidationError } from '../sla/domain/sla-policy.js';
+import {
+  SLA_EXCLUSION_REASON_CODES,
+  SLA_PAUSE_REASON_CODES,
+  type SlaEvidenceWrite,
+  type SlaPauseEvidence,
+  type SlaResolutionEvidence,
+} from '../sla/domain/sla-evidence.js';
 import type { OperationalReport } from '../reporting/domain/operational-report.js';
 import type { SlaEvaluationService as SlaEvaluationServiceType } from '../sla/services/sla-evaluation.service.js';
 import {
@@ -62,6 +123,7 @@ import type {
   TicketWorkflowConfig,
   TicketWorkflowRecord,
 } from './domain/ticket-workflow.js';
+import { normalizeTicketPriority } from './domain/priority.js';
 import {
   JsonTicketStore,
   TicketConflictError,
@@ -82,6 +144,7 @@ import {
 } from './services/ticket-workflow-validation.js';
 
 type ApiErrorField = { field: string; message: string };
+const ticketAppDisposers = new WeakMap<Express, () => void>();
 
 class ApiError extends Error {
   constructor(
@@ -109,7 +172,24 @@ export type TicketAppOptions = {
   policyRepository?: PolicyRepository;
   slaEvaluationRepository?: SlaEvaluationRepository;
   slaEvaluationService?: SlaEvaluationServiceType;
+  slaEvaluationWorker?: SlaEvaluationWorkerOptions;
+  analysisRepository?: AiAnalysisRepository;
+  ticketAiDemo?: TicketAiDemoConfiguration | null;
+  ticketAiLive?: LiveTicketAiConfiguration | null;
+  priorityPreview?: PriorityPreviewConfiguration | null;
+  resolutionRunner?: AiExecutionRunner;
+  aiAutomation?: AutomationConfiguration;
+  knowledgeSource?: AuthorizedKnowledgeSource;
+  routingSource?: AuthorizedRoutingSource;
+  slaInsightSource?: VerifiedSlaInsightSource;
+  documentExtractionAdapter?: ExtractionAdapter;
+  documentExtractionSchemas?: ApprovedExtractionSchemas;
 };
+
+export function stopTicketApp(app: Express): void {
+  ticketAppDisposers.get(app)?.();
+  ticketAppDisposers.delete(app);
+}
 
 export function createTicketApp(options: TicketAppOptions = {}) {
   const settings = options.settings ?? jiraSettingsFromEnvironment();
@@ -123,6 +203,118 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   const policyRepository =
     options.policyRepository ?? new JsonPolicyRepository(tenantStore);
   const documentRepository = new JsonDocumentRepository(tenantStore);
+  const parseSlaDocumentSource = async (
+    body: Record<string, unknown>,
+    tenant: TenantContext,
+  ): Promise<{
+    sourceDocumentId?: string;
+    sourceDocumentVersionId?: string;
+  }> => {
+    const hasDocumentId = body.sourceDocumentId !== undefined;
+    const hasVersionId = body.sourceDocumentVersionId !== undefined;
+    if (!hasDocumentId && !hasVersionId) {
+      return {};
+    }
+    if (!hasDocumentId || !hasVersionId) {
+      throw validationError(
+        hasDocumentId ? 'sourceDocumentVersionId' : 'sourceDocumentId',
+        'Both source document fields must be provided together.',
+      );
+    }
+
+    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
+    const sourceDocumentVersionId = requiredText(
+      body,
+      'sourceDocumentVersionId',
+    );
+    const sourceDocument = await documentRepository.getById(
+      tenant,
+      sourceDocumentId,
+    );
+    if (
+      !sourceDocument ||
+      sourceDocument.status !== 'processed' ||
+      sourceDocument.processingStatus !== 'completed'
+    ) {
+      throw new ApiError(
+        422,
+        'SOURCE_DOCUMENT_NOT_READY',
+        'The source document must be processed and belong to this organisation.',
+      );
+    }
+    const sourceVersions = await tenantStore.readCollection<{
+      id: string;
+      documentId: string;
+      organisationId: string;
+    }>('documentVersions');
+    if (
+      !sourceVersions.some(
+        (version) =>
+          version.id === sourceDocumentVersionId &&
+          version.documentId === sourceDocumentId &&
+          version.organisationId === tenant.organisationId,
+      )
+    ) {
+      throw validationError(
+        'sourceDocumentVersionId',
+        'The source version must belong to the selected tenant document.',
+      );
+    }
+    return { sourceDocumentId, sourceDocumentVersionId };
+  };
+  const validateStoredSlaDocumentSource = async (
+    version: {
+      sourceDocumentId?: string;
+      sourceDocumentVersionId?: string;
+    },
+    tenant: TenantContext,
+  ): Promise<void> => {
+    const { sourceDocumentId, sourceDocumentVersionId } = version;
+    if (sourceDocumentId === undefined && sourceDocumentVersionId === undefined) {
+      return;
+    }
+    if (!sourceDocumentId || !sourceDocumentVersionId) {
+      throw new ApiError(
+        409,
+        'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
+        'The SLA policy must reference both a source document and version.',
+      );
+    }
+    const sourceDocument = await documentRepository.getById(
+      tenant,
+      sourceDocumentId,
+    );
+    if (
+      !sourceDocument ||
+      sourceDocument.status !== 'processed' ||
+      sourceDocument.processingStatus !== 'completed'
+    ) {
+      throw new ApiError(
+        409,
+        'SOURCE_DOCUMENT_NOT_READY',
+        'The SLA source document must remain processed and tenant-scoped.',
+      );
+    }
+    const sourceVersions = await tenantStore.readCollection<{
+      id: string;
+      documentId: string;
+      organisationId: string;
+    }>('documentVersions');
+    if (
+      !sourceVersions.some(
+        (sourceVersion) =>
+          sourceVersion.id === sourceDocumentVersionId &&
+          sourceVersion.documentId === sourceDocumentId &&
+          sourceVersion.organisationId === tenant.organisationId,
+      )
+    ) {
+      throw new ApiError(
+        409,
+        'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
+        'The referenced source document version is no longer available.',
+      );
+    }
+  };
   const slaEvaluationRepository =
     options.slaEvaluationRepository ??
     new JsonSlaEvaluationRepository(tenantStore);
@@ -157,8 +349,144 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     ? options.developmentPrincipal ?? null
     : developmentPrincipalFromEnvironment();
   const authorization = options.authorization ?? applicationAuthorization;
+  const ticketAiDemo = options.ticketAiDemo === undefined
+    ? ticketAiDemoConfigurationFromEnvironment()
+    : options.ticketAiDemo;
+  const ticketAiLive = options.ticketAiLive === undefined
+    ? liveTicketAiConfigurationFromEnvironment()
+    : options.ticketAiLive;
+  if (ticketAiDemo && ticketAiLive) {
+    throw new TicketAiDemoConfigurationError(
+      'Enable either local demo mode or live ticket AI, not both.',
+    );
+  }
+  const ticketAiSource: AuthorizedTicketAnalysisSource = {
+    async getAuthorizedTicket(
+      tenant: TenantContext,
+      ticketId: string,
+    ): Promise<TicketAiView | null> {
+      const ticket = await store.findTicket(tenant as DevelopmentPrincipal, ticketId);
+      const caller = tenant as DevelopmentPrincipal;
+      if (!ticket || !Array.isArray(caller.teamIds) || !canAccessTicket(caller, ticket)) {
+        return null;
+      }
+      return {
+        id: ticket.id,
+        organisationId: ticket.organisationId,
+        title: ticket.title,
+        description: descriptionText(ticket.description),
+      };
+    },
+  };
+  const ticketAiRuntime = ticketAiLive
+    ? createLiveTicketAiRuntime(
+      ticketAiSource,
+      ticketAiLive,
+      process.env,
+      undefined,
+      options.analysisRepository,
+    )
+    : ticketAiDemo
+      ? createLocalDemoTicketAiRuntime(ticketAiSource, options.analysisRepository)
+      : null;
+  const ticketAiCategories = ticketAiLive?.categories ?? ticketAiDemo?.categories;
+  const priorityConfig = options.priorityPreview === undefined
+    ? priorityPreviewFromEnvironment()
+    : options.priorityPreview;
+  const priorityRunner = priorityConfig?.runner ?? ticketAiRuntime?.priorityRunner;
+  const priorityService = priorityConfig && priorityRunner
+    ? new PriorityRecommendationService(
+      ticketAiSource,
+      new PriorityRecommender(
+        priorityRunner,
+        priorityConfig.candidate,
+        priorityConfig.minimumConfidence,
+      ),
+    )
+    : null;
+  const resolutionRunner = options.resolutionRunner ?? ticketAiRuntime?.priorityRunner;
+  const baseKnowledge = options.knowledgeSource ?? new GovernedKnowledgeSource(policyRepository, tenantStore, authorization);
+  let operations: AiOperationsService;
+  const knowledgeSource: AuthorizedKnowledgeSource = { async listAuthorizedDocuments(tenant) {
+    return [...await baseKnowledge.listAuthorizedDocuments(tenant), ...await operations.listAuthorizedDocuments(tenant)];
+  } };
+  const resolutionService = resolutionRunner
+    ? new ResolutionRecommendationService(
+      ticketAiSource,
+      new KnowledgeRetriever(
+        knowledgeSource,
+      ),
+      resolutionRunner,
+    )
+    : null;
+
+  const slaInsightSource = options.slaInsightSource ?? new FreshVerifiedSlaSource(slaEvaluationService,
+    async (tenant, ticketId) => {
+      const caller = tenant as DevelopmentPrincipal;
+      const ticket = await store.findTicket(tenant, ticketId);
+      if (!ticket || !Array.isArray(caller.teamIds) || !canAccessTicket(caller, ticket)) return null;
+      return { ticket: { id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: descriptionText(ticket.description) },
+        revision: createHash('sha256').update(JSON.stringify(ticket)).digest('hex'),
+        domain: { createdAt: ticket.createdAt, ...(ticket.priority === undefined ? {} : { priority: ticket.priority }), ...(ticket.teamId === undefined ? {} : { teamId: ticket.teamId }) } };
+    }, tenant => authorization.permissionsFor(tenant.roles).has('configuration.manage'));
+  const triageService = ticketAiRuntime?.createTriageService({ knowledge: knowledgeSource, sla: slaInsightSource,
+    ...(resolutionRunner ? { resolutionRunner } : {}),
+    ...(priorityConfig && priorityRunner ? { priority: new PriorityRecommender(priorityRunner, priorityConfig.candidate, priorityConfig.minimumConfidence) } : {}),
+    routing: options.routingSource ?? { getAuthorizedRoutingContext: (tenant, ticket) => operations.getAuthorizedRoutingContext(tenant, ticket) },
+  });
+  const operationFiles = new JsonFileStore(settings.dataDirectory);
+  const operationTeams = new JsonTeamRepository(operationFiles);
+  const canRunAi = (tenant: TenantContext) => ['tickets.ai.review', 'tickets.resolution.review'].every(permission =>
+    authorization.permissionsFor(tenant.roles).has(permission as Permission));
+  const resolveAiActor = async (organisationId: string, userId: string): Promise<TenantContext | null> => {
+    const tenant = options.tenantResolver ? await options.tenantResolver.resolve(userId, organisationId) :
+      principal?.organisationId === organisationId && principal.userId === userId ? principal : null;
+    if (!tenant || !canRunAi(tenant)) return null;
+    const teamIds = options.tenantResolver ? await options.listTeamIdsForUser?.(tenant, userId) ?? [] : principal?.teamIds ?? [];
+    return { ...tenant, teamIds } as DevelopmentPrincipal;
+  };
+  operations = new AiOperationsService(new AiOperationsStore(operationFiles), {
+    async ticket(tenant, id) {
+      const ticket = await store.findTicket(tenant, id);
+      const caller = tenant as DevelopmentPrincipal;
+      return ticket && Array.isArray(caller.teamIds) && canAccessTicket(caller, ticket) ? ticket : null;
+    },
+    project: ticket => ({ id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: descriptionText(ticket.description) }),
+    teams: tenant => operationTeams.listTeams(tenant),
+    can: (tenant, permission) => authorization.permissionsFor(tenant.roles).has(permission),
+    teamIds: tenant => (tenant as DevelopmentPrincipal).teamIds ?? [],
+    async isResolved(tenant, ticket) {
+      const policy = await slaEvaluationService.resolvePolicyForTicket(tenant, ticket);
+      return typeof ticket.status === 'string' && (policy?.resolvedStatuses.includes(ticket.status) ?? false);
+    },
+    categories: () => ticketAiCategories ?? [], knowledge: baseKnowledge,
+    ...(options.routingSource ? { routing: options.routingSource } : {}),
+    async triage(tenant, ticketId) {
+      if (!triageService || !ticketAiCategories) throw new AiOperationsError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+      return triageService.analyze({ tenant, ticketId, categories: ticketAiCategories });
+    },
+  });
+  const triageJobs = new TriageJobs(operations, resolveAiActor);
+  const worker = createTriageWorker(options.aiAutomation ?? automationFromEnvironment(), triageJobs, resolveAiActor, tenant => store.listTickets(tenant));
+  const notifyIntake = async (organisationId: string, ticketId: string, createdAt: string) => {
+    try { await worker.intake(organisationId, ticketId, createdAt); }
+    catch { console.warn('AI intake enqueue failed; background reconciliation will retry.'); }
+  };
+  const documentKnowledge = new DocumentKnowledgeService(tenantStore, policyRepository, attachmentStorage,
+    options.documentExtractionAdapter ?? (ticketAiLive && ticketAiRuntime
+      ? new ProviderDocumentExtractionAdapter(ticketAiRuntime.priorityRunner, options.documentExtractionSchemas ?? documentExtractionSchemas)
+      : new ProvisionalExtractionAdapter()));
 
   const app = express();
+  app.locals.aiWorker = worker;
+  app.use(aiDocumentation());
+  const slaEvaluationWorker = options.slaEvaluationWorker
+    ? new SlaEvaluationWorker(
+        slaEvaluationService,
+        store,
+        options.slaEvaluationWorker,
+      )
+    : undefined;
   const fallbackRequestId = () => `req_${randomUUID().replace(/-/g, '')}`;
   const attachmentUpload = multer({
     storage: multer.memoryStorage(),
@@ -237,6 +565,12 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       }
     });
   }
+
+  app.use('/api/v1', operationsApi(operations, triageJobs, (request, permissions) => {
+    const caller = authenticatedPrincipal(request, principal);
+    for (const permission of permissions) requireSharedPermission(caller, authorization, permission);
+    return caller;
+  }, ticketAiRuntime?.evaluateSample));
 
   app.get('/api/v1/documents', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
@@ -350,6 +684,36 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     },
   );
 
+  app.post('/api/v1/documents/:documentId/extract-rules', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body ?? {}, ['retry']);
+    if (body.retry !== undefined && typeof body.retry !== 'boolean') throw validationError('retry', 'retry must be a boolean.');
+    const result = await documentKnowledge.extract(authenticated, routeParam(request, 'documentId'), body.retry === true);
+    response.setHeader('Cache-Control', 'no-store');
+    if (result.job.status === 'failed') throw new DocumentKnowledgeError(502, 'DOCUMENT_EXTRACTION_FAILED', 'Extraction failed; inspect document extraction history before an explicit retry.');
+    response.status(result.job.status === 'succeeded' ? 200 : 202).json({ data: result, requestId: requestId(response) });
+  });
+  app.get('/api/v1/documents/:documentId/extractions', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data: await documentKnowledge.history(authenticated, routeParam(request, 'documentId')), requestId: requestId(response) });
+  });
+  app.post('/api/v1/documents/:documentId/publish-knowledge', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['ruleIds', 'reason', 'effectiveFrom', 'effectiveTo', 'visibility']);
+    if (!Array.isArray(body.ruleIds) || !body.ruleIds.length || body.ruleIds.some(id => typeof id !== 'string' || !id.trim())) throw validationError('ruleIds', 'Select approved rule IDs.');
+    if (body.visibility !== 'administrators' && body.visibility !== 'support_staff') throw validationError('visibility', 'Choose administrators or support_staff explicitly.');
+    const result = await documentKnowledge.publish(authenticated, routeParam(request, 'documentId'), {
+      ruleIds: body.ruleIds as string[], reason: requiredText(body, 'reason'), effectiveFrom: requiredText(body, 'effectiveFrom'),
+      effectiveTo: optionalText(body, 'effectiveTo') ?? null, visibility: body.visibility,
+    });
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data: result, requestId: requestId(response) });
+  });
+
   app.post(
     '/api/v1/documents/:documentId/download-token',
     async (request, response) => {
@@ -434,46 +798,8 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       'effectiveTo',
       'payload',
     ]);
+    const source = await parseSlaDocumentSource(body, authenticated);
     const description = requiredText(body, 'description');
-    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
-    const sourceDocumentVersionId = requiredText(
-      body,
-      'sourceDocumentVersionId',
-    );
-    const sourceDocument = await documentRepository.getById(
-      authenticated,
-      sourceDocumentId,
-    );
-    if (
-      !sourceDocument ||
-      sourceDocument.status !== 'processed' ||
-      sourceDocument.processingStatus !== 'completed'
-    ) {
-      throw new ApiError(
-        422,
-        'SOURCE_DOCUMENT_NOT_READY',
-        'The source document must be processed and belong to this organisation.',
-      );
-    }
-    const sourceVersions =
-      await tenantStore.readCollection<{
-        id: string;
-        documentId: string;
-        organisationId: string;
-        version: number;
-      }>('documentVersions');
-    const sourceVersion = sourceVersions.find(
-      (version) =>
-        version.id === sourceDocumentVersionId &&
-        version.documentId === sourceDocumentId &&
-        version.organisationId === authenticated.organisationId,
-    );
-    if (!sourceVersion) {
-      throw validationError(
-        'sourceDocumentVersionId',
-        'The source version must belong to the selected tenant document.',
-      );
-    }
     const effectiveFrom = requiredText(body, 'effectiveFrom');
     const effectiveTo =
       body.effectiveTo === undefined || body.effectiveTo === null
@@ -532,8 +858,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         effectiveFrom,
         effectiveTo,
         payload: policyPayload,
-        sourceDocumentId,
-        sourceDocumentVersionId,
+        ...source,
         createdAt: now,
         updatedAt: now,
       },
@@ -545,126 +870,90 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     });
   });
 
-  app.post('/api/v1/sla-policies/:policyId/versions', async (request, response) => {
-    const authenticated = authenticatedPrincipal(request, principal);
-    requireSharedPermission(authenticated, authorization, 'policies.manage');
-    const policy = await policyRepository.getPolicyById(
-      authenticated,
-      routeParam(request, 'policyId'),
-    );
-    if (!policy || policy.policyType !== 'sla') {
-      throw new ApiError(404, 'NOT_FOUND', 'SLA policy not found.');
-    }
-    const body = parseObjectBody(request.body, [
-      'sourceDocumentId',
-      'sourceDocumentVersionId',
-      'effectiveFrom',
-      'effectiveTo',
-      'payload',
-    ]);
-    const sourceDocumentId = requiredText(body, 'sourceDocumentId');
-    const sourceDocumentVersionId = requiredText(
-      body,
-      'sourceDocumentVersionId',
-    );
-    const document = await documentRepository.getById(
-      authenticated,
-      sourceDocumentId,
-    );
-    if (
-      !document ||
-      document.status !== 'processed' ||
-      document.processingStatus !== 'completed'
-    ) {
-      throw new ApiError(
-        422,
-        'SOURCE_DOCUMENT_NOT_READY',
-        'The source document must be processed and belong to this organisation.',
+  app.post(
+    '/api/v1/sla-policies/:policyId/versions',
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireOrganisationAdmin(authenticated, authorization);
+      const policy = await policyRepository.getPolicyById(
+        authenticated,
+        routeParam(request, 'policyId'),
       );
-    }
-    const documentVersions =
-      await tenantStore.readCollection<{
-        id: string;
-        documentId: string;
-        organisationId: string;
-      }>('documentVersions');
-    if (
-      !documentVersions.some(
-        (version) =>
-          version.id === sourceDocumentVersionId &&
-          version.documentId === sourceDocumentId &&
-          version.organisationId === authenticated.organisationId,
-      )
-    ) {
-      throw validationError(
-        'sourceDocumentVersionId',
-        'The source version must belong to the selected tenant document.',
-      );
-    }
-    const effectiveFrom = requiredText(body, 'effectiveFrom');
-    const effectiveTo =
-      body.effectiveTo === undefined || body.effectiveTo === null
-        ? null
-        : requiredText(body, 'effectiveTo');
-    const versions = await policyRepository.listVersionsForPolicy(
-      authenticated,
-      policy.id,
-    );
-    const versionNumber =
-      versions.reduce(
-        (maximum, version) => Math.max(maximum, version.version),
-        0,
-      ) + 1;
-    const versionId = `policy_version_${randomUUID().replace(/-/g, '')}`;
-    let payload: ReturnType<typeof parseSlaPolicy>;
-    try {
-      payload = parseSlaPolicy(body.payload, {
-        id: policy.id,
-        versionId,
-        version: versionNumber,
-        organisationId: authenticated.organisationId,
-        effectiveFrom,
-        effectiveTo,
-      });
-    } catch (error) {
-      if (error instanceof SlaPolicyValidationError) {
-        throw validationError(error.field, error.message);
+      if (!policy || policy.policyType !== 'sla') {
+        throw new ApiError(404, 'NOT_FOUND', 'SLA policy not found.');
       }
-      throw error;
-    }
-    const {
-      id: _policyId,
-      versionId: _versionId,
-      version: _version,
-      organisationId: _organisationId,
-      effectiveFrom: _effectiveFrom,
-      effectiveTo: _effectiveTo,
-      ...policyPayload
-    } = payload;
-    const now = new Date().toISOString();
-    const version = await policyRepository.createVersion(
-      policy.id,
-      {
-        id: versionId,
-        organisationId: authenticated.organisationId,
-        policyId: policy.id,
-        version: versionNumber,
-        status: 'pending_approval',
-        effectiveFrom,
-        effectiveTo,
-        payload: policyPayload,
-        sourceDocumentId,
-        sourceDocumentVersionId,
-        createdAt: now,
-        updatedAt: now,
-      },
-      authenticated,
-    );
-    response.status(201).json({
-      data: { policy, version },
-      requestId: requestId(response),
-    });
-  });
+      const body = parseObjectBody(request.body, [
+        'sourceDocumentId',
+        'sourceDocumentVersionId',
+        'effectiveFrom',
+        'effectiveTo',
+        'payload',
+      ]);
+      const source = await parseSlaDocumentSource(body, authenticated);
+      const effectiveFrom = requiredText(body, 'effectiveFrom');
+      const effectiveTo =
+        body.effectiveTo === undefined || body.effectiveTo === null
+          ? null
+          : requiredText(body, 'effectiveTo');
+      const versions = await policyRepository.listVersionsForPolicy(
+        authenticated,
+        policy.id,
+      );
+      const versionNumber =
+        versions.reduce(
+          (maximum, version) => Math.max(maximum, version.version),
+          0,
+        ) + 1;
+      const versionId = `policy_version_${randomUUID().replace(/-/g, '')}`;
+      let payload: ReturnType<typeof parseSlaPolicy>;
+      try {
+        payload = parseSlaPolicy(body.payload, {
+          id: policy.id,
+          versionId,
+          version: versionNumber,
+          organisationId: authenticated.organisationId,
+          effectiveFrom,
+          effectiveTo,
+        });
+      } catch (error) {
+        if (error instanceof SlaPolicyValidationError) {
+          throw validationError(error.field, error.message);
+        }
+        throw error;
+      }
+      const {
+        id: _policyId,
+        versionId: _versionId,
+        version: _version,
+        organisationId: _organisationId,
+        effectiveFrom: _effectiveFrom,
+        effectiveTo: _effectiveTo,
+        ...policyPayload
+      } = payload;
+      const now = new Date().toISOString();
+      const version = await policyRepository.createVersion(
+        policy.id,
+        {
+          id: versionId,
+          organisationId: authenticated.organisationId,
+          policyId: policy.id,
+          version: versionNumber,
+          status: 'pending_approval',
+          effectiveFrom,
+          effectiveTo,
+          payload: policyPayload,
+          ...source,
+          createdAt: now,
+          updatedAt: now,
+        },
+        authenticated,
+      );
+      response.status(201).json({
+        data: { policy, version },
+        requestId: requestId(response),
+      });
+    },
+  );
 
   app.post(
     '/api/v1/sla-policies/:policyId/versions/:versionId/approve',
@@ -689,51 +978,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       ) {
         throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
       }
-      if (
-        version.sourceDocumentId === undefined ||
-        version.sourceDocumentVersionId === undefined
-      ) {
-        throw new ApiError(
-          409,
-          'POLICY_SOURCE_REQUIRED',
-          'SLA policy version must reference a source document and version.',
-        );
-      }
-      const sourceVersions =
-        await tenantStore.readCollection<{
-          id: string;
-          documentId: string;
-          organisationId: string;
-        }>('documentVersions');
-      if (
-        !sourceVersions.some(
-          (sourceVersion) =>
-            sourceVersion.id === version.sourceDocumentVersionId &&
-            sourceVersion.documentId === version.sourceDocumentId &&
-            sourceVersion.organisationId === authenticated.organisationId,
-        )
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
-          'The referenced source document version is no longer available.',
-        );
-      }
-      const document = await documentRepository.getById(
-        authenticated,
-        version.sourceDocumentId,
-      );
-      if (
-        !document ||
-        document.status !== 'processed' ||
-        document.processingStatus !== 'completed'
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_NOT_READY',
-          'The SLA source document must remain processed and tenant-scoped.',
-        );
-      }
+      await validateStoredSlaDocumentSource(version, authenticated);
       const approvalRecords =
         await tenantStore.readCollection<{
           policyVersionId: string;
@@ -783,11 +1028,14 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           },
           authenticated,
         );
-      const updated = await policyRepository.transitionVersionStatus(
-        authenticated,
-        version.id,
-        'approved',
-      );
+      const afterApproval = await policyRepository.getVersionById(authenticated, version.id);
+      const updated = afterApproval?.status === 'approved'
+        ? afterApproval
+        : await policyRepository.transitionVersionStatus(
+          authenticated,
+          version.id,
+          'approved',
+        );
       if (!updated) {
         throw new ApiError(404, 'NOT_FOUND', 'SLA policy version not found.');
       }
@@ -854,45 +1102,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           'An approval record is required before activation.',
         );
       }
-      const sourceDocument = version.sourceDocumentId
-        ? await documentRepository.getById(
-            authenticated,
-            version.sourceDocumentId,
-          )
-        : null;
-      if (
-        !sourceDocument ||
-        sourceDocument.status !== 'processed' ||
-        sourceDocument.processingStatus !== 'completed'
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_NOT_READY',
-          'The SLA source document must remain processed and tenant-scoped.',
-        );
-      }
-      const sourceVersions =
-        await tenantStore.readCollection<{
-          id: string;
-          documentId: string;
-          organisationId: string;
-        }>('documentVersions');
-      if (
-        !version.sourceDocumentId ||
-        !version.sourceDocumentVersionId ||
-        !sourceVersions.some(
-          (sourceVersion) =>
-            sourceVersion.id === version.sourceDocumentVersionId &&
-            sourceVersion.documentId === version.sourceDocumentId &&
-            sourceVersion.organisationId === authenticated.organisationId,
-        )
-      ) {
-        throw new ApiError(
-          409,
-          'SOURCE_DOCUMENT_VERSION_NOT_FOUND',
-          'The referenced source document version is no longer available.',
-        );
-      }
+      await validateStoredSlaDocumentSource(version, authenticated);
       const activeVersion = await policyRepository.activateVersion(
         authenticated,
         policy.id,
@@ -1056,10 +1266,156 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       },
       authenticated,
     );
+    await notifyIntake(ticket.organisationId, ticket.id, ticket.createdAt);
     response.status(201).json({
       data: ticketResponse(ticket),
       requestId: requestId(response),
     });
+  });
+
+  app.get(
+    ['/api/v1/tickets/:ticketId/evidence', '/api/v1/tickets/:ticketId/similar'],
+    async (request, response) => {
+      const authenticated = authenticatedPrincipal(request, principal);
+      requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+      response.setHeader('Cache-Control', 'no-store');
+      if (!resolutionService) {
+        throw new ApiError(
+          503,
+          'RESOLUTION_NOT_CONFIGURED',
+          'Enable an AI runtime to use resolution retrieval.',
+        );
+      }
+      try {
+        const evidence = await resolutionService.retrieve(
+          authenticated,
+          routeParam(request, 'ticketId'),
+          request.path.endsWith('/similar'),
+        );
+        response.json({
+          data: evidence,
+          retrieval: { method: 'lexical', persistedIndex: false },
+          requestId: requestId(response),
+        });
+      } catch (error) {
+        throw ticketAiApiError(error);
+      }
+    },
+  );
+
+  app.post('/api/v1/tickets/:ticketId/recommend-resolution', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+    parseObjectBody(request.body ?? {}, []);
+    response.setHeader('Cache-Control', 'no-store');
+    if (!resolutionService) {
+      throw new ApiError(
+        503,
+        'RESOLUTION_NOT_CONFIGURED',
+        'Enable an AI runtime to recommend resolutions.',
+      );
+    }
+    try {
+      const result = await resolutionService.recommend(
+        authenticated,
+        routeParam(request, 'ticketId'),
+      );
+      response.json({ data: result, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/recommend-priority', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!priorityService) {
+      throw new ApiError(
+        503,
+        'PRIORITY_PREVIEW_DISABLED',
+        'Draft priority preview is not configured.',
+      );
+    }
+    try {
+      const recommendation = await priorityService.recommend(
+        authenticated,
+        routeParam(request, 'ticketId'),
+      );
+      response.json({ data: recommendation, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/triage', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!triageService || !ticketAiCategories) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    try {
+      const report = await operations.run(authenticated, routeParam(request, 'ticketId'));
+      const result = { ...(report.data.result as Record<string, unknown>), triageId: report.id };
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: result, requestId: requestId(response) });
+    } catch (error) { throw ticketAiApiError(error); }
+  });
+  app.get('/api/v1/tickets/:ticketId/ai-runs', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    if (!ticketAiRuntime) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    try {
+      const runs = await ticketAiRuntime.service.listWorkflowRuns(authenticated, routeParam(request, 'ticketId'));
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: runs, requestId: requestId(response) });
+    } catch (error) { throw ticketAiApiError(error); }
+  });
+
+  app.post('/api/v1/tickets/:ticketId/analyze', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    parseObjectBody(request.body ?? {}, []);
+    if (!ticketAiRuntime || !ticketAiCategories) {
+      throw new ApiError(
+        503,
+        'TICKET_AI_NOT_CONFIGURED',
+        'Ticket analysis is not enabled.',
+      );
+    }
+    try {
+      const analysis = await ticketAiRuntime.service.analyze({
+        tenant: authenticated,
+        ticketId: routeParam(request, 'ticketId'),
+        categories: ticketAiCategories,
+      });
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: analysis, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
+  });
+
+  app.get('/api/v1/tickets/:ticketId/analyses', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
+    if (!ticketAiRuntime) {
+      throw new ApiError(
+        503,
+        'TICKET_AI_NOT_CONFIGURED',
+        'Ticket analysis is not enabled.',
+      );
+    }
+    try {
+      const analyses = await ticketAiRuntime.service.listAnalyses(
+        authenticated,
+        routeParam(request, 'ticketId'),
+      );
+      response.setHeader('Cache-Control', 'no-store');
+      response.json({ data: analyses, requestId: requestId(response) });
+    } catch (error) {
+      throw ticketAiApiError(error);
+    }
   });
 
   app.get('/api/v1/tickets', async (request, response) => {
@@ -1176,6 +1532,75 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     },
   );
 
+  app.post('/api/v1/tickets/:ticketId/sla-events', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    const ticket = await findAccessibleTicket(
+      store,
+      authenticated,
+      routeParam(request, 'ticketId'),
+    );
+    const body = parseObjectBody(request.body, [
+      'type',
+      'evidence',
+      'reasonCode',
+      'contractReference',
+      'intervalId',
+    ]);
+    const type = requiredText(body, 'type');
+    let evidence: SlaEvidenceWrite;
+    if (type === 'assessment_completed') {
+      if (!isSupportStaff(authenticated)) {
+        throw forbiddenSlaEvidence();
+      }
+      evidence = {
+        type,
+        evidence: requiredText(body, 'evidence').trim(),
+      };
+    } else if (type === 'exclusion_started') {
+      requireSlaEvidenceManager(authenticated);
+      const reasonCode = SLA_EXCLUSION_REASON_CODES.find(
+        (candidate) => candidate === body.reasonCode,
+      );
+      if (!reasonCode) {
+        throw validationError(
+          'reasonCode',
+          'A supported SLA exclusion reason code is required.',
+        );
+      }
+      evidence = {
+        type,
+        intervalId: `sla_exclusion_${randomUUID().replace(/-/g, '')}`,
+        reasonCode,
+        evidence: requiredText(body, 'evidence').trim(),
+        contractReference: requiredText(body, 'contractReference').trim(),
+      };
+    } else if (type === 'exclusion_ended') {
+      requireSlaEvidenceManager(authenticated);
+      evidence = {
+        type,
+        intervalId: requiredText(body, 'intervalId').trim(),
+      };
+    } else {
+      throw validationError(
+        'type',
+        'Type must be assessment_completed, exclusion_started, or exclusion_ended.',
+      );
+    }
+
+    const result = await store.recordSlaEvidence(
+      authenticated,
+      ticket.id,
+      evidence,
+    );
+    if (!result) {
+      throw ticketNotFound();
+    }
+    response.status(201).json({
+      data: result[1],
+      requestId: requestId(response),
+    });
+  });
+
   app.patch('/api/v1/tickets/:ticketId/status', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
     const ticket = await findAccessibleTicket(
@@ -1183,7 +1608,12 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       authenticated,
       routeParam(request, 'ticketId'),
     );
-    const body = parseObjectBody(request.body, ['status', 'reason']);
+    const body = parseObjectBody(request.body, [
+      'status',
+      'reason',
+      'pauseEvidence',
+      'resolutionEvidence',
+    ]);
     const requestedStatus = requiredText(body, 'status');
     const reason = optionalText(body, 'reason');
     const workflow = await workflowForTicket(
@@ -1211,6 +1641,58 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       );
     }
     authorizeStatusChange(authenticated, workflow.config, currentStatus, nextStatus);
+    const slaPolicy = await slaEvaluationService.resolvePolicyForTicket(
+      authenticated,
+      ticket,
+    );
+    const wasPaused =
+      slaPolicy?.pausedStatuses.includes(currentStatus) ?? false;
+    const willBePaused =
+      slaPolicy?.pausedStatuses.includes(nextStatus) ?? false;
+    const enteringResolved =
+      (slaPolicy?.resolvedStatuses.includes(nextStatus) ?? false) &&
+      !(slaPolicy?.resolvedStatuses.includes(currentStatus) ?? false);
+    const pauseEvidence = body.pauseEvidence === undefined
+      ? undefined
+      : parseSlaPauseEvidence(body.pauseEvidence);
+    const resolutionEvidence = body.resolutionEvidence === undefined
+      ? undefined
+      : parseSlaResolutionEvidence(body.resolutionEvidence);
+    if (pauseEvidence && (!willBePaused || wasPaused)) {
+      throw validationError(
+        'pauseEvidence',
+        'Pause evidence is accepted only when entering a configured paused status.',
+      );
+    }
+    if (willBePaused && !wasPaused) {
+      requireSlaEvidenceManager(authenticated);
+      if (!pauseEvidence) {
+        throw validationError(
+          'pauseEvidence',
+          'Pause reason, evidence, and contract reference are required.',
+        );
+      }
+    }
+    if (wasPaused && !willBePaused) {
+      requireSlaEvidenceManager(authenticated);
+    }
+    if (resolutionEvidence && !enteringResolved) {
+      throw validationError(
+        'resolutionEvidence',
+        'Resolution evidence is accepted only when entering a configured resolved status.',
+      );
+    }
+    if (enteringResolved) {
+      if (!isSupportStaff(authenticated)) {
+        throw forbiddenSlaEvidence();
+      }
+      if (!resolutionEvidence) {
+        throw validationError(
+          'resolutionEvidence',
+          'Resolution outcome and documentation are required.',
+        );
+      }
+    }
     if (
       nextStatus === workflow.config.reopenStatus &&
       (!reason || !reason.trim())
@@ -1228,6 +1710,13 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       nextStatus,
       reason?.trim(),
       workflow.id,
+      {
+        ...(pauseEvidence === undefined ? {} : { pauseStart: pauseEvidence }),
+        ...(wasPaused && !willBePaused ? { pauseEnd: true } : {}),
+        ...(resolutionEvidence === undefined
+          ? {}
+          : { resolution: resolutionEvidence }),
+      },
     );
     if (!updated) {
       throw ticketNotFound();
@@ -1395,6 +1884,8 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       'product',
       'affectedService',
       'teamId',
+      'priority',
+      'priorityOverride',
     ]);
     if (Object.keys(body).length === 0) {
       throw validationError(
@@ -1406,10 +1897,14 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     const changes: Partial<
       Pick<
         TicketRecord,
-        'title' | 'description' | 'product' | 'affectedService' | 'teamId'
+        'title' | 'description' | 'product' | 'affectedService' | 'teamId' | 'priority'
       >
     > = {};
+    let priorityOverride:
+      | { reason: string; businessJustification: string }
+      | undefined;
     for (const [field, value] of Object.entries(body)) {
+      if (field === 'priorityOverride') continue;
       if (field === 'title') {
         if (typeof value !== 'string' || !value.trim()) {
           throw validationError(field, 'This field must not be empty.');
@@ -1439,6 +1934,33 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           );
         }
         changes.teamId = value;
+      } else if (field === 'priority') {
+        requireSharedPermission(authenticated, authorization, 'tickets.priority.manage');
+        const newPriority = typeof value === 'string'
+          ? normalizeTicketPriority(value)
+          : null;
+        if (!newPriority) {
+          throw validationError(field, 'Priority must be P1, P2, P3, or P4.');
+        }
+        changes.priority = newPriority;
+        if (newPriority !== ticket.priority) {
+          const override = parseObjectBody(body.priorityOverride, [
+            'reason',
+            'businessJustification',
+          ]);
+          priorityOverride = {
+            reason: requiredText(override, 'reason'),
+            businessJustification: requiredText(
+              override,
+              'businessJustification',
+            ),
+          };
+        } else if (body.priorityOverride !== undefined) {
+          throw validationError(
+            'priorityOverride',
+            'Override evidence is only accepted when the priority changes.',
+          );
+        }
       } else {
         if (value !== null && typeof value !== 'string') {
           throw validationError(field, 'This field must be a string or null.');
@@ -1446,11 +1968,18 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         changes[field as 'product' | 'affectedService'] = value;
       }
     }
+    if (body.priorityOverride !== undefined && body.priority === undefined) {
+      throw validationError(
+        'priorityOverride',
+        'Override evidence requires a priority change.',
+      );
+    }
 
     const updated = await store.updateTicket(
       authenticated,
       ticket.id,
       changes,
+      priorityOverride,
     );
     if (!updated) {
       throw ticketNotFound();
@@ -1488,7 +2017,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       authorId: authenticated.userId,
       body: commentBody.trim(),
       visibility: body.visibility,
-    });
+    }, isSupportStaff(authenticated) && body.visibility === 'public');
     if (!result) {
       throw ticketNotFound();
     }
@@ -1575,6 +2104,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           }
         : mappedTicket;
       const [stored, outcome] = await store.upsertJiraTicket(ticket);
+      if (outcome === 'created') await notifyIntake(organisationId, stored.id, stored.createdAt);
       response.status(outcome === 'created' ? 201 : 200).json({
         data: {
           id: stored.id,
@@ -1588,6 +2118,93 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     },
   );
 
+  app.get('/api/v1/extracted-rules', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const policyVersionId = typeof request.query.policyVersionId === 'string'
+      ? request.query.policyVersionId
+      : undefined;
+    const rules = await policyRepository.listExtractedRules(
+      authenticated,
+      policyVersionId,
+    );
+    response.json({ data: rules, requestId: requestId(response) });
+  });
+
+  app.get('/api/v1/extracted-rules/:ruleId', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const rule = await policyRepository.getExtractedRuleById(
+      authenticated,
+      routeParam(request, 'ruleId'),
+    );
+    if (!rule) {
+      throw new ApiError(404, 'NOT_FOUND', 'Extracted rule not found.');
+    }
+    response.json({ data: rule, requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/approve', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason', 'effectiveFrom']);
+    const reason = requiredText(body, 'reason');
+    const effectiveFrom = optionalText(body, 'effectiveFrom');
+    if (effectiveFrom && Number.isNaN(Date.parse(effectiveFrom))) {
+      throw new ApiError(400, 'VALIDATION_ERROR', 'effectiveFrom must be a valid timestamp.', [
+        { field: 'effectiveFrom', message: 'effectiveFrom must be a valid timestamp.' },
+      ]);
+    }
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'approved',
+        reason,
+        effectiveFrom ?? undefined,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/reject', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason']);
+    const reason = requiredText(body, 'reason');
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'rejected',
+        reason,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
+  app.post('/api/v1/extracted-rules/:ruleId/request-changes', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireOrganisationAdmin(authenticated, authorization);
+    const body = parseObjectBody(request.body, ['reason']);
+    const reason = requiredText(body, 'reason');
+    try {
+      const rule = await policyRepository.reviewExtractedRule(
+        authenticated,
+        routeParam(request, 'ruleId'),
+        'changes_requested',
+        reason,
+      );
+      response.json({ data: rule, requestId: requestId(response) });
+    } catch (error) {
+      throw mapCandidateReviewError(error);
+    }
+  });
+
   app.use((request, response) => {
     response.status(404).json({
       error: {
@@ -1600,6 +2217,16 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   });
 
   app.use(errorHandler);
+  if (slaEvaluationWorker) {
+    const unsubscribe = store.subscribeToTicketChanges(({ organisationId, ticketId }) => {
+      slaEvaluationWorker.enqueue(organisationId, ticketId);
+    });
+    slaEvaluationWorker.start();
+    ticketAppDisposers.set(app, () => {
+      unsubscribe();
+      slaEvaluationWorker.stop();
+    });
+  }
   return app;
 }
 
@@ -1694,7 +2321,8 @@ function matchesTicketFilters(
   },
 ): boolean {
   const effectiveStatus = ticket.status ?? ticket.source?.status;
-  const effectivePriority = ticket.priority ?? ticket.source?.priority;
+  const internalPriority = ticket.priority;
+  const sourcePriority = ticket.source?.priority;
   if (
     filters.status !== undefined &&
     effectiveStatus?.toLowerCase() !== filters.status.toLowerCase()
@@ -1703,7 +2331,12 @@ function matchesTicketFilters(
   }
   if (
     filters.priority !== undefined &&
-    effectivePriority?.toLowerCase() !== filters.priority.toLowerCase()
+    !(
+      (internalPriority !== undefined &&
+        (normalizeTicketPriority(internalPriority) ?? internalPriority).toLowerCase() ===
+          (normalizeTicketPriority(filters.priority) ?? filters.priority).toLowerCase()) ||
+      sourcePriority?.toLowerCase() === filters.priority.toLowerCase()
+    )
   ) {
     return false;
   }
@@ -1899,6 +2532,61 @@ function parseObjectBody(
   return value;
 }
 
+function parseSlaPauseEvidence(value: unknown): SlaPauseEvidence {
+  const body = parseObjectBody(value, [
+    'reasonCode',
+    'evidence',
+    'contractReference',
+  ]);
+  const reasonCode = SLA_PAUSE_REASON_CODES.find(
+    (candidate) => candidate === body.reasonCode,
+  );
+  if (!reasonCode) {
+    throw validationError(
+      'pauseEvidence.reasonCode',
+      'A supported SLA pause reason code is required.',
+    );
+  }
+  return {
+    reasonCode,
+    evidence: requiredText(body, 'evidence').trim(),
+    contractReference: requiredText(body, 'contractReference').trim(),
+  };
+}
+
+function parseSlaResolutionEvidence(value: unknown): SlaResolutionEvidence {
+  const body = parseObjectBody(value, [
+    'outcome',
+    'note',
+    'customerConfirmation',
+    'customerConfirmationEvidence',
+  ]);
+  if (body.outcome !== 'service_restored' && body.outcome !== 'agreed_solution') {
+    throw validationError(
+      'resolutionEvidence.outcome',
+      'Outcome must be service_restored or agreed_solution.',
+    );
+  }
+  if (
+    body.customerConfirmation !== 'received' &&
+    body.customerConfirmation !== 'not_applicable'
+  ) {
+    throw validationError(
+      'resolutionEvidence.customerConfirmation',
+      'Customer confirmation must be received or not_applicable.',
+    );
+  }
+  return {
+    outcome: body.outcome,
+    note: requiredText(body, 'note').trim(),
+    customerConfirmation: body.customerConfirmation,
+    customerConfirmationEvidence: requiredText(
+      body,
+      'customerConfirmationEvidence',
+    ).trim(),
+  };
+}
+
 function requiredText(
   body: Record<string, unknown>,
   field: string,
@@ -1987,6 +2675,23 @@ function requireOrganisationAdmin(
   authorization: RolePermissionPolicy = applicationAuthorization,
 ): void {
   requireSharedPermission(principal, authorization, 'configuration.manage');
+}
+
+function forbiddenSlaEvidence(): ApiError {
+  return new ApiError(
+    403,
+    'FORBIDDEN',
+    'You do not have permission to record this SLA evidence.',
+  );
+}
+
+function requireSlaEvidenceManager(principal: DevelopmentPrincipal): void {
+  if (
+    !principal.roles.includes('support_lead') &&
+    !principal.roles.includes('organisation_admin')
+  ) {
+    throw forbiddenSlaEvidence();
+  }
 }
 
 function requireSharedPermission(
@@ -2154,6 +2859,45 @@ function ticketNotFound(): ApiError {
   return new ApiError(404, 'NOT_FOUND', 'Ticket not found.');
 }
 
+function ticketAiApiError(error: unknown): unknown {
+  if (error instanceof AiOperationsError) return new ApiError(error.status, error.code, error.message);
+  if (error instanceof TicketAiAnalysisError && error.code === 'TICKET_NOT_FOUND') {
+    return ticketNotFound();
+  }
+  if (error instanceof AiExecutionError) {
+    console.warn('Ticket AI execution failed', {
+      executionId: error.executionId,
+      task: error.task,
+      code: error.code,
+    });
+    return new ApiError(
+      502,
+      'AI_ANALYSIS_FAILED',
+      'Ticket AI processing could not be completed.',
+    );
+  }
+  if (error instanceof TicketAiAnalysisError) {
+    console.error('Ticket AI analysis failed', { code: error.code });
+    return new ApiError(
+      500,
+      'AI_ANALYSIS_FAILED',
+      'Ticket AI processing could not be completed.',
+    );
+  }
+  return error;
+}
+
+function descriptionText(value: JsonValue | undefined): string {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(descriptionText).filter(Boolean).join(' ');
+  if (value === null || typeof value !== 'object') return '';
+  const text = typeof value.text === 'string' ? value.text : '';
+  const content = Array.isArray(value.content)
+    ? value.content.map(descriptionText).filter(Boolean).join(' ')
+    : '';
+  return [text, content].filter(Boolean).join(' ');
+}
+
 function requestId(response: Response): string {
   return response.locals.requestId as string;
 }
@@ -2177,11 +2921,11 @@ const errorHandler: ErrorRequestHandler = (
     return;
   }
   if (error instanceof JsonStorageError) {
-    console.error('Document and policy storage error', error);
+    console.error('Application data storage error', { code: error.code });
     response.status(503).json({
       error: {
         code: error.code,
-        message: 'Document and policy storage is temporarily unavailable.',
+        message: 'The application data store is temporarily unavailable.',
         requestId: id,
         fields: [],
       },
@@ -2279,6 +3023,10 @@ const errorHandler: ErrorRequestHandler = (
     });
     return;
   }
+  if (error instanceof DocumentKnowledgeError) {
+    response.status(error.statusCode).json({ error: { code: error.code, message: error.message, requestId: id, fields: [] } });
+    return;
+  }
   if (error instanceof DocumentProcessingError) {
     const statusCode =
       error.code === 'DOCUMENT_NOT_READY' ? 409 : 422;
@@ -2354,4 +3102,20 @@ function requireTicketPrincipal(
       next(error);
     }
   };
+}
+
+function mapCandidateReviewError(error: unknown): ApiError {
+  if (!(error instanceof Error)) {
+    return new ApiError(500, 'INTERNAL_ERROR', 'The request could not be completed.');
+  }
+  if (/does not exist|not found/i.test(error.message)) {
+    return new ApiError(404, 'NOT_FOUND', error.message);
+  }
+  if (/immutable|already exists/i.test(error.message)) {
+    return new ApiError(409, 'CONFLICT', error.message);
+  }
+  if (/reason|timestamp|review/i.test(error.message)) {
+    return new ApiError(400, 'VALIDATION_ERROR', error.message);
+  }
+  return new ApiError(500, 'INTERNAL_ERROR', 'The request could not be completed.');
 }

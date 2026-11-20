@@ -125,6 +125,41 @@ test('unified server authenticates tickets and enforces active organisation memb
     const adminReport = await request('/api/v1/reports?from=2026-01-01T00:00:00.000Z&to=2026-01-02T00:00:00.000Z', 'Bearer admin');
     assert.equal(adminReport.status, 200, 'organisation administrator has reports.read.all');
 
+    const agentSlaPolicies = await request('/api/v1/sla-policies', 'Bearer valid-user-a');
+    assert.equal(agentSlaPolicies.status, 403, 'support agent cannot manage SLA policies');
+    const adminSlaPolicy = await fetch(`${baseUrl}/api/v1/sla-policies`, {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer admin',
+        'x-organisation-id': 'org-a',
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify({
+        description: 'Organisation A SLA',
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        payload: {
+          calendar: {
+            timeZone: 'Africa/Johannesburg',
+            weeklySchedule: {
+              monday: [{ startMinute: 540, endMinute: 1020 }],
+            },
+            holidays: [],
+          },
+          targetsByPriority: {
+            high: { firstResponseMinutes: 60, resolutionMinutes: 240 },
+          },
+          pausedStatuses: ['PENDING'],
+          resolvedStatuses: ['RESOLVED'],
+          riskAtPercent: 75,
+        },
+      }),
+    });
+    const createdSlaPolicy = await adminSlaPolicy.json();
+    assert.equal(adminSlaPolicy.status, 201, 'tenant admin creates SLA through the unified auth path');
+    assert.equal(createdSlaPolicy.data.policy.organisationId, 'org-a');
+    assert.equal(createdSlaPolicy.data.version.status, 'pending_approval');
+
     const foundationRoute = await fetch(`${baseUrl}/api/v1/me`, {
       headers: { authorization: 'Bearer valid-user-a' },
     });

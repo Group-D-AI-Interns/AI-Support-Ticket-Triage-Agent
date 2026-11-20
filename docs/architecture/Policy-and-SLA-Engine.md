@@ -9,7 +9,7 @@ Suggested lifecycle: Draft → Pending Approval → Approved → Active → Expi
 ## 2. Rule model
 
 A structured rule should retain:
-- Organisation and source document/version.
+- Organisation and, when applicable, source document/version.
 - Rule type and structured payload.
 - Source page/section or text evidence.
 - Extraction method/model/config version.
@@ -20,14 +20,15 @@ A structured rule should retain:
 
 ## 3. SLA configuration
 
-Support configurable first response, average response and resolution targets; priority-based policies; department/team scope; business hours; working calendars; public holidays; pause conditions where approved; escalation rules and notification settings.
+Support configurable first response, average response and resolution targets; priority-based policies; department/team scope; business hours; working calendars; public holidays; pause conditions where approved; escalation rules and notification settings. Each tenant's organisation administrator supplies its SLA configuration through the tenant-scoped API; uploading a policy document is not required.
 
-Do not invent targets. All targets must originate from approved organisation configuration.
+Do not invent targets. All targets must be supplied by the tenant and approved through the policy lifecycle.
 
 The SLA evaluator consumes a normalized payload from an active, approved `sla`
-policy version. The document extraction and approval workflow remains the
-source of that version; extracted text is not evaluated directly. The initial
-payload contract is:
+policy version. Tenant administrators provide configuration values directly;
+the API binds the policy to the authenticated organisation, validates the
+payload, and requires review and activation before evaluation. No cross-tenant
+or application-default values are applied. The initial payload contract is:
 
 The current API accepts tenant-scoped document uploads and records document
 versions. Processing supports UTF-8 plain-text (`.txt`) sources only; PDF and
@@ -78,10 +79,20 @@ The evaluation service resolves each ticket using:
 5. Persist evaluation inputs, result and policy version.
 6. Record at-risk and breached states for reporting.
 
-The current API exposes an administrator-triggered tenant batch evaluation.
-Automatic evaluation on ticket events and a scheduled worker are not yet wired.
-Notification/escalation actions require a separately agreed tenant policy
-contract.
+The API exposes an administrator-triggered tenant batch evaluation. The
+configured server also reevaluates tickets after relevant persisted ticket
+changes and sweeps active organisations on an in-process interval, five
+minutes by default (`SLA_EVALUATION_INTERVAL_MS`). Evaluation failures are
+logged; the next scheduled sweep retries eligible tickets. This worker is
+process-local and is not coordinated across multiple server instances, so it
+must not be treated as a durable or multi-instance job queue. Notification
+and escalation actions require a separately agreed tenant policy contract.
+Each successful evaluation appends a historical snapshot; retention or
+compaction is not configured and must be decided before high-volume use.
+Until a tenant retention rule is approved, the provisional development approach
+is to preserve snapshots and perform no automatic deletion. Escalation remains
+report-only at the configured risk/breach states; no outbound notifications are
+sent until owners approve contacts, actions and a delivery channel.
 
 ## 5. Governance
 

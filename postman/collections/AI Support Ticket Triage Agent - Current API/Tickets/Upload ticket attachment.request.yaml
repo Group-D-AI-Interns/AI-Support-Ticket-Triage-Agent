@@ -1,0 +1,17 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/attachments
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+body:
+  type: formdata
+  content:
+    - type: file
+      key: file
+      src:
+        - ""
+scripts:
+  - type: afterResponse
+    code: if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('attachmentId', result.data.id); }
+    language: text/javascript
+order: 11000

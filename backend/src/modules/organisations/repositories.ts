@@ -2,14 +2,14 @@ import { AppError } from "../../shared/errors/app-error.ts";
 import { randomUUID } from "node:crypto";
 import type { TenantContext } from "../../shared/auth/authentication.ts";
 import { JsonFileStore } from "../../infrastructure/persistence/json/json-file-store.ts";
-import { isEnvelope, isMembership } from "../identity/model.ts";
+import { isEnvelope, isMembership, isUser, type OrganisationMembership } from "../identity/model.ts";
 import { isOrganisation, type Organisation, type OrganisationStatus } from "./model.ts";
 
 export interface OrganisationRepository {
   findById(tenant: TenantContext, organisationId: string): Promise<Organisation | null>;
   listForUser(userId: string): Promise<Organisation[]>;
   listAll(): Promise<Organisation[]>;
-  create(input: { name: string; settings?: Record<string, unknown> }): Promise<Organisation>;
+  create(input: { name: string; settings?: Record<string, unknown> }, administrator: { userId: string; role: "organisation_admin" }): Promise<Organisation>;
   update(tenant: TenantContext, changes: { name?: string; settings?: Record<string, unknown>; status?: OrganisationStatus }): Promise<Organisation>;
 }
 
@@ -33,23 +33,57 @@ export class JsonOrganisationRepository implements OrganisationRepository {
     return (await this.store.read("organisations.json", isEnvelope(isOrganisation))).records;
   }
 
-  async create(input: { name: string; settings?: Record<string, unknown> }): Promise<Organisation> {
-    return this.store.update("organisations.json", isEnvelope(isOrganisation), (envelope) => {
-      if (envelope.records.some((item) => item.name.toLowerCase() === input.name.toLowerCase())) {
-        throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
-      }
-      const timestamp = new Date().toISOString();
-      const record: Organisation = {
-        id: `org_${randomUUID()}`,
-        name: input.name,
-        status: "active",
-        settings: input.settings ?? {},
-        createdAt: timestamp,
-        updatedAt: timestamp,
-      };
-      envelope.records.push(record);
-      return record;
+  async create(input: { name: string; settings?: Record<string, unknown> }, administrator: { userId: string; role: "organisation_admin" }): Promise<Organisation> {
+    const user = (await this.store.read("users.json", isEnvelope(isUser))).records
+      .find((record) => record.id === administrator.userId);
+    if (!user || user.status !== "active") {
+      throw new AppError(403, "ACCOUNT_INACTIVE", "An active application user is required to create an organisation.");
+    }
+
+    const timestamp = new Date().toISOString();
+    const record: Organisation = {
+      id: `org_${randomUUID()}`,
+      name: input.name,
+      status: "active",
+      settings: input.settings ?? {},
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+    const membership: OrganisationMembership = {
+      id: `membership_${randomUUID()}`,
+      organisationId: record.id,
+      userId: administrator.userId,
+      status: "active",
+      roles: [administrator.role],
+      createdAt: timestamp,
+      updatedAt: timestamp,
+    };
+
+    await this.store.update("memberships.json", isEnvelope(isMembership), (envelope) => {
+      envelope.records.push(membership);
     });
+
+    try {
+      return await this.store.update("organisations.json", isEnvelope(isOrganisation), (envelope) => {
+        if (envelope.records.some((item) => item.name.toLowerCase() === input.name.toLowerCase())) {
+          throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
+        }
+        envelope.records.push(record);
+        return record;
+      });
+    } catch (error) {
+      try {
+        await this.store.update("memberships.json", isEnvelope(isMembership), (envelope) => {
+          envelope.records = envelope.records.filter((item) => item.id !== membership.id);
+        });
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Organisation creation failed and the provisional administrator membership could not be removed.",
+        );
+      }
+      throw error;
+    }
   }
 
   async update(tenant: TenantContext, changes: { name?: string; settings?: Record<string, unknown>; status?: OrganisationStatus }): Promise<Organisation> {

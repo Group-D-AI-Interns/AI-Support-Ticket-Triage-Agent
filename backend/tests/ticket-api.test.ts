@@ -18,6 +18,8 @@ import {
 } from '../src/modules/tickets/development-auth.js';
 import { createLocalPrivateStorageAdapter } from '../src/modules/documents/storage/document-storage.js';
 import { JsonTicketStore } from '../src/modules/tickets/repositories/json-ticket.store.js';
+import { createJsonTenantStore } from '../src/infrastructure/persistence/json/json-store.js';
+import { JsonPolicyRepository } from '../src/modules/policies/repositories/json-policy.repository.js';
 
 const JIRA_SECRET = 'local-test-secret-with-at-least-32-characters';
 const DEV_TOKEN = 'local-development-token-with-at-least-32-characters';
@@ -218,6 +220,364 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
     assert.equal(saved.records.length, 1);
   } finally {
     await fixture.close();
+  }
+});
+
+test('records SLA assessment and exclusion evidence with role restrictions', async () => {
+  const managerFixture = await createFixture();
+  let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    const managerTicket = await new JsonTicketStore(
+      managerFixture.root,
+    ).createTicket(
+      {
+        organisationId: 'org_support',
+        requesterId: 'requester-1',
+        title: 'Evidence workflow test',
+        teamId: 'team_support',
+      },
+      {
+        organisationId: 'org_support',
+        userId: 'requester-1',
+        roles: ['requester'],
+      },
+    );
+    const ticketId = managerTicket.id;
+
+    const assessment = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'assessment_completed',
+          evidence: 'Impact and affected service assessed.',
+        }),
+      },
+    );
+    assert.equal(assessment.status, 201);
+    const duplicateAssessment = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'assessment_completed',
+          evidence: 'Duplicate assessment.',
+        }),
+      },
+    );
+    assert.equal(duplicateAssessment.status, 409);
+
+    const exclusionStart = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'exclusion_started',
+          reasonCode: 'approved_waiting_period',
+          evidence: 'Customer requested a service postponement.',
+          contractReference: 'CONTRACT-123',
+        }),
+      },
+    );
+    assert.equal(exclusionStart.status, 201);
+    const startEvent = (await exclusionStart.json()).data;
+    const exclusionEnd = await managerFixture.request(
+      `/api/v1/tickets/${ticketId}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'exclusion_ended',
+          intervalId: startEvent.changes.intervalId,
+        }),
+      },
+    );
+    assert.equal(exclusionEnd.status, 201);
+
+    agentFixture = await createFixture({
+      principal: principal('support-agent', ['support_agent']),
+    });
+    const agentTicket = await new JsonTicketStore(agentFixture.root).createTicket(
+      {
+        organisationId: 'org_support',
+        requesterId: 'requester-1',
+        title: 'Agent evidence authorization test',
+        teamId: 'team_support',
+      },
+      {
+        organisationId: 'org_support',
+        userId: 'requester-1',
+        roles: ['requester'],
+      },
+    );
+    const agentAssessment = await agentFixture.request(
+      `/api/v1/tickets/${agentTicket.id}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'assessment_completed',
+          evidence: 'Agent completed impact assessment.',
+        }),
+      },
+    );
+    assert.equal(agentAssessment.status, 201);
+    const forbiddenExclusion = await agentFixture.request(
+      `/api/v1/tickets/${agentTicket.id}/sla-events`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          type: 'exclusion_started',
+          reasonCode: 'approved_waiting_period',
+          evidence: 'Evidence',
+          contractReference: 'CONTRACT-123',
+        }),
+      },
+    );
+    assert.equal(forbiddenExclusion.status, 403);
+  } finally {
+    if (agentFixture) {
+      await agentFixture.close();
+    }
+    await managerFixture.close();
+  }
+});
+
+test('requires pause and resolution evidence on SLA-governed status transitions', async () => {
+  const adminFixture = await createFixture({
+    principal: principal('sla-admin', ['organisation_admin']),
+  });
+  let requesterFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  let leadFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    const adminTenant = {
+      organisationId: 'org_support',
+      userId: 'sla-admin',
+      roles: ['organisation_admin'],
+    };
+    const policies = new JsonPolicyRepository(
+      createJsonTenantStore(adminFixture.root),
+    );
+    await policies.createPolicy(
+      {
+        id: 'sla-contract-policy',
+        organisationId: 'org_support',
+        policyType: 'sla',
+        ownerId: adminTenant.userId,
+        status: 'active',
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+        version: 1,
+        description: 'SLA evidence transition test.',
+      },
+      adminTenant,
+    );
+    await policies.createVersion(
+      'sla-contract-policy',
+      {
+        id: 'sla-contract-policy-v1',
+        organisationId: 'org_support',
+        policyId: 'sla-contract-policy',
+        version: 1,
+        status: 'active',
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        payload: {
+          calendar: {
+            timeZone: 'UTC',
+            weeklySchedule: Object.fromEntries(
+              [
+                'monday',
+                'tuesday',
+                'wednesday',
+                'thursday',
+                'friday',
+                'saturday',
+                'sunday',
+              ].map((day) => [day, [{ startMinute: 0, endMinute: 1440 }]]),
+            ),
+            holidays: [],
+          },
+          targetsByPriority: {
+            P2: { firstResponseMinutes: 60, resolutionMinutes: 240 },
+          },
+          pausedStatuses: ['PENDING'],
+          resolvedStatuses: ['RESOLVED', 'CLOSED'],
+          riskAtPercent: 75,
+        },
+        createdAt: '2026-01-01T00:00:00.000Z',
+        updatedAt: '2026-01-01T00:00:00.000Z',
+      },
+      adminTenant,
+    );
+    const workflowResponse = await adminFixture.request(
+      '/api/v1/ticket-workflows',
+      {
+        method: 'POST',
+        body: JSON.stringify({ config: workflowConfig }),
+      },
+    );
+    const workflow = (await workflowResponse.json()).data;
+    await adminFixture.request(
+      `/api/v1/ticket-workflows/${workflow.id}/approve`,
+      { method: 'POST' },
+    );
+    requesterFixture = await createFixture({
+      root: adminFixture.root,
+      principal: principal('sla-requester', ['requester']),
+    });
+    agentFixture = await createFixture({
+      root: adminFixture.root,
+      principal: principal('sla-agent', ['support_agent']),
+    });
+    leadFixture = await createFixture({
+      root: adminFixture.root,
+      principal: principal('sla-lead', ['support_lead']),
+    });
+
+    const created = await requesterFixture.request('/api/v1/tickets', {
+      method: 'POST',
+      body: JSON.stringify({
+        title: 'SLA evidence transition test',
+        description: 'Exercise evidence-aware SLA status transitions.',
+      }),
+    });
+    const ticket = (await created.json()).data;
+    assert.equal(created.status, 201);
+    const assigned = await adminFixture.request(
+      `/api/v1/tickets/${ticket.id}`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          teamId: 'team_support',
+          priority: 'P2',
+          priorityOverride: {
+            reason: 'Initial triage completed.',
+            businessJustification: 'Priority required for SLA evaluation.',
+          },
+        }),
+      },
+    );
+    assert.equal(assigned.status, 200);
+    const opened = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'OPEN' }),
+      },
+    );
+    assert.equal(opened.status, 200);
+
+    const agentPauseAttempt = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'PENDING',
+          pauseEvidence: {
+            reasonCode: 'waiting_for_requester_information',
+            evidence: 'Requested missing diagnostic information.',
+            contractReference: 'CONTRACT-SLA-1',
+          },
+        }),
+      },
+    );
+    assert.equal(agentPauseAttempt.status, 403);
+    const missingPauseEvidence = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'PENDING' }),
+      },
+    );
+    assert.equal(missingPauseEvidence.status, 400);
+    const paused = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'PENDING',
+          pauseEvidence: {
+            reasonCode: 'waiting_for_requester_information',
+            evidence: 'Requested missing diagnostic information.',
+            contractReference: 'CONTRACT-SLA-1',
+          },
+        }),
+      },
+    );
+    assert.equal(paused.status, 200);
+    const resumed = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'IN_PROGRESS' }),
+      },
+    );
+    assert.equal(resumed.status, 200);
+
+    const missingResolutionEvidence = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ status: 'RESOLVED' }),
+      },
+    );
+    assert.equal(missingResolutionEvidence.status, 400);
+    const resolved = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'RESOLVED',
+          resolutionEvidence: {
+            outcome: 'service_restored',
+            note: 'Service access was restored.',
+            customerConfirmation: 'received',
+            customerConfirmationEvidence: 'Requester confirmed access.',
+          },
+        }),
+      },
+    );
+    assert.equal(resolved.status, 200);
+    const resolvedRun = await adminFixture.request(
+      '/api/v1/sla/evaluations/run',
+      { method: 'POST', body: '{}' },
+    );
+    const resolvedEvaluation = (await resolvedRun.json()).data.find(
+      (record: { ticketId: string }) => record.ticketId === ticket.id,
+    );
+    assert.equal(resolvedEvaluation.input.resolutionEvidenceEventId !== undefined, true);
+
+    const reopened = await leadFixture.request(
+      `/api/v1/tickets/${ticket.id}/status`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({
+          status: 'REOPENED',
+          reason: 'The service issue returned.',
+        }),
+      },
+    );
+    assert.equal(reopened.status, 200);
+    const reopenedRun = await adminFixture.request(
+      '/api/v1/sla/evaluations/run',
+      { method: 'POST', body: '{}' },
+    );
+    const reopenedEvaluation = (await reopenedRun.json()).data.find(
+      (record: { ticketId: string }) => record.ticketId === ticket.id,
+    );
+    assert.equal(reopenedEvaluation.input.resolvedAt, undefined);
+    assert.equal(reopenedEvaluation.input.resolutionPauses.length, 1);
+  } finally {
+    if (leadFixture) {
+      await leadFixture.close(false);
+    }
+    if (agentFixture) {
+      await agentFixture.close(false);
+    }
+    if (requesterFixture) {
+      await requesterFixture.close(false);
+    }
+    await adminFixture.close();
   }
 });
 
@@ -768,8 +1128,19 @@ test('ticket changes are audited and comments honor visibility and role rules', 
     );
     assert.equal(internalAttempt.status, 403);
     assert.equal(audit.status, 200);
-    assert.equal(auditResult.data.at(-1).action, 'ticket.comment_added');
-    assert.equal(auditResult.data.at(-1).actorId, 'user_requester_1');
+    assert.ok(
+      auditResult.data.some(
+        (event: { action: string; actorId: string }) =>
+          event.action === 'ticket.comment_added' &&
+          event.actorId === 'user_requester_1',
+      ),
+    );
+    assert.ok(
+      auditResult.data.some(
+        (event: { action: string }) =>
+          event.action === 'ticket.sla.acknowledgement_recorded',
+      ),
+    );
   } finally {
     if (requesterFixture) {
       await requesterFixture.close(false);
@@ -897,13 +1268,122 @@ test('uploads private ticket attachments and enforces ticket scope on download',
   }
 });
 
-test('uploads, processes, inspects, and downloads a tenant SLA source document', async () => {
+test('creates, approves, and activates tenant-configured SLA policy versions without documents', async () => {
+  const fixture = await createFixture({
+    principal: principal('user_admin', ['organisation_admin']),
+  });
+  const payload = {
+    calendar: {
+      timeZone: 'Africa/Johannesburg',
+      weeklySchedule: {
+        monday: [{ startMinute: 540, endMinute: 1020 }],
+        tuesday: [{ startMinute: 540, endMinute: 1020 }],
+      },
+      holidays: [],
+    },
+    targetsByPriority: {
+      high: { firstResponseMinutes: 60, resolutionMinutes: 240 },
+    },
+    pausedStatuses: ['PENDING'],
+    resolvedStatuses: ['RESOLVED', 'CLOSED'],
+    riskAtPercent: 75,
+  };
+  try {
+    const created = await fixture.request('/api/v1/sla-policies', {
+      method: 'POST',
+      body: JSON.stringify({
+        description: 'Tenant-configured support SLA',
+        effectiveFrom: '2026-01-01T00:00:00.000Z',
+        effectiveTo: null,
+        payload,
+      }),
+    });
+    const createdResult = await created.json();
+    const policyId = createdResult.data.policy.id as string;
+    const firstVersionId = createdResult.data.version.id as string;
+
+    assert.equal(created.status, 201);
+    assert.equal(createdResult.data.policy.organisationId, 'org_support');
+    assert.equal(createdResult.data.version.status, 'pending_approval');
+    assert.equal('sourceDocumentId' in createdResult.data.version, false);
+
+    const approval = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${firstVersionId}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Reviewed by the tenant administrator.' }),
+      },
+    );
+    const approvalResult = await approval.json();
+    assert.equal(approval.status, 200);
+    assert.equal(approvalResult.data.version.status, 'approved');
+    assert.equal(approvalResult.data.approval.organisationId, 'org_support');
+
+    const activation = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${firstVersionId}/activate`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    const activationResult = await activation.json();
+    assert.equal(activation.status, 200);
+    assert.equal(activationResult.data.version.status, 'active');
+
+    const revised = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions`,
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          effectiveFrom: '2027-01-01T00:00:00.000Z',
+          effectiveTo: null,
+          payload,
+        }),
+      },
+    );
+    const revisedResult = await revised.json();
+    const revisedVersionId = revisedResult.data.version.id as string;
+    assert.equal(revised.status, 201);
+    assert.equal(revisedResult.data.version.version, 2);
+    assert.equal('sourceDocumentVersionId' in revisedResult.data.version, false);
+
+    const revisedApproval = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${revisedVersionId}/approve`,
+      {
+        method: 'POST',
+        body: JSON.stringify({ reason: 'Reviewed updated tenant targets.' }),
+      },
+    );
+    assert.equal(revisedApproval.status, 200);
+    const revisedActivation = await fixture.request(
+      `/api/v1/sla-policies/${policyId}/versions/${revisedVersionId}/activate`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    assert.equal(revisedActivation.status, 200);
+    assert.equal(
+      (await revisedActivation.json()).data.version.status,
+      'active',
+    );
+
+    const listed = await fixture.request('/api/v1/sla-policies');
+    const listedResult = await listed.json();
+    assert.equal(listed.status, 200);
+    assert.equal(listedResult.data.length, 1);
+    assert.deepEqual(
+      listedResult.data[0].versions.map(
+        (version: { status: string }) => version.status,
+      ),
+      ['archived', 'active'],
+    );
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('uploads, processes, inspects, and downloads a tenant document', async () => {
   const fixture = await createFixture({
     principal: principal('user_admin', ['organisation_admin']),
   });
   try {
     const form = new FormData();
-    form.append('title', 'Support SLA source');
+    form.append('title', 'Support policy evidence');
     form.append(
       'file',
       new Blob(
@@ -1154,4 +1634,90 @@ test('environment configuration rejects invalid Jira and non-development princip
       }),
     DevelopmentAuthConfigurationError,
   );
+});
+
+test('candidate-rule review routes enforce organisation-admin scope and immutable decisions', async () => {
+  const adminPrincipal: DevelopmentPrincipal = {
+    bearerToken: 'admin-development-token-with-at-least-32-characters',
+    organisationId: 'org_support',
+    userId: 'admin_user_1',
+    roles: ['organisation_admin'],
+    teamIds: [],
+  };
+  const fixture = await createFixture({ principal: adminPrincipal });
+  try {
+    const tenantStore = createJsonTenantStore(fixture.root);
+    const policyRepository = new JsonPolicyRepository(tenantStore);
+
+    await policyRepository.createPolicy({
+      id: 'policy-review-api',
+      organisationId: 'org_support',
+      policyType: 'sla',
+      ownerId: 'user_requester_1',
+      status: 'draft',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      version: 1,
+      description: 'API candidate policy',
+    }, {
+      organisationId: 'org_support',
+      userId: 'user_requester_1',
+      roles: ['organisation_admin'],
+    });
+
+    await policyRepository.createVersion('policy-review-api', {
+      id: 'policy-review-api-v1',
+      organisationId: 'org_support',
+      policyId: 'policy-review-api',
+      version: 1,
+      status: 'draft',
+      effectiveFrom: null,
+      effectiveTo: null,
+      payload: { responseWithinHours: 2 },
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }, {
+      organisationId: 'org_support',
+      userId: 'user_requester_1',
+      roles: ['organisation_admin'],
+    });
+
+    await policyRepository.createExtractedRule({
+      id: 'candidate-api-1',
+      organisationId: 'org_support',
+      policyVersionId: 'policy-review-api-v1',
+      ruleType: 'response_time',
+      payload: { targetHours: 2 },
+      evidence: [{ sourceType: 'document', sourceId: 'doc-1', versionId: 'doc-version-1' }],
+      confidence: 0.91,
+      ambiguous: false,
+      createdAt: new Date().toISOString(),
+      reviewStatus: 'pending_review',
+    }, {
+      organisationId: 'org_support',
+      userId: 'user_requester_1',
+      roles: ['organisation_admin'],
+    });
+
+    const listResponse = await fetch(`${fixture.url}/api/v1/extracted-rules`, {
+      headers: { Authorization: `Bearer ${adminPrincipal.bearerToken}` },
+    });
+    assert.equal(listResponse.status, 200);
+
+    const approveResponse = await fetch(`${fixture.url}/api/v1/extracted-rules/candidate-api-1/approve`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminPrincipal.bearerToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'Verified against the source document.' }),
+    });
+    assert.equal(approveResponse.status, 200);
+
+    const repeatResponse = await fetch(`${fixture.url}/api/v1/extracted-rules/candidate-api-1/reject`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${adminPrincipal.bearerToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reason: 'Changed my mind.' }),
+    });
+    assert.equal(repeatResponse.status, 409);
+  } finally {
+    await fixture.close();
+  }
 });

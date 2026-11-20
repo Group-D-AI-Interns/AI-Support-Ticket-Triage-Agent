@@ -1,3 +1,55 @@
+## Draft priority recommendation preview
+
+`POST /api/v1/tickets/:ticketId/recommend-priority`
+
+- Auth: bearer access token, verified tenant membership selected by `X-Organisation-ID`.
+- Permission: `tickets.ai.review`, plus existing ticket/team/ownership visibility. Requesters have no AI-review grant. Inaccessible/cross-tenant ticket IDs return 404.
+- Body: `{}` only. Client-supplied impact, urgency, priority, policy, confidence settings, roles and other unknown fields return 400.
+- Success: 200 `{ data: PriorityRecommendation, requestId }`; data includes draft policy provenance, validated factor citations, execution metadata, warnings, missing information and mandatory human review. Priority is P1-P4 or null when information/confidence is insufficient.
+- Errors: 401 unauthenticated; 403 permission/membership; 404 inaccessible ticket; 400 invalid body; 503 `PRIORITY_PREVIEW_DISABLED`; 502 `AI_ANALYSIS_FAILED` for provider timeout/failure/invalid evidence. Normal shared storage/identity errors also apply.
+- Synchronous, preview-only, not persisted. Does not activate policy or change tickets/assignment/closure. No idempotency key is needed for a preview, but repeated requests may incur provider calls.
+- Explicit development opt-in: `APP_ENV=development`, `TICKET_PRIORITY_PREVIEW_ENABLED=true`, `TICKET_PRIORITY_MIN_CONFIDENCE=<reviewed number 0..1>`, and either the existing demo or live runtime. No default confidence threshold is imposed.
+- Server loads the checked-in draft and verifies its source checksum. The request cannot select a policy/path. This is not active tenant policy resolution.
+- Live preview reuses the classification task provider/model with its existing timeout/fallback settings. Offline demo returns null factors/priority, `insufficient_information`, and a `DEMO_ONLY` warning.
+
+Example response fields (abbreviated):
+
+```json
+{
+  "data": {
+    "policyStatus": "draft",
+    "status": "insufficient_information",
+    "priority": null,
+    "requiresHumanReview": true,
+    "missingInformation": ["Human-verified impact and urgency evidence"]
+  },
+  "requestId": "req_example"
+}
+```
+
+## Integrated ticket priority update
+
+Internal ticket priority uses the canonical values `P1` (Critical), `P2` (High),
+`P3` (Medium), and `P4` (Low), with the impact/urgency matrix in ITSM-POL-001.
+Existing internal `high`, `medium`, and `low` values normalize to `P2`, `P3`, and
+`P4`; Jira `source.priority` remains verbatim and is never mapped automatically.
+
+`PATCH /api/v1/tickets/:ticketId` accepts a priority update with
+`priorityOverride.reason` and `priorityOverride.businessJustification`, both required
+and non-empty whenever the internal priority changes. The caller needs ticket access
+and `tickets.priority.manage`, currently granted to `support_lead` and
+`organisation_admin`, not agents or requesters. The server records authenticated
+`actorId`, timestamp, old/new priority, reason, and business justification in ticket
+history; actor and timestamp are not client-controlled.
+
+SLA resolution prefers an exact P1-P4 target. For compatibility only, P2/P3/P4 may
+use legacy `high`/`medium`/`low` SLA target keys respectively; P1 requires an explicit
+target. The adopted project contract does not activate a tenant policy: tenant approval
+and effective dates are still required. This is a human operational update, not an AI
+action.
+
+> **Current integrated application (2026-11-19):** All default startup commands now serve foundation and domain routes together. Protected routes use verified foundation identity plus active server-side memberships, selected with `X-Organisation-ID` or `organisationId`. The static ticket development principal applies only to isolated legacy tests. AI history persists through the shared JSON store. See [Integration-Verification.md](Integration-Verification.md) and the root README; older standalone startup/auth examples below are historical.
+
 # API Specification — Draft
 
 **Base path:** `/api/v1`  
@@ -36,7 +88,7 @@
 | POST | `/auth/login` | Authenticate, if local authentication is selected |
 | POST | `/auth/refresh` | Refresh session/token, if supported |
 | GET | `/me` | Current user and permitted organisation context |
-| GET/POST | `/organisations` | List/create organisations (platform admin only) |
+| GET/POST | `/organisations` | List organisations; an active organisation administrator may create another organisation and becomes its administrator |
 | GET/PATCH | `/organisations/:organisationId` | Read/update permitted organisation |
 | GET/POST | `/users` | List/invite or create users |
 | GET/PATCH | `/users/:id` | Read or update permitted user |
@@ -57,8 +109,8 @@
 | GET | `/policies/:id/versions` | List policy versions |
 | POST | `/policies/:id/activate` | Activate approved version |
 | GET/POST | `/sla-policies` | List/create SLA policies |
-| POST | `/sla-policies/:policyId/versions` | Add a document-derived SLA policy version |
-| POST | `/sla-policies/:policyId/versions/:versionId/approve` | Approve a document-derived SLA version |
+| POST | `/sla-policies/:policyId/versions` | Add a tenant-configured SLA policy version |
+| POST | `/sla-policies/:policyId/versions/:versionId/approve` | Approve a tenant-configured SLA version |
 | POST | `/sla-policies/:policyId/versions/:versionId/activate` | Activate an approved SLA version |
 | GET | `/sla/evaluations` | Query SLA evaluations |
 | POST | `/sla/evaluations/run` | Evaluate current tenant tickets using active policies |
@@ -71,12 +123,13 @@
 | GET | `/tickets/:id` | Ticket details |
 | PATCH | `/tickets/:id` | Update permitted ticket fields |
 | PATCH | `/tickets/:id/status` | Apply an approved tenant workflow transition |
+| POST | `/tickets/:id/sla-events` | Record assessment or exclusion evidence |
 | POST | `/tickets/:id/reopen-requests` | Request reopening of an eligible resolved ticket |
 | POST | `/tickets/:id/reopen-requests/:requestId/approve` | Approve a pending reopen request |
 | POST | `/tickets/:id/comments` | Add comment |
 | GET | `/tickets/:id/comments` | Retrieve comments visible to the caller |
-| POST | `/tickets/:id/analyze` | Start AI triage |
-| GET | `/tickets/:id/analyses` | Retrieve analysis history |
+| POST | `/tickets/:id/analyze` | Run local synchronous AI demo (development only) |
+| GET | `/tickets/:id/analyses` | Retrieve in-memory demo analysis history |
 | GET | `/tickets/:id/similar` | Retrieve similar permitted tickets |
 | POST | `/tickets/:id/recommend-resolution` | Generate resolution recommendation |
 | POST | `/tickets/:id/recommend-routing` | Generate team recommendation |
@@ -314,11 +367,16 @@ Content-Type: application/json
 ```json
 {
   "title": "Sign-in error after password reset",
-  "teamId": "team_support"
+  "teamId": "team_support",
+  "priority": "P2",
+  "priorityOverride": {
+    "reason": "Incident manager reviewed the impact.",
+    "businessJustification": "The service is unavailable to multiple users."
+  }
 }
 ```
 
-Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured development `teamIds`. Status changes use the tenant's approved ticket workflow; priority changes remain unavailable. Jira status/priority remain source metadata and are not overwritten by internal workflow changes.
+Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured team scope. Priority changes require `tickets.priority.manage` and the override evidence above. Status changes use the tenant's approved ticket workflow; Jira status/priority remain source metadata and are not overwritten by internal workflow changes.
 
 ### Configure and approve a tenant ticket workflow
 
@@ -454,6 +512,53 @@ Expected response — `200 OK`:
 
 An unlisted transition returns `409 INVALID_STATUS_TRANSITION`; a role restriction returns `403 FORBIDDEN`. A requester cannot directly change status. Customers may request reopening from `RESOLVED`, with a reason:
 
+When an active SLA policy configures the destination as paused, the status request must
+include evidence and a contract reference, and only a support lead or organisation
+administrator may enter or leave that pause:
+
+```json
+{
+  "status": "PENDING",
+  "pauseEvidence": {
+    "reasonCode": "waiting_for_requester_information",
+    "evidence": "Requested the missing diagnostic logs.",
+    "contractReference": "CONTRACT-123"
+  }
+}
+```
+
+Entering a configured resolved status likewise requires support staff to provide a
+`resolutionEvidence` object with `outcome` (`service_restored` or `agreed_solution`),
+`note`, `customerConfirmation` (`received` or `not_applicable`) and
+`customerConfirmationEvidence`. Customer confirmation is recorded but is not a gate.
+The resolution event is written atomically with the status transition.
+
+The server starts both clocks at ticket `createdAt`. A first-response timestamp is
+recorded only after acknowledgement, completed assessment and first team assignment;
+it is the latest of those three event timestamps. A public comment alone is not enough.
+Resolution time excludes evidenced resolved intervals; reopening resumes the same clock
+without resetting it. Status names alone never pause an SLA.
+
+Support staff can record one-time assessment evidence:
+
+```http
+POST /api/v1/tickets/{{ticketId}}/sla-events
+Authorization: Bearer {{agentToken}}
+Content-Type: application/json
+
+{
+  "type": "assessment_completed",
+  "evidence": "Impact and affected service assessed."
+}
+```
+
+Only support leads and organisation administrators can start/end SLA exclusions. Starts
+require an allowed `reasonCode` (`approved_maintenance_window`, `outside_agreed_scope`,
+`force_majeure`, `requester_requested_postponement` or `approved_waiting_period`), evidence,
+and contract reference. The start response contains the generated `intervalId`; submit it
+to end that interval. Exclusions subtract only their recorded interval and the ticket
+remains in reports. Both pause and exclusion timestamps and actors come from the server.
+
 ```http
 POST http://localhost:3000/api/v1/tickets/{{ticketId}}/reopen-requests
 Authorization: Bearer {{requesterToken}}
@@ -475,11 +580,11 @@ Authorization: Bearer {{supervisorToken}}
 
 Approval returns `200 OK`, updates the ticket to `REOPENED`, and atomically records the decision and reason in ticket history. Reopening from `CLOSED` is restricted to supervisors and administrators and always requires a reason. Administrators may override role restrictions, but never perform a transition absent from the approved transition map.
 
-This workflow API accepts structured document-derived configuration; it does not extract workflow rules from uploaded files. For SLA source documents, the API can upload and process UTF-8 plain-text files. PDF, DOC, and DOCX uploads may be stored, but processing those formats is not yet supported. The provisional text extractor only produces a candidate response-time observation; it does not construct or activate an SLA policy. Administrators must verify the source document, supply the complete tenant-specific policy configuration, and explicitly approve it before activation.
+This workflow API accepts structured configuration; it does not extract workflow rules from uploaded files. The separate document API can store tenant documents and process UTF-8 plain-text files for candidate evidence. That document flow is not required for SLA configuration and does not create or activate SLA policies.
 
-#### Upload and process an SLA source
+#### Upload and process a tenant document
 
-Document upload, processing, inspection, and download-token routes require an organisation administrator and are scoped to that administrator's tenant. The upload is multipart form data with a `title` field and one `file` field. The upload response includes the document and its first version IDs; use both IDs as the source references when creating an SLA policy.
+Document upload, processing, inspection, and download-token routes require an organisation administrator and are scoped to that administrator's tenant. The upload is multipart form data with a `title` field and one `file` field. This feature is independent of the tenant-specific SLA configuration API below.
 
 ```http
 POST /api/v1/documents
@@ -497,13 +602,17 @@ Content-Type: application/json
 {}
 ```
 
-The response contains the document's completed processing status and a version-bound extraction record. A missing or ambiguous target remains marked for human review; extracted values are evidence only and are never silently used as SLA defaults. Unsupported document formats return `422` and are not marked processed. `GET /api/v1/documents/{documentId}` returns the document metadata, tenant-scoped versions, and latest extraction. To retrieve the source file, first call `POST /api/v1/documents/{documentId}/download-token`, then use its short-lived path with `GET /api/v1/documents/download/{token}`.
+The response contains the document's completed processing status and a version-bound extraction record. A missing or ambiguous target remains marked for human review; extracted values are not automatically used as SLA configuration. Unsupported document formats return `422` and are not marked processed. `GET /api/v1/documents/{documentId}` returns the document metadata, tenant-scoped versions, and latest extraction. To retrieve the source file, first call `POST /api/v1/documents/{documentId}/download-token`, then use its short-lived path with `GET /api/v1/documents/download/{token}`.
 
-### Configure document-derived SLA policies
+### Configure tenant-specific SLA policies
 
-Only an organisation administrator may manage SLA policies, evaluations, or reports. `POST /sla-policies` accepts a normalized policy payload, not a document upload or raw extracted text. The referenced source document must belong to the authenticated tenant and be processed; its document version must belong to that same document and tenant. New policy versions are pending approval and are not used in calculations.
+Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar, statuses, and optional team scope through the API; no policy document upload is required. When an SLA is derived from a processed document, the request may also include both `sourceDocumentId` and `sourceDocumentVersionId`. The server verifies that the document and version belong to the authenticated tenant and retains that provenance on the policy version; the fields must be provided together. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
 
-The following target values are illustrative examples only. They are not defaults or recommendations; each tenant's approved document supplies the actual targets, schedule, timezone, holidays, paused statuses, resolved statuses, team scope and risk threshold. Missing priority targets do not fall back to another tenant or an invented value.
+The reference SLA candidate remains draft: this event contract does not verify client
+entitlement, contractual targets, or calendars, and is not approval to activate those
+candidate values.
+
+The following values are illustrative test data only, not defaults or recommendations. Replace them with values chosen by the tenant administrator. Missing priority targets do not fall back to another tenant or an invented value.
 
 ```http
 POST /api/v1/sla-policies
@@ -513,9 +622,7 @@ Content-Type: application/json
 
 ```json
 {
-  "description": "Example targets transcribed from the tenant's approved support policy",
-  "sourceDocumentId": "document_123",
-  "sourceDocumentVersionId": "document_version_1",
+  "description": "Tenant-configured support SLA",
   "effectiveFrom": "2026-01-01T00:00:00.000Z",
   "effectiveTo": null,
   "payload": {
@@ -550,7 +657,7 @@ Content-Type: application/json
 
 `startMinute` and `endMinute` are minutes after midnight in the configured IANA timezone. `teamIds` is optional: when omitted, the policy applies organisation-wide; when present, it applies only to those teams and takes precedence over a matching organisation-wide policy. A policy version is activated only after an administrator approves it and the API records that approval. Activating a later version archives the prior active version for that policy.
 
-Subsequent document revisions create a new pending version without changing historical ticket evaluations:
+Policy changes create a new pending version without changing historical ticket evaluations:
 
 ```http
 POST /api/v1/sla-policies/{policyId}/versions
@@ -558,14 +665,14 @@ Authorization: Bearer <organisation-admin-token>
 Content-Type: application/json
 ```
 
-The request contains `sourceDocumentId`, `sourceDocumentVersionId`, `effectiveFrom`, optional `effectiveTo`, and a full `payload` in the same schema as above. Versions must be activated in increasing effective-date order. The prior version remains available for tickets whose creation time falls within its effective period.
+The request contains `effectiveFrom`, optional `effectiveTo`, and a full `payload` in the same schema as above. `sourceDocumentId` and `sourceDocumentVersionId` may also be supplied together to retain source provenance for the new version. Versions must be activated in increasing effective-date order. The prior version remains available for tickets whose creation time falls within its effective period.
 
 ```http
 POST /api/v1/sla-policies/{policyId}/versions/{versionId}/approve
 Authorization: Bearer <organisation-admin-token>
 Content-Type: application/json
 
-{"reason": "Reviewed against the referenced tenant policy document."}
+{"reason": "Reviewed the tenant-configured SLA targets."}
 ```
 
 ```http
@@ -630,58 +737,92 @@ Expected response — `201 Created`:
 
 The private storage key is intentionally omitted. To download, send an authenticated `GET http://localhost:3000/api/v1/tickets/{{ticketId}}/attachments/{{attachmentId}}`. The caller must still have access to the ticket; the response is the file bytes with `Content-Disposition: attachment`. Requesters can access their own ticket attachments, and support staff can access attachments only for tickets in their configured team scope (support leads may also access unassigned tickets).
 
-## 6. Example asynchronous triage
+## 6. Local ticket AI demo
+
+The current Express ticket API implements synchronous classification and
+summarization in either opt-in local demo mode or opt-in live-provider mode.
+Both require `APP_ENV=development` and configured `TICKET_AI_CATEGORIES`. The
+local deterministic heuristic is not an LLM; its results require human review
+and are stored in memory only until the API process restarts. Live mode uses
+the configured per-task provider, retries transient Inception failures, and
+falls back to Groq. Both modes are read-only and use in-memory analysis history;
+there is no asynchronous job or durable persistence.
 
 ### Request
 
 ```http
 POST /api/v1/tickets/ticket_123/analyze
-Authorization: Bearer <access-token>
+Authorization: Bearer <development-bearer-token>
+Content-Type: application/json
 ```
 
-### Response — 202 Accepted
+```json
+{}
+```
+
+### Response — 200 OK
 
 ```json
 {
   "data": {
-    "executionId": "exec_123",
-    "status": "queued",
-    "statusUrl": "/api/v1/jobs/exec_123"
-  }
-}
-```
-
-### Example completed result
-
-```json
-{
-  "data": {
-    "executionId": "exec_123",
+    "id": "analysis_<uuid>",
+    "ticketId": "ticket_123",
+    "organisationId": "org_123",
     "status": "completed",
     "classification": {
-      "categories": ["account_access"],
-      "confidence": 0.91
+      "category": "ACCOUNT_ACCESS",
+      "reason": "The local demo heuristic matched these configured terms: account, access.",
+      "confidence": null,
+      "requiresHumanReview": true,
+      "warnings": ["DEMO_ONLY: deterministic keyword heuristic; not an LLM or calibrated classification."]
     },
     "summary": {
-      "issue": "Requester cannot access the billing portal.",
-      "impact": "Billing work may be delayed.",
-      "missingInformation": ["Browser and time of failure"]
+      "summary": "The requester cannot access the account.",
+      "symptoms": ["Unable to access my account"],
+      "attemptedActions": [],
+      "businessImpact": null,
+      "missingInformation": [],
+      "warnings": ["DEMO_ONLY: extractive summary; not an LLM-generated or completeness-checked summary."]
     },
-    "priorityRecommendation": {
-      "value": "medium",
-      "factors": ["Configured impact and urgency rules"],
-      "requiresHumanReview": true
-    },
-    "routingRecommendation": {
-      "teamId": "team_billing_support",
-      "requiresApproval": true
-    },
-    "evidence": []
+    "executions": [
+      {
+        "executionId": "exec_<uuid>",
+        "task": "ticket_classification",
+        "status": "completed",
+        "provider": "local-demo-heuristic",
+        "model": "local-heuristic-v1",
+        "attempts": 1,
+        "durationMs": 1,
+        "startedAt": "<timestamp>",
+        "completedAt": "<timestamp>"
+      },
+      {
+        "executionId": "exec_<uuid>",
+        "task": "ticket_summarization",
+        "status": "completed",
+        "provider": "local-demo-heuristic",
+        "model": "local-heuristic-v1",
+        "attempts": 1,
+        "durationMs": 1,
+        "startedAt": "<timestamp>",
+        "completedAt": "<timestamp>"
+      }
+    ],
+    "createdAt": "<timestamp>"
   }
 }
 ```
 
-The values above are illustrative contract examples, not real model outputs or configured business rules.
+`GET /api/v1/tickets/ticket_123/analyses` returns the analyses still held in
+memory for the caller's accessible ticket. Both routes enforce the ticket
+module's tenant and requester/team/administrator access checks. The demo
+provider receives only the ticket ID, title, description, and configured
+categories; it does not call an external service.
+
+Similar-ticket retrieval, priority/routing/resolution recommendations, async
+jobs, and persistent AI history remain future integrations. The values above
+show the response shape; timestamps and execution values are generated at
+runtime.
 
 ## 7. Example policy approval
 
@@ -744,6 +885,12 @@ The calculation must use approved formula and weighting versions and verified me
 - Validate status transitions and use concurrency/version checks for approvals and activation.
 
 ## 9. OpenAPI draft excerpt
+
+The ticket and ticket/SLA-evidence paths have a machine-readable OpenAPI contract at
+[ticket-openapi.json](./ticket-openapi.json). It covers ticket CRUD/search, workflow
+configuration and status changes, comments, audit, attachments, reopen requests, SLA
+evidence and Jira ingestion. It is a ticket-domain contract, not yet a complete OpenAPI
+description of identity, documents, policies, AI, SLA administration or reporting.
 
 ```yaml
 openapi: 3.0.3
@@ -1016,6 +1163,22 @@ paths:
                 teamId:
                   type: string
                   nullable: true
+                priority:
+                  type: string
+                  enum: [P1, P2, P3, P4, high, medium, low]
+                  description: Required with priorityOverride when changing priority. Legacy high/medium/low inputs normalize to P2/P3/P4.
+                priorityOverride:
+                  type: object
+                  additionalProperties: false
+                  required: [reason, businessJustification]
+                  properties:
+                    reason:
+                      type: string
+                      minLength: 1
+                    businessJustification:
+                      type: string
+                      minLength: 1
+                  description: Required for a priority change; actor and time are captured by the server.
       responses:
         "200":
           description: Ticket updated
@@ -1388,3 +1551,14 @@ components:
 ```
 
 This excerpt is intentionally a draft; expand every endpoint, schema, response, permission and error case before implementation.
+# Evidence and resolution increment
+
+Authenticated ticket reviewers can call `GET /api/v1/tickets/:ticketId/evidence`,
+`GET /api/v1/tickets/:ticketId/similar` and
+`POST /api/v1/tickets/:ticketId/recommend-resolution` with JSON `{}`.
+These enforce `tickets.resolution.review` and existing ticket access. Resolution
+guidance requires human review and never changes tickets. The default evidence source
+exposes effective, approved, active policy payloads only to organisation administrators;
+historical sources are not connected yet. See
+[the resolution contract](../../backend/src/modules/ai/resolution-recommendations.md)
+for response fields, unavailable/evidence-empty behavior and integration requirements.

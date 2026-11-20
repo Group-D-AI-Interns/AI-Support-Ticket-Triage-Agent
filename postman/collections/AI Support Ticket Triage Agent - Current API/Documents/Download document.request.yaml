@@ -1,0 +1,10 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/documents/download/{{documentDownloadToken}}
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+order: 6000

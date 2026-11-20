@@ -88,6 +88,11 @@ export class JsonFileStore {
     });
   }
 
+  /** Coordinate a legacy repository's complete read/modify/write operation. */
+  async runExclusive<R>(name: string, action: () => Promise<R>): Promise<R> {
+    return this.withLock(name, action);
+  }
+
   async update<T, R>(
     name: string,
     validate: (value: unknown) => value is JsonEnvelope<T>,
@@ -152,7 +157,19 @@ export class JsonFileStore {
       } finally {
         await file.close();
       }
-      await rename(temporaryPath, path);
+      // Windows can briefly deny replacement while a concurrent reader holds the old file.
+      // Retry the atomic rename; never delete the existing collection as a workaround.
+      const deadline = Date.now() + this.lockTimeoutMs;
+      while (true) {
+        try {
+          await rename(temporaryPath, path);
+          break;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (process.platform !== 'win32' || !['EPERM', 'EACCES', 'EBUSY'].includes(code ?? '') || Date.now() >= deadline) throw error;
+          await delay(Math.min(25, Math.max(1, deadline - Date.now())));
+        }
+      }
     } catch (error) {
       await rm(temporaryPath, { force: true }).catch(() => undefined);
       throw new JsonStorageError("STORAGE_IO_ERROR", `Could not write ${name}.`, { cause: error });
@@ -160,7 +177,7 @@ export class JsonFileStore {
   }
 
   private pathFor(name: string): string {
-    if (!/^[a-z][A-Za-z0-9-]*\.json$/.test(name)) throw new Error("Invalid JSON store filename.");
+    if (!/^[a-z][a-zA-Z0-9-]*\.json$/.test(name)) throw new Error("Invalid JSON store filename.");
     const path = resolve(this.root, name);
     if (!path.startsWith(`${this.root}/`) && !path.startsWith(`${this.root}\\`)) {
       throw new Error("JSON store path escaped configured directory.");

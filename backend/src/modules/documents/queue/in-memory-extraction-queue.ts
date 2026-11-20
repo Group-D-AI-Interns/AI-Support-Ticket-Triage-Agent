@@ -17,9 +17,18 @@ export class InMemoryExtractionQueue implements ExtractionJobQueue {
   }
 
   async claimNext(tenant: TenantContext): Promise<ExtractionJobRecord | null> {
+    return this.claim(tenant);
+  }
+
+  async claimById(tenant: TenantContext, jobId: string): Promise<ExtractionJobRecord | null> {
+    return this.claim(tenant, jobId);
+  }
+
+  private async claim(tenant: TenantContext, jobId?: string): Promise<ExtractionJobRecord | null> {
     return this.store.updateCollection<ExtractionJobRecord, ExtractionJobRecord | null>('extractionJobs', (jobs) => {
       const target = jobs
         .filter((job) => job.organisationId === tenant.organisationId)
+        .filter((job) => jobId === undefined || job.id === jobId)
         .filter((job) => job.status === 'queued' || job.status === 'retrying')
         .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0];
       if (!target) return null;

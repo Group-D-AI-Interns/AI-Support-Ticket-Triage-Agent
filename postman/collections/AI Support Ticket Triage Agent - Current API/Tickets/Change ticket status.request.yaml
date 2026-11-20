@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/status
+method: PATCH
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"status":"{{ticketStatus}}"}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{agentToken}}"
+order: 5000

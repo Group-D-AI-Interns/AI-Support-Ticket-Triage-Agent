@@ -1,0 +1,270 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "requiresHumanReview": true,
+  "source": {
+    "documentId": "HR-KPA-SL-001",
+    "version": "1.0",
+    "path": "performance/support-lead-kpa-kpi.md",
+    "sha256": "2b97cc9c1865d7dfe5cc5b4530e0b05214af0ab765e881d48160027297f28c7a",
+    "section": "2. KEY PERFORMANCE AREAS"
+  },
+  "role": "support_lead",
+  "kpas": [
+    {
+      "number": 1,
+      "name": "Team SLA Performance and Service Delivery",
+      "weightPercent": 20,
+      "kpis": [
+        {
+          "name": "Overall Team SLA Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Diamond Client SLA Compliance",
+          "targetText": "\u2265 98%"
+        },
+        {
+          "name": "Platinum Client SLA Compliance",
+          "targetText": "\u2265 97%"
+        },
+        {
+          "name": "Gold Client SLA Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Silver Client SLA Compliance",
+          "targetText": "\u2265 93%"
+        },
+        {
+          "name": "Bronze Client SLA Compliance",
+          "targetText": "\u2265 90%"
+        },
+        {
+          "name": "SLA Breach Investigation Compliance",
+          "targetText": "100%"
+        }
+      ]
+    },
+    {
+      "number": 2,
+      "name": "Team Management and Productivity",
+      "weightPercent": 15,
+      "kpis": [
+        {
+          "name": "Team Work Queue Management",
+          "targetText": "\u2265 95% compliance"
+        },
+        {
+          "name": "Workload Allocation Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Shift and Schedule Coverage",
+          "targetText": "\u2265 98%"
+        },
+        {
+          "name": "Team Backlog Within Agreed Thresholds",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Daily Operational Monitoring",
+          "targetText": "100%"
+        }
+      ]
+    },
+    {
+      "number": 3,
+      "name": "Quality Assurance and Ticket Management",
+      "weightPercent": 15,
+      "kpis": [
+        {
+          "name": "Team Ticket Documentation Compliance",
+          "targetText": "\u2265 98%"
+        },
+        {
+          "name": "Ticket Classification Accuracy",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Quality Assurance Audit Score",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Correct Escalation Rate",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Reopened Ticket Rate",
+          "targetText": "\u2264 5%"
+        }
+      ]
+    },
+    {
+      "number": 4,
+      "name": "Client Relationship and Customer Satisfaction",
+      "weightPercent": 10,
+      "kpis": [
+        {
+          "name": "Overall Customer Satisfaction",
+          "targetText": "\u2265 90%"
+        },
+        {
+          "name": "Diamond and Platinum Client Complaint Follow-up",
+          "targetText": "100%"
+        },
+        {
+          "name": "Client Escalation Acknowledgement Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Client Complaint Resolution Tracking",
+          "targetText": "100%"
+        },
+        {
+          "name": "Client Communication Compliance",
+          "targetText": "\u2265 95%"
+        }
+      ]
+    },
+    {
+      "number": 5,
+      "name": "Incident and Escalation Management",
+      "weightPercent": 10,
+      "kpis": [
+        {
+          "name": "P1 Incident Management Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Critical Incident Escalation Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Escalation Follow-up Compliance",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Major Incident Communication Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Post-Incident Review Completion",
+          "targetText": "100% for qualifying incidents"
+        }
+      ]
+    },
+    {
+      "number": 6,
+      "name": "Staff Development, Coaching and Performance Management",
+      "weightPercent": 10,
+      "kpis": [
+        {
+          "name": "Monthly Individual Performance Reviews",
+          "targetText": "100%"
+        },
+        {
+          "name": "Scheduled Coaching Sessions",
+          "targetText": "At least 1 per agent monthly"
+        },
+        {
+          "name": "Mandatory Training Completion",
+          "targetText": "100%"
+        },
+        {
+          "name": "Performance Improvement Plans",
+          "targetText": "100% of qualifying cases"
+        },
+        {
+          "name": "Training and Development Tracking",
+          "targetText": "100%"
+        }
+      ]
+    },
+    {
+      "number": 7,
+      "name": "Reporting, Analysis and Operational Governance",
+      "weightPercent": 10,
+      "kpis": [
+        {
+          "name": "Weekly Operational Reports",
+          "targetText": "100% submitted on time"
+        },
+        {
+          "name": "Monthly SLA Reports",
+          "targetText": "100% submitted on time"
+        },
+        {
+          "name": "KPI Reporting Accuracy",
+          "targetText": "\u2265 98%"
+        },
+        {
+          "name": "Management Action Tracking",
+          "targetText": "\u2265 95%"
+        },
+        {
+          "name": "Operational Risk Reporting",
+          "targetText": "100% of identified material risks"
+        }
+      ]
+    },
+    {
+      "number": 8,
+      "name": "Continuous Improvement and Knowledge Management",
+      "weightPercent": 5,
+      "kpis": [
+        {
+          "name": "Process Improvement Initiatives",
+          "targetText": "At least 1 per quarter"
+        },
+        {
+          "name": "Knowledge Base Review",
+          "targetText": "Quarterly"
+        },
+        {
+          "name": "Recurring Incident Analysis",
+          "targetText": "Monthly"
+        },
+        {
+          "name": "Approved Improvement Actions Completed",
+          "targetText": "\u2265 90%"
+        }
+      ]
+    },
+    {
+      "number": 9,
+      "name": "Policy, Risk and Compliance Management",
+      "weightPercent": 5,
+      "kpis": [
+        {
+          "name": "Team Policy Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Information Security Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Access and Confidentiality Compliance",
+          "targetText": "100%"
+        },
+        {
+          "name": "Mandatory Compliance Training",
+          "targetText": "100%"
+        },
+        {
+          "name": "Audit Finding Corrective Actions",
+          "targetText": "\u2265 95% within agreed deadlines"
+        }
+      ]
+    }
+  ],
+  "totalWeightPercent": 100,
+  "scoringFormula": null,
+  "activationBlockedBy": [
+    "Performance scope/ownership approval",
+    "Within-KPA aggregation and normalisation formula",
+    "Missing evidence treatment and eligible denominators",
+    "Verified measurement sources and access rules"
+  ]
+}

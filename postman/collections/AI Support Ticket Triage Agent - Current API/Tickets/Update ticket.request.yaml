@@ -1,0 +1,14 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}
+method: PATCH
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"title":"Postman ticket updated","product":"Customer Portal"}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{agentToken}}"
+order: 4000

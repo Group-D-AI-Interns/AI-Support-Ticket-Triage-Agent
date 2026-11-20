@@ -5,6 +5,9 @@ export async function applyDocumentPolicySchema(store: JsonTenantStore): Promise
   const collectionNames = INITIAL_DOCUMENT_POLICY_SCHEMA.collections;
 
   for (const collection of collectionNames) {
-    await store.writeCollection(collection as never, []);
+    await store.withCollectionLock(collection, async () => {
+      const records = await store.readCollection(collection);
+      await store.writeCollection(collection, records);
+    });
   }
 }

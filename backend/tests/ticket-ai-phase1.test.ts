@@ -86,6 +86,17 @@ class TestAnalysisRepository implements AiAnalysisRepository {
     assert.equal(context.organisationId, analysis.organisationId);
     this.records.push(analysis);
   }
+
+  async listForTicket(
+    context: TenantContext,
+    ticketId: string,
+  ): Promise<TicketAiAnalysis[]> {
+    return this.records.filter(
+      (analysis) =>
+        analysis.organisationId === context.organisationId &&
+        analysis.ticketId === ticketId,
+    );
+  }
 }
 
 class TestTicketSource implements AuthorizedTicketAnalysisSource {
@@ -143,6 +154,7 @@ test('analyzes an authorized ticket with configured categories and saves one rea
   assert.equal(result.summary.missingInformation[0], 'Exact error message');
   assert.equal(result.executions.length, 2);
   assert.equal(repository.records.length, 1);
+  assert.equal((await service.listAnalyses(tenant, ticket.id)).length, 1);
   assert.equal(logger.events.length, 2);
   assert.ok(logger.events.every((event) => event.status === 'completed'));
 });

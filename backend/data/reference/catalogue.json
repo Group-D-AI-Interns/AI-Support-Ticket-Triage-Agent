@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "records": [
+    {
+      "id": "HR-KPA-SA-001",
+      "path": "performance/support-agent-kpa-kpi.md",
+      "kind": "performance_framework",
+      "version": "1.0",
+      "sha256": "ed38495feb3a2e46db9e77594801c981077793da20dbb22b7a7c2c66df98463b",
+      "sourceStatus": "Not specified",
+      "applicationStatus": "reference_only",
+      "organisationId": null,
+      "effectiveFrom": null,
+      "approval": null,
+      "requiresHumanReview": true
+    },
+    {
+      "id": "ITSM-POL-001",
+      "path": "policies/priority-policy.md",
+      "kind": "priority_policy",
+      "version": "1.0",
+      "sha256": "555e2f58f29e42f2865287ae380d4ac3fe572f8ad8f865c585c662a3165b472a",
+      "sourceStatus": "Approved Template",
+      "applicationStatus": "reference_only",
+      "organisationId": null,
+      "effectiveFrom": null,
+      "approval": null,
+      "requiresHumanReview": true
+    },
+    {
+      "id": "ITSM-POL-002",
+      "path": "policies/service-level-agreement.md",
+      "kind": "sla_policy",
+      "version": "2.0",
+      "sha256": "b1b399ba87523cf11d8f34f84af070fb0203bc379f6664ac5e39f85d67fcedb0",
+      "sourceStatus": "Approved Template \u2013 Subject to Management Approval",
+      "applicationStatus": "reference_only",
+      "organisationId": null,
+      "effectiveFrom": null,
+      "approval": null,
+      "requiresHumanReview": true
+    },
+    {
+      "id": "HR-KPA-SL-001",
+      "path": "performance/support-lead-kpa-kpi.md",
+      "kind": "performance_framework",
+      "version": "1.0",
+      "sha256": "2b97cc9c1865d7dfe5cc5b4530e0b05214af0ab765e881d48160027297f28c7a",
+      "sourceStatus": "Not specified",
+      "applicationStatus": "reference_only",
+      "organisationId": null,
+      "effectiveFrom": null,
+      "approval": null,
+      "requiresHumanReview": true
+    }
+  ]
+}

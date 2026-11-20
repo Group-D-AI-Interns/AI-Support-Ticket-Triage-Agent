@@ -1,49 +1,109 @@
 # Integration and system verification
 
-**Integration snapshot:** local branch `thuto/foundation-identity-organisation`, commit `0ac3cda` (`Latest Update`) plus current local integration changes. This report records the local state and test evidence; it does not claim a live Keycloak integration test.
+**Integration snapshot:** `FhuluBranch` at `af6c02c` plus the uncommitted P1–P4 priority contract, ticket/SLA evidence, and ticket OpenAPI contract.
 
 ## Summary
 
-The tickets runtime decision is now Node.js/TypeScript with Express. The Python ticket implementation was retired in the recorded migration, and ticket, document, policy, SLA and reporting routes are available from `backend/src/modules/tickets/api.ts`, started by `backend/src/main.ts`. AI classification and summarization components are present, but their README says no authorization-aware HTTP route or production provider is wired.
+The canonical backend is TypeScript. `backend/src/main.ts` starts one server through `backend/src/server.ts` and `backend/src/integrated-app.ts`; it serves the foundation identity/organisation/team APIs and the Express ticket, document, policy, SLA and reporting APIs together.
 
-**Integration status: auth and persistence foundations unified; integration verification remains.** `backend/src/main.ts` starts one configured native HTTP server. It routes ticket, document, SLA, reporting, and workflow paths to the Express app, passing the shared Keycloak verifier, identity membership resolver, team lookup, permission policy, and the same `JsonFileStore` instance. Its normal application path does not use the static development principal.
+The integrated ticket API authenticates with the shared Keycloak verifier, resolves active tenant membership server-side, loads active team membership, and applies the shared role-permission policy. The integrated startup does not accept the static development principal.
+
+On 20 November 2026, the local `ai-support` realm was reachable and the integrated API started in Keycloak mode. Realm discovery and API health checks passed. The service-account token passed token verification but received `ACCOUNT_INACTIVE` at application identity lookup because the service account is not an active application user. A real user's login, tenant membership, and effective role access still need verification in each developer's local realm.
+
+Ticket priority uses the project P1–P4 contract. `support_lead` and `organisation_admin` may change priority with a reason and business justification; the server records the actor, timestamp, and before/after values. Legacy internal labels normalize to P2/P3/P4; Jira source priority remains unchanged. The contract does not activate a tenant policy.
+
+SLA response now requires explicit acknowledgement, completed assessment, and first team assignment evidence; resolution requires an evidenced status transition; pause and exclusion intervals are auditable and role-gated. Reopening excludes resolved time without resetting the resolution clock. The reference SLA candidate remains draft because client entitlement, actual targets and calendar definitions are not verified.
+
+The ticket, workflow and ticket/SLA-evidence endpoints now have a machine-readable OpenAPI contract at `docs/api/ticket-openapi.json`. The remaining integrated service domains are not yet represented in that contract.
+
+Ticket classification, summarisation, priority preview and resolution recommendation routes are connected to the integrated API. AI work is opt-in and does not change tickets automatically. Document processing supports TXT, PDF and DOCX text conversion, but still uses the deterministic provisional extraction adapter; a provider-backed `ExtractionAdapter` has not yet been implemented or wired.
 
 ## Six-item checklist
 
 | Item | Status | Evidence / remaining work |
 |---|---|---|
-| Ticket runtime | Decided | TypeScript/Express is canonical; Python was retired. Ensure the shared Keycloak foundation and all modules use one bootstrap before deployment. |
-| Ticket auth and permissions | Shared auth integrated; RBAC partially mapped | Express resolves `X-Organisation-ID` through active server-side membership and loads active team membership. The typed shared permission catalogue and role grants are documented in `docs/architecture/Role-Capability-Matrix.md`. Shared permissions gate ticket creation, configuration, audit reads, reopen approvals, organisation-wide reports, ticket visibility, routing, and support access. The application bootstrap disables the standalone development principal. Remaining write capabilities need team approval. |
-| Document/policy auth and storage alignment | Shared foundation integrated; candidate review API remains open | The configured Express app passes the shared Keycloak authenticator, active-membership resolver, role permission policy, and same `JsonFileStore` instance to document/policy routes. Document/policy JSON collections now validate tenant records, surface typed storage errors, preserve legacy array files, and use locked atomic updates. Candidate-review permissions are defined, but no candidate-review endpoint exists yet. |
-| Lockfile | Resolved | `npm ci` completed successfully on the current staged update. |
-| AI, SLA and reporting | Code present; integration partial | AI classifier/summarizer, SLA evaluation and operational reporting sources and tests are present. SLA and reports are exposed through the tickets Express app. AI README explicitly says there is no authorized ticket source or HTTP/job route. No approved production LLM provider is configured. |
-| Organisation creation rule | Unresolved | API specification says platform admin only, while `backend/src/app.ts` requires `organisations.create` in a selected tenant context. Team/coach must choose the rule and align implementation plus docs. |
+| Single application bootstrap | Integrated | One listener serves foundation and Express domain routes; `tests/integrated-app.test.ts` exercises cross-module flows. |
+| Authentication and tenant isolation | Integrated; local smoke-check partial | Local realm discovery and API health passed. An unsigned request received `401`; a valid service-account token reached identity lookup and received `403 ACCOUNT_INACTIVE`. A real user's login, active membership, and role access remain unverified. |
+| Ticket priority contract | Implemented; tenant policy remains inactive | P1–P4 API validation, legacy internal-value normalization, override authorization/evidence/audit, Jira source-priority preservation, and legacy SLA-target compatibility are covered by tests. |
+| Ticket/SLA event evidence | Implemented; entitlement and target verification remain | Response evidence, resolution events, pause/exclusion intervals, role restrictions, resolution reopening and overlapping interval accounting are tested. |
+| Ticket API contract | Ticket/workflow/SLA paths documented | `docs/api/ticket-openapi.json` covers ticket lifecycle, workflow configuration, evidence, attachments and Jira ingestion; full-service OpenAPI and automated contract conformance are still pending. |
+| Ticket AI | Service and API paths integrated | Demo/live classification and summarisation, priority preview, lexical retrieval and resolution recommendation are permission-gated. AI analysis and recommendations are read-only and require human review. |
+| Document policy extraction | Contract and processing path integrated; provider pending | Olerato's `ExtractionAdapter` contract, result validation, evidence provenance checks, and TXT/PDF/DOCX text conversion are present. The default remains `ProvisionalExtractionAdapter`; no provider-backed extractor is connected. |
+| Persistence | Shared guarantees integrated | Domain JSON persistence delegates to the validated shared store, preserving schema validation, atomic writes, locking and explicit errors. Multi-file workflows still are not transactional. |
+| Organisation creation rule | Implemented | An active organisation administrator can create another organisation and is granted an active `organisation_admin` membership in it; duplicate-name rollback and non-admin denial are tested. |
 
 ## Integration risks to close
 
-1. **Verify the unified auth path.** The one listener is wired, but no live Keycloak request was run in this update. Verify issuer/audience and membership behavior using the local realm and integration tests before deployment.
-2. **Resolve remaining permission gaps.** Ticket status changes, reopen requests, general ticket metadata edits, comments, and attachments still rely on workflow role rules or resource access because the shared catalogue has no matching write permission. Do not grant new access until the team approves those capability IDs and role grants. `reports.read.team` is not used because the current report returns organisation-wide results; the route requires `reports.read.all`.
-3. **Add candidate review operations.** Extracted candidates are persisted and the `policies.candidates.review` permission is defined, but no tenant-scoped candidate listing/review endpoint or review-state persistence exists yet.
-4. **Finish AI integration deliberately.** Components currently provide service-level classification/summarization, not an authenticated API workflow. Add the endpoint/job integration only after an approved provider and a trusted authorized ticket-source interface are available.
-5. **Resolve the organisation creation contract.** Current docs disagree; do not infer whether creation is platform-scoped or tenant-admin-scoped.
+1. **Implement and wire a real extraction adapter.** Use the existing contract and approved policy schema; preserve document/version provenance and human-review rules. Confirm rule payloads and provider/model before sending customer documents externally.
+2. **Complete per-developer live auth verification.** This machine's realm discovery, service-account token, and API health checks passed, but no real user's login, active membership, or role access was exercised. Use synthetic ticket/document data and private local credentials; no live LLM provider calls were made.
+3. **Harden multi-file workflows.** JSON collection operations are locked, but organisation creation, upload/version, policy approval and extraction result/status changes span files and are not transactional. Organisation creation compensates for a failed organisation write by removing its provisional membership; crash-level multi-file atomicity remains a limitation.
 
 ## Checks
 
 | Check | Result |
 |---|---|
-| `npm ci` | Passed on the staged dependency update. |
-| `npm run typecheck` | Passed after the RBAC catalogue and route changes. |
-| `npm run build` | Passed after the RBAC catalogue and route changes. |
-| Focused ticket auth/RBAC integration test | Passed: includes missing/invalid token, active/inactive membership, tenant isolation, requester grants, document/policy role denial, and shared foundation routes. Uses an injected authentication provider, not a live Keycloak token. |
-| `npm test` | Passed: 57 tests, 0 failures, including storage error propagation, legacy collection migration, concurrent updates, and document/policy role grants/denials. |
-| `src/tests/foundation.test.ts` | Passed: 19 tests, including signed Keycloak token issuer/audience/signature validation and identity membership checks. |
-| Local Keycloak discovery | Passed; `http://localhost:8081/realms/ai-support` returned matching issuer metadata and JWKS URI. |
-| Backend `.env` startup smoke test | Passed; `npm start` loaded `AUTH_MODE=keycloak`, and both `/api/v1/tickets` and `/api/v1/me` returned structured 401 responses without a bearer token. |
-| Live Keycloak request through the Express ticket API | Not run; requires the local Keycloak realm and user login. |
+| `npm ci --prefix backend` | Passed. |
+| `npm test --prefix backend` | Passed: 158 tests, 0 failures (20 November 2026). Provider and Keycloak integration tests use mocked HTTP/JWKS. |
+| `npm run typecheck --prefix backend` | Passed (20 November 2026). |
+| `npm run build --prefix backend` | Passed (20 November 2026). |
+| `git diff --check` | Passed (20 November 2026). |
+| Local Keycloak realm and containers | Passed: Keycloak and PostgreSQL healthy; `ai-support` discovery returned `200`. |
+| Local API auth and health probes | Partial: API startup plus liveness/readiness/versioned health returned `200`; unauthenticated `/api/v1/me` returned `401`; the valid service-account token reached identity lookup and returned `403 ACCOUNT_INACTIVE` because it is not an active application user. |
+| `support-admin-service` role mappings | Direct `realm-management` assignments are exactly `manage-users`, `view-users`, and `query-users`. Keycloak's built-in `view-users` composite also contributes effective `query-groups`; no shared Keycloak role definition was changed. |
+| Live human-user Keycloak login / tenant authorization | Not verified; requires a real developer user token and active local application membership. |
+| Live Groq / Inception / Mistral requests | Not run. |
 
 ## Next integration actions
 
-- Fhulu/Thuto: verify the shared auth path against Keycloak, review workflow action permissions, and add cross-tenant denial tests.
-- Olerato: implement tenant-scoped candidate listing/review state and routes using `policies.candidates.review`, `TenantContext`, and `JsonTenantStore.updateCollection`.
-- Wandile/Faith: review AI/SLA/reporting routes and contracts with the integrated bootstrap; AI still needs a provider and authorized source wiring.
-- Thuto/team: decide the organisation creation scope and verify the single startup path against the local Keycloak realm.
+- Olerato/Wandile: agree on extraction rule schemas, provider/model, evidence format and review thresholds; implement the provider-backed adapter.
+- Team: verify human-user login and tenant authorization in each development realm.
+- AI owners: keep live provider calls disabled in production until external data handling and provider configuration are approved.
+
+
+## Wandile AI completion checks (20 November 2026)
+
+The combined triage endpoint now persists a report and returns triageId. AI-owned APIs add
+approved routing rules, verified historical resolutions, immutable human review/quality labels,
+synthetic evaluation runs and leased background jobs. These reuse the existing ticket, knowledge,
+SLA, authorization, provider and LangGraph components. No AI ticket writeback or role expansion
+is included. The earlier extraction-adapter action above is superseded: provider-backed
+extraction already exists and is covered by the document/knowledge integration tests.
+
+Use the dedicated [AI completion Postman collection](../../postman/Wandile-AI-Completion.postman_collection.json)
+and [AI OpenAPI](ai-openapi.json). A running backend serves Swagger at `/api/v1/ai/docs`.
+The [AI module guide](../../backend/src/modules/ai/README.md) documents ordering, prerequisites,
+source revocation, review semantics, actor mappings, retries and evaluation limitations.
+
+Focused HTTP tests use signed synthetic tokens, local JWKS stubs, temporary JSON storage and
+the deterministic provider. They require no live Keycloak/Jira/LLM credentials. Run from backend/:
+
+```powershell
+npm run typecheck
+npm run build
+npm test
+```
+
+An automatic worker is disabled unless explicitly configured with an actor mapping and intake
+start timestamp. Manual queue/process endpoints exercise the same worker contract without
+changing environment flags. Tests establish integration and safeguards; real approved tenant
+mappings, reviewed resolutions, provider evaluation results and operational rollout remain
+team-owned acceptance work.
+
+
+Final completion verification:
+
+| Check | Result |
+|---|---|
+| Full regression suite | 197 passed, 0 failures; 11 suites. |
+| Source typecheck and complete TypeScript build | Passed. |
+| AI completion Postman artifact | 23 requests; JSON bodies parsed and test scripts compiled successfully. |
+| Combined OpenAPI artifact | 33 paths; internal component references resolve. |
+| Running backend liveness/readiness | Both 200 at 127.0.0.1:3000. |
+| Running Swagger/spec/local bundle | All 200. |
+| AI governance endpoint without credentials | 401. |
+| Whitespace check | git diff --check passed. |
+| Live provider/Jira calls for this completion change | None; real tenant/provider acceptance remains manual. |
+
+The full test log is local and ignored: backend/.local-data/ai-completion-final-tests.log.
+The backend was started for manual testing. Existing staged development-merge work remains
+preserved and the completion changes have not been committed.

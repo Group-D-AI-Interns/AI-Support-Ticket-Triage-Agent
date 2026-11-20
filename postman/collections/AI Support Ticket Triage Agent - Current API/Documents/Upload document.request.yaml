@@ -1,0 +1,24 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/documents
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+body:
+  type: formdata
+  content:
+    - type: text
+      key: title
+      value: Postman evidence document
+    - type: file
+      key: file
+      src:
+        - ""
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+scripts:
+  - type: afterResponse
+    code: if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('documentId', result.data.document.id); pm.collectionVariables.set('documentVersionId', result.data.version.id); }
+    language: text/javascript
+order: 2000

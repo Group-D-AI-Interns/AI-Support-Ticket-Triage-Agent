@@ -1,0 +1,2536 @@
+{
+  "info": {
+    "_postman_id": "d702c97c-ade2-4c7e-a136-87c2fd251111",
+    "name": "AI Support Ticket Triage Agent - Current API",
+    "description": "Postman requests for the HTTP functionality wired in the current development branch: health, Keycloak-authenticated identity/tenant and ticket APIs, document evidence, ticket workflows, tenant-configured SLA and reports, plus Jira webhook intake. Set the blank variables before running. For login, use Postman OAuth 2.0 Authorization Code (With PKCE): Auth URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/auth; Access Token URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/token; Client ID support-web; scope openid; S256; no client secret. Add Postman's callback URI to the support-web client's valid redirect URIs in Keycloak. After Postman receives a token, copy it into accessToken and the relevant role variable(s); use separate tokens for distinct users/roles. The API also requires an active local user and membership; X-Organisation-ID selects a tenant but does not grant access. Jira ingestion uses the configured secret in the URL, not a bearer token. For Jira, configure JIRA_TENANT_CONFIG in backend/.env. This is a local-development test collection: do not export real tokens or secrets. AI analysis components, generic extracted-rule review, and generic policy routes are not exposed as HTTP routes in the current backend and are intentionally not included.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{accessToken}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:3000",
+      "type": "string"
+    },
+    {
+      "key": "keycloakBaseUrl",
+      "value": "http://localhost:8081",
+      "type": "string"
+    },
+    {
+      "key": "realm",
+      "value": "ai-support",
+      "type": "string"
+    },
+    {
+      "key": "accessToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "adminToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "requesterToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "agentToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "supervisorToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "organisationId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "userId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "departmentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "teamId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ticketId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "ticketStatus",
+      "value": "OPEN",
+      "type": "string"
+    },
+    {
+      "key": "reopenRequestId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "attachmentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "workflowId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "documentId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "documentVersionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "documentDownloadToken",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "slaPolicyId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "slaVersionId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "jiraWebhookSecret",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "jiraProjectKey",
+      "value": "SUP",
+      "type": "string"
+    },
+    {
+      "key": "jiraReporterAccountId",
+      "value": "",
+      "type": "string"
+    },
+    {
+      "key": "baseHost",
+      "value": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "basePort",
+      "value": "3000",
+      "type": "string"
+    },
+    {
+      "key": "keycloakHost",
+      "value": "localhost",
+      "type": "string"
+    },
+    {
+      "key": "keycloakPort",
+      "value": "8081",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "Health and authentication",
+      "item": [
+        {
+          "name": "Health - liveness",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/health/live",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "health",
+                "live"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Health - readiness",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/health/ready",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "health",
+                "ready"
+              ]
+            }
+          }
+        },
+        {
+          "name": "API health",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/health",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "health"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Keycloak OIDC discovery",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "GET",
+            "url": {
+              "raw": "http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/.well-known/openid-configuration",
+              "protocol": "http",
+              "host": [
+                "{{keycloakHost}}"
+              ],
+              "port": "{{keycloakPort}}",
+              "path": [
+                "realms",
+                "{{realm}}",
+                ".well-known",
+                "openid-configuration"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Current user and memberships",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/me",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "me"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List my organisations",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/organisations?page=1&pageSize=50",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "organisations"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                }
+              ]
+            }
+          },
+          "description": "Use the returned organisation id as organisationId. If the list is empty, the user needs an active application membership."
+        }
+      ]
+    },
+    {
+      "name": "Organisation, users, departments, and teams",
+      "item": [
+        {
+          "name": "Create organisation",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Support Test Organisation\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/organisations",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "organisations"
+              ]
+            }
+          },
+          "description": "The caller needs organisations.create and a valid selected tenant context."
+        },
+        {
+          "name": "Get organisation",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/organisations/{{organisationId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "organisations",
+                "{{organisationId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update organisation",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Support Test Organisation Updated\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/organisations/{{organisationId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "organisations",
+                "{{organisationId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List users",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/users?page=1&pageSize=50",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "users"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Invite user",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\":\"new.user@example.test\",\"displayName\":\"New Test User\",\"roles\":[\"requester\"]}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/users",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "users"
+              ]
+            }
+          },
+          "description": "User invitation requires the Keycloak admin service client to be configured in backend/.env.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('userId', result.data.user.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get user",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/users/{{userId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{userId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update user display name",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"displayName\":\"Updated Test User\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/users/{{userId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{userId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set organisation membership",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"active\",\"roles\":[\"requester\"]}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/users/{{userId}}/memberships",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "users",
+                "{{userId}}",
+                "memberships"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List departments",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/departments?page=1&pageSize=50",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create department",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Support\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/departments",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "departments"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('departmentId', result.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List teams",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/teams?page=1&pageSize=50",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "teams"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create team",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Tier 1 Support\",\"departmentId\":\"{{departmentId}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/teams",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "teams"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('teamId', result.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Update team",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"name\":\"Tier 1 Support Updated\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/teams/{{teamId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List team members",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/teams/{{teamId}}/members?page=1&pageSize=50",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "members"
+              ],
+              "query": [
+                {
+                  "key": "page",
+                  "value": "1"
+                },
+                {
+                  "key": "pageSize",
+                  "value": "50"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Set team membership",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PUT",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"userId\":\"{{userId}}\",\"role\":\"support_agent\",\"status\":\"active\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/teams/{{teamId}}/members",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "teams",
+                "{{teamId}}",
+                "members"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Ticket workflows",
+      "item": [
+        {
+          "name": "List workflows",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/ticket-workflows",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "ticket-workflows"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get active workflow",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/ticket-workflows/active",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "ticket-workflows",
+                "active"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create workflow draft",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"config\":{\"sourceReference\":\"Tenant workflow test v1\",\"initialStatus\":\"NEW\",\"reopenStatus\":\"REOPENED\",\"statuses\":[\"NEW\",\"OPEN\",\"IN_PROGRESS\",\"PENDING\",\"RESOLVED\",\"CLOSED\",\"REOPENED\"],\"transitions\":{\"NEW\":[\"OPEN\"],\"OPEN\":[\"IN_PROGRESS\",\"PENDING\",\"RESOLVED\"],\"IN_PROGRESS\":[\"PENDING\",\"RESOLVED\",\"OPEN\"],\"PENDING\":[\"IN_PROGRESS\",\"OPEN\"],\"RESOLVED\":[\"CLOSED\",\"REOPENED\"],\"CLOSED\":[\"REOPENED\"],\"REOPENED\":[\"OPEN\",\"IN_PROGRESS\"]},\"requestableReopenFrom\":[\"RESOLVED\"],\"restrictedReopenFrom\":[\"CLOSED\"],\"permissions\":{\"directStatusChangeRoles\":[\"support_agent\",\"support_lead\"],\"closedReopenRoles\":[\"support_lead\",\"organisation_admin\"],\"reopenRequestRoles\":[\"requester\"],\"reopenApprovalRoles\":[\"support_lead\",\"organisation_admin\"],\"administratorOverrideRoles\":[\"organisation_admin\"]}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/ticket-workflows",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "ticket-workflows"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('workflowId', result.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve workflow draft",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/ticket-workflows/{{workflowId}}/approve",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "ticket-workflows",
+                "{{workflowId}}",
+                "approve"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Tickets",
+      "item": [
+        {
+          "name": "Create ticket",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{requesterToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Postman test ticket\",\"description\":\"Testing the ticket workflow through the shared API.\",\"product\":\"Customer Portal\",\"affectedService\":\"Authentication\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('ticketId', result.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "List tickets",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets?limit=20&offset=0&q=Postman",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets"
+              ],
+              "query": [
+                {
+                  "key": "limit",
+                  "value": "20"
+                },
+                {
+                  "key": "offset",
+                  "value": "0"
+                },
+                {
+                  "key": "q",
+                  "value": "Postman"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get ticket",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update ticket",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{agentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"title\":\"Postman ticket updated\",\"product\":\"Customer Portal\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Override ticket priority (admin or support lead)",
+          "description": "Requires an active organisation_admin or support_lead membership. Use a target priority different from the ticket's current value when rerunning. Legacy high normalizes to P2.",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"priority\":\"high\",\"priorityOverride\":{\"reason\":\"Postman contract test\",\"businessJustification\":\"Validating the priority override using synthetic ticket data.\"}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('priority override succeeds', function () { pm.response.to.have.status(200); });",
+                  "if (pm.response.code === 200) { pm.test('legacy high input normalizes to P2', function () { pm.expect(pm.response.json().data.priority).to.eql('P2'); }); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Change ticket status",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{agentToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"status\":\"{{ticketStatus}}\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/status",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "status"
+              ]
+            }
+          },
+          "description": "Use a transition allowed by the active workflow; the default example is OPEN."
+        },
+        {
+          "name": "Request ticket reopen",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{requesterToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"reason\":\"The issue is still occurring.\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/reopen-requests",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "reopen-requests"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('reopenRequestId', result.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve ticket reopen",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{supervisorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/reopen-requests/{{reopenRequestId}}/approve",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "reopen-requests",
+                "{{reopenRequestId}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Add comment",
+          "request": {
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"body\":\"Testing ticket comments from Postman.\",\"visibility\":\"public\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/comments",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "comments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "List visible comments",
+          "request": {
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/comments",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "comments"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get ticket audit",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{supervisorToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/audit",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "audit"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Upload ticket attachment",
+          "request": {
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/attachments",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "attachments"
+              ]
+            }
+          },
+          "description": "Select a file for the file form-data field in Postman.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('attachmentId', result.data.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download ticket attachment",
+          "request": {
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/attachments/{{attachmentId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "{{ticketId}}",
+                "attachments",
+                "{{attachmentId}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Documents",
+      "item": [
+        {
+          "name": "List documents",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/documents",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "documents"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Upload document",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "formdata",
+              "formdata": [
+                {
+                  "key": "title",
+                  "value": "Postman evidence document",
+                  "type": "text"
+                },
+                {
+                  "key": "file",
+                  "type": "file",
+                  "src": ""
+                }
+              ]
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/documents",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "documents"
+              ]
+            }
+          },
+          "description": "Select a UTF-8 .txt file in Postman.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('documentId', result.data.document.id); pm.collectionVariables.set('documentVersionId', result.data.version.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Get document and extraction",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/documents/{{documentId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{documentId}}"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Process document",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/documents/{{documentId}}/process",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{documentId}}",
+                "process"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create document download token",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/documents/{{documentId}}/download-token",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "{{documentId}}",
+                "download-token"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('documentDownloadToken', result.data.token); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Download document",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/documents/download/{{documentDownloadToken}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "documents",
+                "download",
+                "{{documentDownloadToken}}"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "SLA and reporting",
+      "item": [
+        {
+          "name": "List SLA policies",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla-policies",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla-policies"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Create tenant SLA policy",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"description\":\"Tenant-configured test SLA\",\"effectiveFrom\":\"2026-01-01T00:00:00.000Z\",\"effectiveTo\":null,\"payload\":{\"calendar\":{\"timeZone\":\"Africa/Johannesburg\",\"weeklySchedule\":{\"monday\":[{\"startMinute\":540,\"endMinute\":1020}],\"tuesday\":[{\"startMinute\":540,\"endMinute\":1020}],\"wednesday\":[{\"startMinute\":540,\"endMinute\":1020}],\"thursday\":[{\"startMinute\":540,\"endMinute\":1020}],\"friday\":[{\"startMinute\":540,\"endMinute\":1020}]},\"holidays\":[]},\"targetsByPriority\":{\"high\":{\"firstResponseMinutes\":60,\"resolutionMinutes\":240},\"normal\":{\"firstResponseMinutes\":240,\"resolutionMinutes\":1440}},\"pausedStatuses\":[\"PENDING\"],\"resolvedStatuses\":[\"RESOLVED\",\"CLOSED\"],\"riskAtPercent\":75}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla-policies",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla-policies"
+              ]
+            }
+          },
+          "description": "The numeric targets are illustrative test values only. Replace them with targets approved by the tenant. A successful 201 response saves slaPolicyId and slaVersionId.",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('slaPolicyId', result.data.policy.id); pm.collectionVariables.set('slaVersionId', result.data.version.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Add SLA policy version",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"effectiveFrom\":\"2027-01-01T00:00:00.000Z\",\"effectiveTo\":null,\"payload\":{\"calendar\":{\"timeZone\":\"Africa/Johannesburg\",\"weeklySchedule\":{\"monday\":[{\"startMinute\":540,\"endMinute\":1020}]},\"holidays\":[]},\"targetsByPriority\":{\"high\":{\"firstResponseMinutes\":60,\"resolutionMinutes\":240}},\"pausedStatuses\":[\"PENDING\"],\"resolvedStatuses\":[\"RESOLVED\"],\"riskAtPercent\":75}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla-policies/{{slaPolicyId}}/versions",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla-policies",
+                "{{slaPolicyId}}",
+                "versions"
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('slaVersionId', result.data.version.id); }"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "Approve SLA policy version",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{\"reason\":\"Reviewed tenant-configured SLA targets.\"}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla-policies/{{slaPolicyId}}/versions/{{slaVersionId}}/approve",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla-policies",
+                "{{slaPolicyId}}",
+                "versions",
+                "{{slaVersionId}}",
+                "approve"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Activate SLA policy version",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla-policies/{{slaPolicyId}}/versions/{{slaVersionId}}/activate",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla-policies",
+                "{{slaPolicyId}}",
+                "versions",
+                "{{slaVersionId}}",
+                "activate"
+              ]
+            }
+          }
+        },
+        {
+          "name": "Run tenant SLA evaluations",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "method": "POST",
+            "body": {
+              "mode": "raw",
+              "raw": "{}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla/evaluations/run",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla",
+                "evaluations",
+                "run"
+              ]
+            }
+          },
+          "description": "Only tickets with an internal priority matching an active policy target are evaluated. Jira source priority is retained as source metadata and is not automatically translated."
+        },
+        {
+          "name": "List SLA evaluations",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/sla/evaluations?ticketId={{ticketId}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "sla",
+                "evaluations"
+              ],
+              "query": [
+                {
+                  "key": "ticketId",
+                  "value": "{{ticketId}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get operational report",
+          "request": {
+            "auth": {
+              "type": "bearer",
+              "bearer": [
+                {
+                  "key": "token",
+                  "value": "{{adminToken}}",
+                  "type": "string"
+                }
+              ]
+            },
+            "header": [
+              {
+                "key": "X-Organisation-ID",
+                "value": "{{organisationId}}"
+              }
+            ],
+            "method": "GET",
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/reports?from=2026-01-01T00%3A00%3A00.000Z&to=2027-01-01T00%3A00%3A00.000Z",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "reports"
+              ],
+              "query": [
+                {
+                  "key": "from",
+                  "value": "2026-01-01T00:00:00.000Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2027-01-01T00:00:00.000Z"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Jira webhook intake",
+      "item": [
+        {
+          "name": "Ingest Jira issue created or updated",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"webhookEvent\":\"jira:issue_created\",\"issue\":{\"id\":\"10042\",\"key\":\"{{jiraProjectKey}}-42\",\"fields\":{\"project\":{\"key\":\"{{jiraProjectKey}}\"},\"summary\":\"Postman Jira test ticket\",\"description\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Testing Jira webhook ingestion.\"}]}]},\"reporter\":{\"accountId\":\"{{jiraReporterAccountId}}\"},\"status\":{\"name\":\"Open\"},\"priority\":{\"name\":\"High\"}}}}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "url": {
+              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/ingest/jira/{{jiraWebhookSecret}}",
+              "protocol": "http",
+              "host": [
+                "{{baseHost}}"
+              ],
+              "port": "{{basePort}}",
+              "path": [
+                "api",
+                "v1",
+                "tickets",
+                "ingest",
+                "jira",
+                "{{jiraWebhookSecret}}"
+              ]
+            }
+          },
+          "description": "Set jiraWebhookSecret and jiraReporterAccountId to match backend JIRA_TENANT_CONFIG. Jira reporter accountId must have an internal user mapping. The first call should return 201; a repeated event is idempotent."
+        }
+      ]
+    }
+  ]
+}

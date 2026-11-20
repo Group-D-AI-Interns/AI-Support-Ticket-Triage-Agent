@@ -1,8 +1,18 @@
-import { createPublicKey, verify as verifySignature, constants, type JsonWebKey as NodeJsonWebKey } from "node:crypto";
+import { createPublicKey, verify as verifySignature, constants } from "node:crypto";
 import type { IncomingMessage } from "node:http";
 import type { AuthenticationProvider, AuthenticatedPrincipal } from "../../shared/auth/authentication.ts";
 
-type LocalJwk = NodeJsonWebKey & { kid?: string; alg?: string; use?: string };
+type LocalJwk = {
+  kty: string;
+  kid?: string;
+  alg?: string;
+  use?: string;
+  n?: string;
+  e?: string;
+  x?: string;
+  y?: string;
+  crv?: string;
+};
 type JwksDocument = { keys?: LocalJwk[] };
 type OidcConfiguration = { issuer?: string; jwks_uri?: string };
 

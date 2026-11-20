@@ -15,7 +15,9 @@ export class OrganisationService {
 
   listForUser(userId: string) { return this.repository.listForUser(userId); }
   listAll() { return this.repository.listAll(); }
-  create(input: { name: string; settings?: Record<string, unknown> }) { return this.repository.create(input); }
+  create(input: { name: string; settings?: Record<string, unknown> }, administrator: { userId: string; role: "organisation_admin" }) {
+    return this.repository.create(input, administrator);
+  }
 
   update(tenant: TenantContext, changes: { name?: string; settings?: Record<string, unknown>; status?: OrganisationStatus }) {
     return this.repository.update(tenant, changes);

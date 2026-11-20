@@ -1,0 +1,174 @@
+{
+  "schemaVersion": 1,
+  "status": "draft",
+  "requiresHumanReview": true,
+  "source": {
+    "documentId": "ITSM-POL-002",
+    "version": "2.0",
+    "path": "policies/service-level-agreement.md",
+    "sha256": "b1b399ba87523cf11d8f34f84af070fb0203bc379f6664ac5e39f85d67fcedb0",
+    "section": "7 and 7.1"
+  },
+  "targetsByClientTier": {
+    "diamond": {
+      "P1": {
+        "response": "10 minutes",
+        "resolution": "2 hours"
+      },
+      "P2": {
+        "response": "20 minutes",
+        "resolution": "4 hours"
+      },
+      "P3": {
+        "response": "2 hours",
+        "resolution": "2 business days"
+      },
+      "P4": {
+        "response": "4 business hours",
+        "resolution": "3 business days"
+      }
+    },
+    "platinum": {
+      "P1": {
+        "response": "15 minutes",
+        "resolution": "4 hours"
+      },
+      "P2": {
+        "response": "30 minutes",
+        "resolution": "8 hours"
+      },
+      "P3": {
+        "response": "4 hours",
+        "resolution": "3 business days"
+      },
+      "P4": {
+        "response": "1 business day",
+        "resolution": "5 business days"
+      }
+    },
+    "gold": {
+      "P1": {
+        "response": "30 minutes",
+        "resolution": "8 hours"
+      },
+      "P2": {
+        "response": "1 hour",
+        "resolution": "1 business day"
+      },
+      "P3": {
+        "response": "8 business hours",
+        "resolution": "5 business days"
+      },
+      "P4": {
+        "response": "2 business days",
+        "resolution": "10 business days"
+      }
+    },
+    "silver": {
+      "P1": {
+        "response": "1 hour",
+        "resolution": "1 business day"
+      },
+      "P2": {
+        "response": "4 business hours",
+        "resolution": "2 business days"
+      },
+      "P3": {
+        "response": "1 business day",
+        "resolution": "7 business days"
+      },
+      "P4": {
+        "response": "3 business days",
+        "resolution": "10 business days"
+      }
+    },
+    "bronze": {
+      "P1": {
+        "response": "4 business hours",
+        "resolution": "2 business days"
+      },
+      "P2": {
+        "response": "1 business day",
+        "resolution": "3 business days"
+      },
+      "P3": {
+        "response": "2 business days",
+        "resolution": "10 business days"
+      },
+      "P4": {
+        "response": "5 business days",
+        "resolution": "15 business days"
+      }
+    }
+  },
+  "unitsNormalised": false,
+  "provisionalGoldExample": {
+    "status": "draft",
+    "requiresHumanReview": true,
+    "scope": "example_only_one_tier_per_organisation",
+    "exampleTier": "gold",
+    "selectedTenantTier": null,
+    "effectiveFrom": "2026-11-20T00:00:00+02:00",
+    "effectiveTo": "2027-07-01T00:00:00+02:00",
+    "payload": {
+      "calendar": {
+        "timeZone": "Africa/Johannesburg",
+        "weeklySchedule": {
+          "monday": [{ "startMinute": 480, "endMinute": 1020 }],
+          "tuesday": [{ "startMinute": 480, "endMinute": 1020 }],
+          "wednesday": [{ "startMinute": 480, "endMinute": 1020 }],
+          "thursday": [{ "startMinute": 480, "endMinute": 1020 }],
+          "friday": [{ "startMinute": 480, "endMinute": 1020 }]
+        },
+        "holidays": []
+      },
+      "targetsByPriority": {
+        "P1": { "firstResponseMinutes": 30, "resolutionMinutes": 480 },
+        "P2": { "firstResponseMinutes": 60, "resolutionMinutes": 540 },
+        "P3": { "firstResponseMinutes": 480, "resolutionMinutes": 2700 },
+        "P4": { "firstResponseMinutes": 1080, "resolutionMinutes": 5400 }
+      },
+      "pausedStatuses": ["PENDING"],
+      "resolvedStatuses": ["RESOLVED", "CLOSED"],
+      "riskAtPercent": 75
+    },
+    "assumptions": [
+      "The 08:00-17:00 weekday interval counts as nine SLA working hours; no lunch break is excluded.",
+      "The same calendar applies to every priority, so this example does not provide after-hours P1 coverage.",
+      "An empty holiday list means no public holidays are excluded."
+    ],
+    "provisionalEscalation": {
+      "status": "draft",
+      "thresholds": {
+        "atRiskAtPercent": 75,
+        "breachAtPercent": 100
+      },
+      "actions": {
+        "atRisk": "Surface the state in SLA reports for manual review.",
+        "breached": "Surface the state in SLA reports for support-lead review."
+      },
+      "outboundNotifications": "disabled",
+      "activationBlockedBy": [
+        "Tenant must confirm escalation owners, contacts and response actions.",
+        "No outbound notification channel is configured or approved."
+      ]
+    },
+    "provisionalRetention": {
+      "status": "draft",
+      "developmentAction": "Retain evaluation snapshots; do not automatically delete.",
+      "productionAction": "Require tenant-approved retention and archival rules before high-volume use."
+    },
+    "activationBlockedBy": [
+      "Actual organisation and contractual tier have not been selected.",
+      "Tenant holiday calendar is pending.",
+      "Ticket status strings must be confirmed against the tenant workflow.",
+      "Tenant owner must confirm effective dates and the temporary calendar assumptions."
+    ]
+  },
+  "activationBlockedBy": [
+    "Actual contractual targets not approved",
+    "No effective date",
+    "Calendar/timezone/holiday and business-day definitions required",
+    "Client/account entitlement model missing"
+  ]
+}

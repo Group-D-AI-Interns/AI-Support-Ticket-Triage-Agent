@@ -11,6 +11,7 @@ export type Environment = {
   keycloakAdminClientSecret?: string;
   dataDirectory: string;
   jsonWriteLockTimeoutMs: number;
+  slaEvaluationIntervalMs: number;
 };
 
 export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Environment {
@@ -19,12 +20,14 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   const authMode = source.AUTH_MODE ?? "disabled";
   const port = Number(source.PORT ?? "3000");
   const jsonWriteLockTimeoutMs = Number(source.JSON_WRITE_LOCK_TIMEOUT_MS ?? "5000");
+  const slaEvaluationIntervalMs = Number(source.SLA_EVALUATION_INTERVAL_MS ?? "300000");
 
   if (!["development", "test", "production"].includes(nodeEnv)) throw new Error("NODE_ENV must be development, test, or production");
   if (!["debug", "info", "warn", "error"].includes(logLevel)) throw new Error("LOG_LEVEL must be debug, info, warn, or error");
   if (!["disabled", "keycloak"].includes(authMode)) throw new Error("AUTH_MODE must be disabled or keycloak");
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT must be an integer between 0 and 65535");
   if (!Number.isInteger(jsonWriteLockTimeoutMs) || jsonWriteLockTimeoutMs < 1 || jsonWriteLockTimeoutMs > 60000) throw new Error("JSON_WRITE_LOCK_TIMEOUT_MS must be an integer between 1 and 60000");
+  if (!Number.isInteger(slaEvaluationIntervalMs) || slaEvaluationIntervalMs < 1000 || slaEvaluationIntervalMs > 86400000) throw new Error("SLA_EVALUATION_INTERVAL_MS must be an integer between 1000 and 86400000");
   const authIssuer = source.AUTH_ISSUER?.trim();
   const authAudience = source.AUTH_AUDIENCE?.trim();
   const authJwksUri = source.AUTH_JWKS_URI?.trim();
@@ -56,5 +59,6 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
     ...(keycloakAdminClientSecret ? { keycloakAdminClientSecret } : {}),
     dataDirectory: source.DATA_DIRECTORY ?? "./.local-data",
     jsonWriteLockTimeoutMs,
+    slaEvaluationIntervalMs,
   };
 }

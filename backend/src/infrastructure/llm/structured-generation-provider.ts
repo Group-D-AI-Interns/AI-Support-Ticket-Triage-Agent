@@ -13,6 +13,7 @@ export type StructuredGenerationResponse = {
   provider: string;
   model: string;
   output: unknown;
+  attempts?: number;
 };
 
 export interface StructuredGenerationProvider {
@@ -26,6 +27,8 @@ export class LlmProviderError extends Error {
     readonly code: string,
     message: string,
     readonly retryable: boolean,
+    readonly attempts = 1,
+    readonly primaryErrorCode?: string,
   ) {
     super(message);
     this.name = 'LlmProviderError';

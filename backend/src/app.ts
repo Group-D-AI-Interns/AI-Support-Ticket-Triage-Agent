@@ -1,5 +1,4 @@
-import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import type { Request, Response } from "express";
+import { createServer, type IncomingMessage, type ServerResponse, type RequestListener } from "node:http";
 import { AppError } from "./shared/errors/app-error.ts";
 import type { Environment } from "./config/env.ts";
 import { createLogger } from "./config/logger.ts";
@@ -20,6 +19,7 @@ import { createTicketApp } from "./modules/tickets/api.js";
 import { jiraSettingsFromEnvironment } from "./modules/tickets/config.js";
 
 export type AppDependencies = {
+  moduleHandler?: RequestListener;
   authenticator?: AuthenticationProvider;
   userProvisioner?: IdentityProvisioningProvider;
   tenantResolver?: TenantResolver;
@@ -36,7 +36,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
   const ticketSettings = process.env.JIRA_TENANT_CONFIG
     ? { ...jiraSettingsFromEnvironment(), dataDirectory: environment.dataDirectory }
     : { dataDirectory: environment.dataDirectory, projectMappings: {}, organisations: {} };
-  const ticketApp = createTicketApp({
+  const ticketApp = dependencies.moduleHandler ?? createTicketApp({
     settings: ticketSettings,
     tenantStore: createJsonTenantStore(store),
     ...(dependencies.authenticator ? { authenticator: dependencies.authenticator } : {}),
@@ -72,16 +72,17 @@ export function createApp(environment: Environment, dependencies: AppDependencie
     response.setHeader("x-request-id", requestId);
     const method = request.method ?? "GET";
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
+    const logPath = path.startsWith('/api/v1/tickets/ingest/jira/') ? '/api/v1/tickets/ingest/jira/[redacted]' : path;
     if (isTicketModulePath(path)) {
       const startedAt = Date.now();
       response.once("finish", () => logger.info("HTTP request", {
         requestId,
         method,
-        path,
+        path: logPath,
         statusCode: response.statusCode,
         durationMs: Date.now() - startedAt,
       }));
-      ticketApp(request as Request, response as Response, () => undefined);
+      ticketApp(request, response);
       return;
     }
     const startedAt = Date.now();
@@ -115,7 +116,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
         },
       });
     } finally {
-      logger.info("HTTP request", { requestId, method, path, statusCode: response.statusCode, durationMs: Date.now() - startedAt });
+      logger.info("HTTP request", { requestId, method, path: logPath, statusCode: response.statusCode, durationMs: Date.now() - startedAt });
     }
   }
 
@@ -158,7 +159,10 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const body = await readJson(request);
       rejectUnknown(body, ["name"]);
       const name = requireString(body, "name");
-      sendJson(response, 201, { data: await organisation.create({ name }), requestId });
+      sendJson(response, 201, {
+        data: await organisation.create({ name }, { userId: tenant.userId, role: ROLE_IDS.organisationAdmin }),
+        requestId,
+      });
       return;
     }
 
@@ -283,7 +287,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
       const tenant = await tenantFromRequest(request, principal.userId, url);
       requirePermission(permissionPolicy, tenant, "teams.manage");
       const body = await readJson(request);
-      rejectUnknown(body, ["userId", "role", "status"]);
+      rejectUnknown(body, ["name", "departmentId"]);
       const changes: { name?: string; departmentId?: string | null } = {};
       const unknownFields = Object.keys(body).filter((field) => !["name", "departmentId"].includes(field));
       if (unknownFields.length) throw new AppError(400, "VALIDATION_ERROR", "The request is invalid.", unknownFields.map((field) => ({ field, message: "This field cannot be updated." })));
@@ -418,8 +422,10 @@ export function createApp(environment: Environment, dependencies: AppDependencie
 
 function isTicketModulePath(path: string): boolean {
   return [
+    "/api/v1/ai",
     "/api/v1/tickets",
     "/api/v1/documents",
+    "/api/v1/extracted-rules",
     "/api/v1/sla-policies",
     "/api/v1/sla",
     "/api/v1/reports",

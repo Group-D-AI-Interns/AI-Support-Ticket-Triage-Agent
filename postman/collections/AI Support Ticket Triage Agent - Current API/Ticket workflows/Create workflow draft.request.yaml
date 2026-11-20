@@ -1,0 +1,18 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/ticket-workflows
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"config":{"sourceReference":"Tenant workflow test v1","initialStatus":"NEW","reopenStatus":"REOPENED","statuses":["NEW","OPEN","IN_PROGRESS","PENDING","RESOLVED","CLOSED","REOPENED"],"transitions":{"NEW":["OPEN"],"OPEN":["IN_PROGRESS","PENDING","RESOLVED"],"IN_PROGRESS":["PENDING","RESOLVED","OPEN"],"PENDING":["IN_PROGRESS","OPEN"],"RESOLVED":["CLOSED","REOPENED"],"CLOSED":["REOPENED"],"REOPENED":["OPEN","IN_PROGRESS"]},"requestableReopenFrom":["RESOLVED"],"restrictedReopenFrom":["CLOSED"],"permissions":{"directStatusChangeRoles":["support_agent","support_lead"],"closedReopenRoles":["support_lead","organisation_admin"],"reopenRequestRoles":["requester"],"reopenApprovalRoles":["support_lead","organisation_admin"],"administratorOverrideRoles":["organisation_admin"]}}}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+scripts:
+  - type: afterResponse
+    code: if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('workflowId', result.data.id); }
+    language: text/javascript
+order: 3000
