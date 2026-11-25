@@ -19,6 +19,22 @@ export type TicketReadModel = Pick<
   | 'updatedAt'
 >;
 
+export type TicketListFilters = {
+  status?: string;
+  priority?: string;
+  teamId?: string;
+  requesterId?: string;
+};
+
+export type TicketReadScope = {
+  readAll: boolean;
+  requesterId?: string;
+  includeUnassigned: boolean;
+  teamIds: readonly string[];
+};
+
+export type TicketReadPage = { data: TicketReadModel[]; total: number };
+
 export interface TicketReadService {
   getTicket(
     tenant: TenantContext,
@@ -26,6 +42,15 @@ export interface TicketReadService {
   ): Promise<TicketReadModel | null>;
 
   listTickets(tenant: TenantContext): Promise<TicketReadModel[]>;
+
+  /** Optional database-side filtering and pagination for repositories that support it. */
+  listTicketsPage?(
+    tenant: TenantContext,
+    filters: TicketListFilters,
+    scope: TicketReadScope,
+    limit: number,
+    offset: number,
+  ): Promise<TicketReadPage | null>;
 }
 
 export class JsonTicketReadService implements TicketReadService {
@@ -42,6 +67,21 @@ export class JsonTicketReadService implements TicketReadService {
   async listTickets(tenant: TenantContext): Promise<TicketReadModel[]> {
     const tickets = await this.store.listTickets(tenant);
     return tickets.map(toTicketReadModel);
+  }
+
+  async listTicketsPage(
+    tenant: TenantContext,
+    filters: TicketListFilters,
+    scope: TicketReadScope,
+    limit: number,
+    offset: number,
+  ): Promise<TicketReadPage | null> {
+    const pagedStore = this.store as JsonTicketStore & {
+      listTicketsPage?: (tenant: TenantContext, filters: TicketListFilters, scope: TicketReadScope, limit: number, offset: number) => Promise<{ data: TicketRecord[]; total: number }>;
+    };
+    if (!pagedStore.listTicketsPage) return null;
+    const page = await pagedStore.listTicketsPage(tenant, filters, scope, limit, offset);
+    return page ? { data: page.data.map(toTicketReadModel), total: page.total } : null;
   }
 }
 

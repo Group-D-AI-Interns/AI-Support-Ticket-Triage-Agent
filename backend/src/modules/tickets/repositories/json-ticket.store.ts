@@ -9,9 +9,9 @@ import type {
   JsonValue,
   TicketAttachment,
   TicketComment,
+  TicketEscalation,
   TicketHistoryEvent,
   TicketRecord,
-  TicketSource,
 } from '../domain/ticket.js';
 import type { TicketReopenRequest } from '../domain/ticket-workflow.js';
 import {
@@ -32,7 +32,6 @@ type NewTicket = Omit<
   TicketRecord,
   'id' | 'createdAt' | 'updatedAt' | 'comments' | 'history'
 >;
-type JiraOutcome = 'created' | 'updated' | 'duplicate';
 type PriorityOverrideAudit = {
   reason: string;
   businessJustification: string;
@@ -57,106 +56,8 @@ export class JsonTicketStore {
     return () => this.changeListeners.delete(listener);
   }
 
-  async upsertJiraTicket(ticket: NewTicket): Promise<[TicketRecord, JiraOutcome]> {
-    const normalizedTicket = normalizeTicketRecordPriority(ticket);
-    return this.withLock(async () => {
-      const records = await this.readRecords();
-      const source = normalizedTicket.source;
-      if (!source) {
-        throw new TicketStoreError('Jira ticket source metadata is required.');
-      }
-
-      const existing = records.find(
-        (record) =>
-          record.organisationId === normalizedTicket.organisationId &&
-          record.source?.system === 'jira' &&
-          record.source.issueId === source.issueId,
-      );
-      const issueKeyCollision = records.some(
-        (record) =>
-          record.organisationId === normalizedTicket.organisationId &&
-          record.source?.system === 'jira' &&
-          record.source.issueKey === source.issueKey &&
-          record.source.issueId !== source.issueId,
-      );
-      if (issueKeyCollision) {
-        throw new TicketConflictError(
-          'A different Jira issue already uses this issue key.',
-        );
-      }
-
-      const now = new Date().toISOString();
-      if (existing) {
-        if (Object.entries(normalizedTicket).every(([key, value]) => isDeepStrictEqual(existing[key as keyof TicketRecord], value))) {
-          return [existing, 'duplicate'];
-        }
-
-        const jiraChanges = { ...normalizedTicket };
-        delete jiraChanges.status;
-        delete jiraChanges.workflowId;
-        const changes = changedValues(existing, jiraChanges);
-        const updated: TicketRecord = {
-          ...existing,
-          ...jiraChanges,
-          ...(existing.status === undefined ? {} : { status: existing.status }),
-          ...(existing.workflowId === undefined
-            ? {}
-            : { workflowId: existing.workflowId }),
-          updatedAt: now,
-          comments: existing.comments ?? [],
-          reopenRequests: existing.reopenRequests ?? [],
-          history: existing.history ?? [],
-        };
-        appendHistory(updated, 'jira.issue_updated', 'jira_webhook', changes);
-        if (
-          existing.teamId == null &&
-          typeof updated.teamId === 'string' &&
-          !(existing.history ?? []).some(
-            (event) => event.action === SLA_EVIDENCE_ACTIONS.assignment,
-          )
-        ) {
-          appendHistory(
-            updated,
-            SLA_EVIDENCE_ACTIONS.assignment,
-            'jira_webhook',
-            { teamId: updated.teamId },
-            now,
-          );
-        }
-        records[records.indexOf(existing)] = updated;
-        await this.writeRecords(records);
-        this.notifyTicketChanged(updated);
-        return [updated, 'updated'];
-      }
-
-      const created: TicketRecord = {
-        id: `ticket_${randomUUID().replace(/-/g, '')}`,
-        ...normalizedTicket,
-        createdAt: now,
-        updatedAt: now,
-        comments: [],
-        reopenRequests: [],
-        history: [],
-      };
-      appendHistory(created, 'jira.issue_created', 'jira_webhook', {});
-      if (created.teamId) {
-        appendHistory(
-          created,
-          SLA_EVIDENCE_ACTIONS.assignment,
-          'jira_webhook',
-          { teamId: created.teamId },
-          now,
-        );
-      }
-      records.push(created);
-      await this.writeRecords(records);
-      this.notifyTicketChanged(created);
-      return [created, 'created'];
-    });
-  }
-
   async listTickets(tenant: TenantContext): Promise<TicketRecord[]> {
-    return this.withLock(async () =>
+    return this.withLock(tenant.organisationId, async () =>
       (await this.readRecords()).filter(
         (record) => record.organisationId === tenant.organisationId,
       ),
@@ -167,7 +68,7 @@ export class JsonTicketStore {
     tenant: TenantContext,
     ticketId: string,
   ): Promise<TicketRecord | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const record = (await this.readRecords()).find(
         (ticket) => ticket.id === ticketId,
       );
@@ -185,7 +86,7 @@ export class JsonTicketStore {
       );
     }
 
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const now = new Date().toISOString();
       const created: TicketRecord = {
@@ -225,7 +126,7 @@ export class JsonTicketStore {
     >,
     priorityOverride?: PriorityOverrideAudit,
   ): Promise<TicketRecord | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -288,6 +189,108 @@ export class JsonTicketStore {
           updated.updatedAt,
         );
       }
+      if (normalizedChanges.priority === 'P1' && !(updated.escalations ?? []).some(item => item.status === 'open')) {
+        const escalation: TicketEscalation = {
+          id: `escalation_${randomUUID().replace(/-/g, '')}`,
+          status: 'open',
+          reasonCode: 'P1_CRITICAL',
+          handoverNotes: 'P1 Critical priority requires immediate escalation under the priority policy.',
+          escalatedBy: tenant.userId,
+          escalatedAt: updated.updatedAt,
+          automatic: true,
+        };
+        updated.escalations = [...(updated.escalations ?? []), escalation];
+        appendHistory(updated, 'ticket.escalated', tenant.userId, {
+          escalationId: escalation.id,
+          reasonCode: escalation.reasonCode,
+          handoverNotes: escalation.handoverNotes,
+          automatic: true,
+        }, updated.updatedAt);
+      }
+      records[records.indexOf(ticket)] = updated;
+      await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
+      return updated;
+    });
+  }
+
+  async openEscalation(
+    tenant: TenantContext,
+    ticketId: string,
+    input: Pick<TicketEscalation, 'reasonCode' | 'handoverNotes'>,
+  ): Promise<TicketRecord | null> {
+    return this.withLock(tenant.organisationId, async () => {
+      const records = await this.readRecords();
+      const ticket = records.find(record => record.id === ticketId && record.organisationId === tenant.organisationId);
+      if (!ticket) return null;
+      const active = (ticket.escalations ?? []).find(item => item.status === 'open');
+      if (active?.automatic && active.reasonCode === input.reasonCode && active.handoverNotes === 'P1 Critical priority requires immediate escalation under the priority policy.') {
+        const now = new Date().toISOString();
+        const enriched = { ...active, handoverNotes: input.handoverNotes };
+        const updated = { ...ticket, escalations: (ticket.escalations ?? []).map(item => item.id === active.id ? enriched : item), updatedAt: now };
+        appendHistory(updated, 'ticket.escalation_handover_updated', tenant.userId, {
+          escalationId: active.id,
+          handoverNotes: input.handoverNotes,
+        }, now);
+        records[records.indexOf(ticket)] = updated;
+        await this.writeRecords(records);
+        this.notifyTicketChanged(updated);
+        return updated;
+      }
+      if (active) {
+        throw new TicketConflictError('An open escalation already exists for this ticket.');
+      }
+      const now = new Date().toISOString();
+      const escalation: TicketEscalation = {
+        id: `escalation_${randomUUID().replace(/-/g, '')}`,
+        status: 'open',
+        ...input,
+        escalatedBy: tenant.userId,
+        escalatedAt: now,
+      };
+      const updated = { ...ticket, escalations: [...(ticket.escalations ?? []), escalation], updatedAt: now };
+      appendHistory(updated, 'ticket.escalated', tenant.userId, {
+        escalationId: escalation.id,
+        reasonCode: escalation.reasonCode,
+        handoverNotes: escalation.handoverNotes,
+      }, now);
+      records[records.indexOf(ticket)] = updated;
+      await this.writeRecords(records);
+      this.notifyTicketChanged(updated);
+      return updated;
+    });
+  }
+
+  async resolveEscalation(
+    tenant: TenantContext,
+    ticketId: string,
+    escalationId: string,
+    resolutionNotes: string,
+  ): Promise<TicketRecord | null> {
+    return this.withLock(tenant.organisationId, async () => {
+      const records = await this.readRecords();
+      const ticket = records.find(record => record.id === ticketId && record.organisationId === tenant.organisationId);
+      if (!ticket) return null;
+      const escalation = (ticket.escalations ?? []).find(item => item.id === escalationId);
+      if (!escalation) return null;
+      if (escalation.status !== 'open') throw new TicketConflictError('The escalation is already resolved.');
+      const now = new Date().toISOString();
+      const resolved: TicketEscalation = {
+        ...escalation,
+        status: 'resolved',
+        resolvedBy: tenant.userId,
+        resolvedAt: now,
+        resolutionNotes,
+      };
+      const updated = {
+        ...ticket,
+        escalations: (ticket.escalations ?? []).map(item => item.id === escalationId ? resolved : item),
+        updatedAt: now,
+      };
+      appendHistory(updated, 'ticket.escalation_resolved', tenant.userId, {
+        escalationId,
+        resolutionNotes,
+      }, now);
       records[records.indexOf(ticket)] = updated;
       await this.writeRecords(records);
       this.notifyTicketChanged(updated);
@@ -308,7 +311,7 @@ export class JsonTicketStore {
       resolution?: SlaResolutionEvidence;
     },
   ): Promise<TicketRecord | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -413,7 +416,7 @@ export class JsonTicketStore {
     request: TicketReopenRequest,
     workflowId: string,
   ): Promise<[TicketRecord, TicketReopenRequest] | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -465,7 +468,7 @@ export class JsonTicketStore {
     requestId: string,
     actorId: string,
   ): Promise<[TicketRecord, TicketReopenRequest] | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -533,7 +536,7 @@ export class JsonTicketStore {
     comment: Omit<TicketComment, 'id' | 'createdAt'>,
     recordAsSlaAcknowledgement = false,
   ): Promise<[TicketRecord, TicketComment] | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -593,7 +596,7 @@ export class JsonTicketStore {
     ticketId: string,
     evidence: SlaEvidenceWrite,
   ): Promise<[TicketRecord, TicketHistoryEvent] | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -679,7 +682,7 @@ export class JsonTicketStore {
       throw new TicketStoreError('Ticket attachment metadata is incomplete.');
     }
 
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const ticket = records.find(
         (record) =>
@@ -712,7 +715,7 @@ export class JsonTicketStore {
     });
   }
 
-  private async withLock<T>(operation: () => Promise<T>): Promise<T> {
+  protected async withLock<T>(_organisationId: string, operation: () => Promise<T>): Promise<T> {
     let release: (() => Promise<void>) | undefined;
     try {
       await mkdir(this.dataDirectory, { recursive: true });
@@ -754,7 +757,7 @@ export class JsonTicketStore {
     for (const listener of this.changeListeners) listener(change);
   }
 
-  private async readRecords(): Promise<TicketRecord[]> {
+  protected async readRecords(): Promise<TicketRecord[]> {
     let document: unknown;
     try {
       document = JSON.parse(await readFile(this.ticketsPath, 'utf8'));
@@ -781,7 +784,7 @@ export class JsonTicketStore {
     return document.records.map(normalizeTicketRecordPriority);
   }
 
-  private async writeRecords(records: TicketRecord[]): Promise<void> {
+  protected async writeRecords(records: TicketRecord[]): Promise<void> {
     const temporaryPath = `${this.ticketsPath}.${randomUUID().replace(/-/g, '')}.tmp`;
     let file: Awaited<ReturnType<typeof open>> | undefined;
     try {
@@ -888,7 +891,7 @@ function findActiveSlaInterval(
   return active;
 }
 
-function isTicketRecord(value: unknown): value is TicketRecord {
+export function isTicketRecord(value: unknown): value is TicketRecord {
   if (
     !isRecord(value) ||
     !['id', 'organisationId', 'requesterId', 'title', 'createdAt', 'updatedAt'].every(
@@ -946,6 +949,10 @@ function isTicketRecord(value: unknown): value is TicketRecord {
     return false;
   }
   if (
+    value.escalations !== undefined &&
+    (!Array.isArray(value.escalations) || value.escalations.some(item => !isEscalation(item)))
+  ) return false;
+  if (
     value.history !== undefined &&
     (!Array.isArray(value.history) ||
       value.history.some((event) => !isHistoryEvent(event)))
@@ -953,6 +960,15 @@ function isTicketRecord(value: unknown): value is TicketRecord {
     return false;
   }
   return true;
+}
+
+function isEscalation(value: unknown): value is TicketEscalation {
+  return isRecord(value) &&
+    ['id', 'handoverNotes', 'escalatedBy', 'escalatedAt'].every(field => typeof value[field] === 'string' && value[field]) &&
+    ['open', 'resolved'].includes(String(value.status)) &&
+    ['P1_CRITICAL', 'P2_HIGH', 'SLA_AT_RISK', 'BEYOND_AGENT_AUTHORITY', 'RECURRING_BREACH', 'OTHER'].includes(String(value.reasonCode)) &&
+    (value.automatic === undefined || typeof value.automatic === 'boolean') &&
+    ['resolvedBy', 'resolvedAt', 'resolutionNotes'].every(field => value[field] === undefined || typeof value[field] === 'string');
 }
 
 function isReopenRequest(value: unknown): value is TicketReopenRequest {

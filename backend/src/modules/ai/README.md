@@ -25,15 +25,17 @@ The shared server defaults to port 3000. See the root README for Keycloak setup.
 ## Local demonstration
 
 Set `APP_ENV=development`, `TICKET_AI_DEMO_ENABLED=true`,
-`TICKET_AI_LIVE_ENABLED=false` and a JSON `TICKET_AI_CATEGORIES` array of objects
-with `id`, `name` and optional `description` fields. Demo results are deterministic
+`TICKET_AI_LIVE_ENABLED=false`. Optionally set `TICKET_AI_CATEGORIES` as a compatibility
+default. Organisation administrators can manage tenant-specific categories at
+`GET/POST /api/v1/configuration/categories`; once an organisation has category records,
+those active records replace the shared defaults. Demo results are deterministic
 keyword/extractive output with null confidence, mandatory review and `DEMO_ONLY`
 warnings. This is not real-model inference.
 
 ## Live providers
 
 Set `APP_ENV=development`, `TICKET_AI_LIVE_ENABLED=true`,
-`TICKET_AI_DEMO_ENABLED=false`, categories and the task selectors
+`TICKET_AI_DEMO_ENABLED=false` and the task selectors
 `TICKET_AI_CLASSIFICATION_PROVIDER` / `TICKET_AI_SUMMARIZATION_PROVIDER` to `groq`
 or `inception`. Use the provider/model/token-limit/timeout/retry variables described
 in `.env.example`. Credentials belong in the process environment, never Git.
@@ -43,6 +45,9 @@ Inception transient failures use bounded retries/backoff before Groq fallback. G
 credentials are required for fallback. The outer runner does not add another retry
 loop. Structured outputs still pass the existing validators. Live mode sends ticket
 title and description to external providers; it remains opt-in and development-only.
+Tenant category rows replace compatibility defaults once configured. A live classifier
+may return multiple labels, but each must be configured and carry exact evidence offsets
+and excerpts from the ticket title or description. Empty/uncertain output requires review.
 Provider tests mock HTTP responses and do not verify live model quality/availability.
 
 ## Persistence and unfinished work
@@ -103,7 +108,7 @@ node --env-file=.env --import tsx scripts/test-live-ai-workflow.ts
 
 This opt-in test invokes real providers for graph analysis, priority, cited resolution and
 document extraction, using fixture routing/knowledge and isolated temporary JSON history.
-It does not configure Keycloak/Jira or activate any policy; provider usage may apply.
+It does not configure identity providers or activate any policy; provider usage may apply.
 
 Lexical evidence retrieval and cited resolution recommendations are now available through
 the API. See [resolution-recommendations.md](resolution-recommendations.md) for connected
@@ -150,7 +155,7 @@ needs evaluation. The default backend remains protected by Keycloak/membership c
 The existing LangGraph core, classifier, summarizer, execution runner and provider adapters
 are reused. `operations-service.ts` coordinates AI-owned governance and durable reports;
 `operations-api.ts` exposes it through the existing ticket HTTP adapter. No AI endpoint
-changes a ticket's priority, assignment, status, permissions or Jira issue.
+changes a ticket's priority, assignment, status or permissions.
 
 `operations-store.ts` stores `ai-operations.json` under the configured data directory.
 Its versioned JSON envelope contains routing drafts/approvals, reviewed historical resolutions,
@@ -191,7 +196,9 @@ recommendations. A changed ticket requires a fresh triage before review.
 
 Start the backend normally from backend/ with `npm start`. Open
 http://127.0.0.1:3000/api/v1/ai/docs for Swagger UI; the complete specification is at
-`/api/v1/ai/openapi.json` and in `docs/api/ai-openapi.json`. Swagger assets are served locally
+`/api/v1/openapi.json` and in `docs/api/integrated-openapi.json`. The AI-only contract remains at
+`/api/v1/ai/openapi.json` and `docs/api/ai-openapi.json`. Rebuild the integrated contract after
+route or schema changes with `npm run openapi:build` from `backend/`. Swagger assets are served locally
 using swagger-ui-dist 5.35.1. Documentation is public; business endpoints retain authentication,
 tenant membership, permission and ticket/source checks. This does not change Keycloak.
 
@@ -265,7 +272,7 @@ AI_AUTOMATION_MAX_ATTEMPTS_PER_JOB=1
 ```
 
 Use a deliberate timestamp to bound reconciliation; older tickets are excluded from scanning.
-Normal manual/Jira creation enqueues analysis using the configured actor. The opt-in worker
+Normal authenticated ticket creation enqueues analysis using the configured actor. The opt-in worker
 reconciles bounded batches and resumes durable jobs on startup; it re-resolves current
 membership/team access on EVERY attempt. Automatic keys include tenant, actor, ticket snapshot
 and category configuration. Content changes can produce a fresh run; approved-source/model

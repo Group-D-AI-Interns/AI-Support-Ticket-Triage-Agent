@@ -43,7 +43,7 @@ test('fresh SLA adapter respects permission, ticket revisions and policy changes
 
 test('routing uses only one unambiguous approved rule and permitted team; never assigns it', async () => {
   const before = structuredClone(ticket);
-  const result = await recommendRouting(tenant, ticket, 'ACCESS', { async getAuthorizedRoutingContext() { return context; } });
+  const result = await recommendRouting(tenant, ticket, ['ACCESS'], { async getAuthorizedRoutingContext() { return context; } });
   assert.equal(result.teamId, 'team-access');
   assert.equal(result.status, 'recommendation');
   assert.equal(result.requiresHumanReview, true);
@@ -52,15 +52,15 @@ test('routing uses only one unambiguous approved rule and permitted team; never 
   for (const rule of [
     { ...context.rules[0]!, approved: false }, { ...context.rules[0]!, organisationId: 'foreign' },
     { ...context.rules[0]!, effectiveTo: '2020-01-01T00:00:00Z' }, { ...context.rules[0]!, teamId: 'unpermitted-team' },
-  ]) assert.equal((await recommendRouting(tenant, ticket, 'ACCESS', { async getAuthorizedRoutingContext() { return { ...context, rules: [rule] }; } })).teamId, null);
+  ]) assert.equal((await recommendRouting(tenant, ticket, ['ACCESS'], { async getAuthorizedRoutingContext() { return { ...context, rules: [rule] }; } })).teamId, null);
 });
 
 test('routing reports absent/ambiguous data honestly and rejects foreign tenant context', async () => {
-  assert.equal((await recommendRouting(tenant, ticket, 'ACCESS')).status, 'unavailable');
+  assert.equal((await recommendRouting(tenant, ticket, ['ACCESS'])).status, 'unavailable');
   const competing = { ...context, eligibleTeams: [...context.eligibleTeams, { id: 'team-other', name: 'Other', organisationId: tenant.organisationId }],
     rules: [...context.rules, { ...context.rules[0]!, id: 'competing-rule', teamId: 'team-other' }] };
-  assert.equal((await recommendRouting(tenant, ticket, 'ACCESS', { async getAuthorizedRoutingContext() { return competing; } })).status, 'insufficient_information');
-  await assert.rejects(recommendRouting(tenant, ticket, 'ACCESS', { async getAuthorizedRoutingContext() { return { ...context, organisationId: 'foreign' }; } }));
+  assert.equal((await recommendRouting(tenant, ticket, ['ACCESS'], { async getAuthorizedRoutingContext() { return competing; } })).status, 'insufficient_information');
+  await assert.rejects(recommendRouting(tenant, ticket, ['ACCESS'], { async getAuthorizedRoutingContext() { return { ...context, organisationId: 'foreign' }; } }));
 });
 
 test('SLA insight passes through verified engine results without calculating deadlines', async () => {

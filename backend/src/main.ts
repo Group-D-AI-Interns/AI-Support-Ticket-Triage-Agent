@@ -4,7 +4,7 @@ import { createConfiguredServer } from "./server.ts";
 
 const environment = loadEnvironment();
 const logger = createLogger(environment.logLevel);
-const server = createConfiguredServer(environment);
+const server = await createConfiguredServer(environment);
 
 server.listen(environment.port, environment.host, () => {
   logger.info("API server listening", {
@@ -19,7 +19,7 @@ function shutdown(signal: string) {
   logger.info("API server shutting down", { signal });
   server.close((error) => {
     if (error) {
-      logger.error("API server shutdown failed", { error: error.message });
+      logger.error("API server shutdown failed", { errorType: error.name });
       process.exitCode = 1;
     }
   });

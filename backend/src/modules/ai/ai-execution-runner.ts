@@ -184,6 +184,7 @@ export class AiExecutionRunner {
       durationMs,
       startedAt: startedAt.toISOString(),
       completedAt: completedAt.toISOString(),
+      ...(validUsage(response.usage) ? { usage: validUsage(response.usage)! } : {}),
     };
 
     await this.logger.record({
@@ -194,6 +195,7 @@ export class AiExecutionRunner {
       model: response.model,
       attempts,
       durationMs,
+      ...(execution.usage ? { usage: execution.usage } : {}),
     });
 
     return { result, execution };
@@ -223,6 +225,13 @@ export class AiExecutionRunner {
       }
     }
   }
+}
+
+function validUsage(value: StructuredGenerationResponse['usage']): StructuredGenerationResponse['usage'] {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+  const entries = Object.entries(value);
+  if (entries.some(([key, count]) => !['promptTokens', 'completionTokens', 'totalTokens'].includes(key) || !Number.isSafeInteger(count) || (count as number) < 0)) return undefined;
+  return entries.length ? structuredClone(value) : undefined;
 }
 
 function normalizeProviderError(error: unknown): { code: string; message: string } {

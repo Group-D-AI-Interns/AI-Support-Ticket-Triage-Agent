@@ -9,6 +9,7 @@ import { createConfiguredServer } from '../src/server.js';
 import { createIntegratedApp } from '../src/integrated-app.js';
 import { loadEnvironment } from '../src/config/env.js';
 import { JsonFileStore } from '../src/infrastructure/persistence/json/json-file-store.js';
+import { MongoDatabase } from '../src/infrastructure/persistence/mongodb/mongo-database.js';
 import { KeycloakAuthenticationProvider } from '../src/infrastructure/auth/keycloak-authentication.js';
 import { createLiveTicketAiRuntime, liveTicketAiConfigurationFromEnvironment, LiveTicketAiConfigurationError } from '../src/modules/ai/live-ticket-ai-runtime.js';
 import { MistralEmbeddingProvider } from '../src/infrastructure/embeddings/mistral-embedding-provider.js';
@@ -47,35 +48,38 @@ async function close(server: Server) {
 }
 const deadline = setTimeout(() => { console.error('Verification exceeded four minutes.'); process.exit(1); }, 240_000);
 try {
-  await check('Normal startup configuration and public health', async () => {
-    const environment = loadEnvironment();
-    // Use a fresh data directory/ephemeral port, preserving all normal config guards.
-    const server = createConfiguredServer({ ...environment, dataDirectory: join(root, 'normal-startup'), port: 0 });
-    try {
-      const url = await listen(server);
-      for (const path of ['/health/live', '/health/ready']) {
-        assert.equal((await fetch(url + path, { signal: AbortSignal.timeout(5_000) })).status, 200);
-      }
-      const protectedRouteStatus = environment.authMode === 'disabled' ? 503 : 401;
-      assert.equal((await fetch(url + '/api/v1/tickets', { signal: AbortSignal.timeout(5_000) })).status, protectedRouteStatus);
-      const counts: Record<string, number> = {};
-      for (const collection of ['users', 'memberships', 'organisations']) {
-        try {
-          const envelope = JSON.parse(await readFile(join(resolve(environment.dataDirectory), `${collection}.json`), 'utf8')) as { records: Array<{ status?: string }> };
-          counts[collection] = envelope.records.filter(record => record.status === 'active').length;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-          counts[collection] = 0;
+  const mongoTestUri = process.env.MONGODB_TEST_URI?.trim();
+  if (!mongoTestUri) {
+    const blocked = { check: 'MongoDB-backed app startup and readiness', status: 'BLOCKED', detail: 'Set MONGODB_TEST_URI for an isolated temporary database; the main MONGODB_URI is never used by this verifier.' };
+    results.push(blocked);
+    console.log(JSON.stringify(blocked));
+  } else {
+    await check('MongoDB-backed app startup and readiness', async () => {
+      const verificationDatabase = `ai_support_verify_${Date.now()}`;
+      const environment = loadEnvironment({
+        ...process.env,
+        NODE_ENV: 'development', HOST: '127.0.0.1', PORT: '0', AUTH_MODE: 'disabled',
+        DATABASE_PROVIDER: 'mongodb', MONGODB_URI: mongoTestUri, MONGODB_DATABASE: verificationDatabase,
+      });
+      let server: Server | undefined;
+      try {
+        server = await createConfiguredServer({ ...environment, dataDirectory: join(root, 'normal-startup'), port: 0 });
+        const url = await listen(server);
+        for (const path of ['/health/live', '/health/ready']) {
+          assert.equal((await fetch(url + path, { signal: AbortSignal.timeout(5_000) })).status, 200);
         }
+        assert.equal((await fetch(url + '/api/v1/tickets', { signal: AbortSignal.timeout(5_000) })).status, 503);
+        return 'MongoDB connected; API health passed against an isolated disposable database';
+      } finally {
+        if (server) await close(server);
+        const cleanup = new MongoDatabase(mongoTestUri, verificationDatabase);
+        try {
+          await cleanup.connect();
+          await cleanup.db.dropDatabase();
+        } finally { await cleanup.close(); }
       }
-      if (Object.values(counts).some(count => count === 0)) {
-        const identity = { check: 'Configured real identity records', status: 'BLOCKED', detail: `Active record counts ${JSON.stringify(counts)}; real-user onboarding remains unverified` };
-        results.push(identity);
-        console.log(JSON.stringify(identity));
-      }
-      return `authMode=${environment.authMode}; protected routes reject missing tokens`;
-    } finally { await close(server); }
-  });
+    });
+  }
   if (process.env.AUTH_MODE === 'keycloak') {
     await check('Live Keycloak discovery and signing keys', async () => {
       const environment = loadEnvironment();
@@ -143,9 +147,9 @@ try {
         return `${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), privateKey).toString('base64url')}`;
       }
       const candidate = validatePriorityCandidate(JSON.parse(await readFile('data/reference/candidates/priority-policy.json', 'utf8')));
-      const server = createIntegratedApp(loadEnvironment({ DATA_DIRECTORY: data, LOG_LEVEL: 'error', PORT: '0' }), { authenticator }, {
+      const server = createIntegratedApp(loadEnvironment({ NODE_ENV: 'test', DATA_DIRECTORY: data, LOG_LEVEL: 'error', PORT: '0' }), { authenticator }, {
         ticketAiDemo: null, ticketAiLive: configuration, priorityPreview: { candidate, minimumConfidence: 0.75 },
-        settings: { dataDirectory: data, projectMappings: {}, organisations: {} },
+        dataDirectory: data,
         knowledgeSource: { async listAuthorizedDocuments(tenant) { return tenant.organisationId === 'synthetic-org' ? [{
           id: 'synthetic-runbook', version: '1', organisationId: tenant.organisationId, sourceType: 'knowledge_article',
           title: 'Synthetic account lockout runbook', content: 'For an account locked after failed login attempts: wait 15 minutes before trying to log in again. If the account remains locked, contact the service desk and provide the exact error message.',
@@ -187,18 +191,27 @@ try {
           ['policy.pdf', 'application/pdf', policyPdf()],
           ['policy.docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', policyDocx()],
         ] as const) {
-          const upload = new FormData();
-          upload.append('title', 'Synthetic response policy');
-          upload.append('file', new Blob([new Uint8Array(content)], { type: mimeType }), fileName);
-          const { data: uploaded } = await request('/api/v1/documents', 'POST', upload, 201);
-          const { data: processed } = await request(`/api/v1/documents/${uploaded.document.id}/process`, 'POST', {});
-          const extraction = processed.extraction.result;
-          assert.equal(extraction.status, 'succeeded', `${fileName} extraction must produce validated provider output`);
-          assert.notEqual(extraction.executionMetadata.provider, 'local-provisional');
-          assert.ok(extraction.rules.some((rule: { ruleType: string; payload: { targetHours?: number } }) =>
-            rule.ruleType === 'response_time' && rule.payload.targetHours === 2));
+          await check(`HTTP ${fileName.toUpperCase()} provider extraction`, async () => {
+            const upload = new FormData();
+            upload.append('title', 'Synthetic response policy');
+            upload.append('file', new Blob([new Uint8Array(content)], { type: mimeType }), fileName);
+            const { data: uploaded } = await request('/api/v1/documents', 'POST', upload, 201);
+            const response = await fetch(`${url}/api/v1/documents/${uploaded.document.id}/process`, { method: 'POST',
+              headers: { authorization: `Bearer ${token('synthetic-admin')}`, 'x-organisation-id': 'synthetic-org', 'content-type': 'application/json' },
+              body: '{}', signal: AbortSignal.timeout(55_000) });
+            const body = await response.json();
+            const extraction = body?.data?.extraction?.result;
+            if (!response.ok) {
+              const code = extraction?.failure?.code ?? body?.error?.code ?? `HTTP_${response.status}`;
+              throw Object.assign(new Error('Provider extraction did not return a successful result.'), { code });
+            }
+            assert.equal(extraction?.status, 'succeeded', `${fileName} extraction must produce validated provider output`);
+            assert.notEqual(extraction.executionMetadata.provider, 'local-provisional');
+            assert.ok(extraction.rules.some((rule: { ruleType: string; payload: { targetHours?: number } }) =>
+              rule.ruleType === 'response_time' && rule.payload.targetHours === 2));
+            return `Validated response_time candidate; provider=${extraction.executionMetadata.provider}`;
+          });
         }
-        console.log(JSON.stringify({ check: 'HTTP PDF/DOCX processing', status: 'PASS', detail: 'Provider-backed extraction returned validated candidates' }));
         const extractedRules = await request('/api/v1/extracted-rules');
         assert.ok(Array.isArray(extractedRules.data));
         console.log(JSON.stringify({ check: 'Candidate-review integration', status: 'PASS', detail: 'Authenticated candidate listing route is mounted' }));

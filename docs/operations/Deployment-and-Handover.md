@@ -1,6 +1,6 @@
 # Deployment and operational handover
 
-**Reviewed snapshot:** `FhuluBranch`, 20 November 2026. Working-tree changes are not yet committed.
+**Reviewed snapshot:** 24 November 2026. This repository is a changing working tree; verify the current revision and environment before using this handover.
 
 ## Deployment status
 
@@ -9,11 +9,14 @@ starts the shared Keycloak-authenticated application, including tickets, policie
 documents, AI, SLA evaluation and reporting. The ticket API is not a separate
 FastAPI service.
 
-**Do not publish this snapshot as a production system.** The current ticket attachment
-flow is a local-development prototype without malware scanning, the complete
-machine-readable API contract is not yet available for every module, and live
-Keycloak/hosting verification remains outstanding. The production persistence/storage
-decision is intentionally deferred and is not part of this handover update.
+**Not ready for production traffic.** MongoDB Atlas is the selected production database;
+the application adapter and migration tooling exist, but deployment cutover, production
+access controls and backup/restore remain to be verified. The generated integrated
+OpenAPI contract covers implemented routes but is not exhaustively proven against every
+runtime route. File bytes remain on local private storage without configured malware
+scanning or production object storage. Keycloak/user checks in the integration log are
+local evidence only. The authoritative current blocker list is
+[`production-readiness.md`](../deployment/production-readiness.md).
 
 ## Local development topology
 
@@ -52,7 +55,7 @@ Set-Location ..\..\backend
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-Confirm the local `AUTH_MODE`, `AUTH_ISSUER` and `AUTH_AUDIENCE` match the realm above. `KEYCLOAK_ADMIN_CLIENT_SECRET` is optional unless enabling invitations/profile updates. Never commit either `.env` file.
+Confirm the local `AUTH_MODE`, `AUTH_ISSUER` and `AUTH_AUDIENCE` match the realm above. Set `DATABASE_PROVIDER=mongodb`, provide the Atlas SRV URI in `MONGODB_URI`, and keep the intended database in `MONGODB_DATABASE`. The URI belongs only in the ignored `backend/.env` or a deployment secret store, never in `.env.example` or logs. `KEYCLOAK_ADMIN_CLIENT_SECRET` is optional unless enabling invitations/profile updates. Never commit either `.env` file.
 
 Run the backend checks and server from `backend/`:
 
@@ -71,11 +74,10 @@ The shared Node API exposes:
 | Endpoint | Meaning | Expected response |
 |---|---|---|
 | `GET /health/live` | HTTP process is running | `200` |
-| `GET /health/ready` | Configured JSON data directory can be listed and written | `200`; `503` with shared error envelope if storage is unavailable |
+| `GET /health/ready` | Configured MongoDB adapter can connect and answer a ping | `200`; `503` with shared error envelope if storage is unavailable |
 | `GET /api/v1/health` | Versioned API responds | `200`, version `v1` |
 
-Readiness uses a uniquely named temporary probe file and removes it; it does not
-contact Keycloak or validate every collection. A successful health response is not an
+Readiness runs a MongoDB ping; it does not contact Keycloak or validate every collection. A successful health response is not an
 end-to-end authentication check. Verify a real Keycloak access token with
 `GET /api/v1/me`, confirm its `iss` and `aud`, and check that the user has active
 server-side membership. Automated integration tests use a mocked JWKS endpoint; they
@@ -84,19 +86,22 @@ do not establish that a developer's real realm is configured correctly.
 Keycloak's Compose health check verifies only that its local HTTP port accepts
 connections; it is not a realm-import, login, SMTP or user-management check.
 
-## JSON data operations
+## MongoDB data operations
 
-`DATA_DIRECTORY` defaults to `./.local-data`, relative to the Node process working directory. The identity/organisation/team store uses schema-versioned JSON envelopes. Missing collection files read as empty collections; malformed JSON/schema and unreadable files return typed storage errors instead of silently resetting data. Writes use same-directory temporary files, atomic rename, a process queue and an exclusive lock file. `JSON_WRITE_LOCK_TIMEOUT_MS` defaults to 5000 ms.
+Normal API startup requires MongoDB in development and production. The server connects
+once, creates the application indexes and reports startup failure if MongoDB cannot be
+initialized. It never silently uses the JSON fixture adapter. The configured database
+stores application records in the `app_` collection namespace. `DATA_DIRECTORY` is still
+used for private document and attachment bytes; those files are separate from database
+records and do not move with the JSON-to-Mongo collection migration.
 
-Production persistence/storage selection, migration, and operational backup/restore
-approval are explicitly deferred. For local development only, treat this store as
-single-host data. Before a local backup, stop the Node API or take a consistent
-filesystem snapshot of the whole `DATA_DIRECTORY`. Back up the Keycloak PostgreSQL
-volume separately when local realm/user data matters. Restore the complete JSON
-directory, then call `/health/ready` and exercise tenant-scoped reads before reopening
-the API.
-
-If a write reports a stale lock timeout, inspect the named `*.json.lock` file and confirm no writer remains before removing it. Do not delete lock files while an API process may be writing. Preserve original files before manual repair of invalid JSON; never replace a malformed collection with an empty envelope without an approved recovery decision.
+JSON collection import is explicitly opt-in. First run the migration command without
+`--apply` to validate and inventory source records. Applying migration requires an empty
+MongoDB target and a protected source; the utility imports allowlisted records in a
+transaction and verifies per-collection counts. Do not point `--apply` at the main Atlas
+database until the source, target and backup are reviewed. Backup/restore operation still
+needs deployment verification. Unit tests and the offline synthetic demo may use isolated
+JSON fixture files, but they are not application runtime storage.
 
 ## Logging and secrets
 
@@ -104,10 +109,9 @@ The Node API logs JSON records with request ID, method, path, status and duratio
 
 ## Remaining work before a hosted deployment
 
-1. **API contract:** The ticket and SLA-evidence paths now have a machine-readable
-   contract in [ticket-openapi.json](../api/ticket-openapi.json). Extend and validate
-   OpenAPI coverage for the remaining integrated identity, documents, policies, AI,
-   SLA administration and reporting routes.
+1. **API contract:** The integrated generated contract is in
+   [integrated-openapi.json](../api/integrated-openapi.json). Exhaustive route/schema
+   conformance and browser-level acceptance remain unverified.
 2. **Attachments:** Keep ticket uploads development-only. Malware scanning and the
    approved production attachment-storage path are intentionally deferred until the
    production file stack is selected. Current upload validation is not malware scanning.
@@ -120,12 +124,13 @@ The Node API logs JSON records with request ID, method, path, status and duratio
 5. **SLA activation:** Keep the reference candidate draft until client entitlement,
    contractual targets, calendars, holidays and effective dates are verified by the
    relevant owners.
-6. **Deferred by decision:** Production persistence/storage selection and migration are
-   out of scope for the current continuation.
+6. **MongoDB operations:** Atlas is the selected application database and is mandatory
+   for normal startup. Complete environment-specific connectivity, migration/cutover,
+   backup and restore verification before production use.
 
 The latest recorded integration review is [Integration-Verification.md](../api/Integration-Verification.md).
 
-## Latest verification results
+## Earlier verification snapshot (20 November 2026)
 
 | Check | Result |
 |---|---|
@@ -136,3 +141,17 @@ The latest recorded integration review is [Integration-Verification.md](../api/I
 | Ticket/workflow/SLA OpenAPI JSON | Passed: parses as OpenAPI 3.1 JSON; all 132 internal references and templated path parameters resolve across 14 paths. |
 | Local Keycloak discovery and service-account token | Passed; the exact three direct user-management role mappings were verified. A human user's login and tenant authorization remain unverified. The effective `view-users` composite includes `query-groups`. |
 | SMTP and hosted deployment | Not verified/configured here. Production attachment scanning is intentionally deferred. |
+
+## MongoDB runtime switch verification (24 November 2026)
+
+Normal startup now selects MongoDB in development and production; JSON persistence is
+accepted only in tests and the isolated offline demo. Environment configuration checks,
+backend source type-check, full source/test TypeScript check, and production build passed.
+An in-process configuration smoke check confirmed MongoDB selection and that missing
+configuration or explicit JSON in development fails closed. The focused Node test runner
+could not start because the sandbox returned `spawn EPERM`. The current Atlas URI passed a
+read-only ping, and Mongo file-store initialization/index setup plus readiness passed. The
+approved import then loaded 80 records across 18 collections transactionally; per-collection
+counts matched and source JSON remains unchanged. Document/attachment bytes were not moved,
+and no API server/workers were started. See [the current integration verification](../api/Integration-Verification.md)
+for the latest status.

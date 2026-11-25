@@ -55,7 +55,7 @@ export function ticketAiDemoConfigurationFromEnvironment(
     );
   }
 
-  return { categories: ticketAiCategoriesFromEnvironment(environment) };
+  return { categories: environment.TICKET_AI_CATEGORIES ? ticketAiCategoriesFromEnvironment(environment) : [] };
 }
 
 export function ticketAiCategoriesFromEnvironment(
@@ -222,15 +222,21 @@ function classifyWithConfiguredTerms(input: unknown): unknown {
     return { categoryId, matches };
   });
   scored.sort((left, right) => right.matches.length - left.matches.length);
-  const best = scored[0];
-  const hasMatch = best !== undefined && best.matches.length > 0;
+  const matched = scored.filter(candidate => candidate.matches.length > 0);
+  const evidence = matched.flatMap(candidate => candidate.matches.map(term => {
+    const field = ticket.title.toLowerCase().includes(term) ? 'title' as const : 'description' as const;
+    const source = ticket[field];
+    const start = source.toLowerCase().indexOf(term);
+    return { categoryId: candidate.categoryId, field, start, end: start + term.length, excerpt: source.slice(start, start + term.length) };
+  }));
 
   return {
-    category: hasMatch ? best.categoryId : null,
-    reason: hasMatch
-      ? `The local demo heuristic matched these configured terms: ${best.matches.join(', ')}.`
+    categories: matched.map(candidate => candidate.categoryId),
+    reason: matched.length > 0
+      ? `The local demo heuristic matched configured category terms: ${matched.flatMap(row => row.matches).join(', ')}.`
       : 'The local demo heuristic found no configured category-term match.',
     confidence: null,
+    evidence,
     requiresHumanReview: true,
     warnings: ['DEMO_ONLY: deterministic keyword heuristic; not an LLM or calibrated classification.'],
   };
@@ -249,6 +255,7 @@ function summarizeExtractively(input: unknown): unknown {
       /\b(reset|restarted|restart|tried|attempted|reinstalled|installed|cleared|updated|ran|run|changed)\b/i
         .test(sentence),
     ),
+    affectedFunctionality: null,
     businessImpact: null,
     missingInformation: [],
     warnings: ['DEMO_ONLY: extractive summary; not an LLM-generated or completeness-checked summary.'],

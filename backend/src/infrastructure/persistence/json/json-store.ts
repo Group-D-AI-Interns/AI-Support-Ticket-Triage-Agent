@@ -1,4 +1,4 @@
-import { JsonFileStore, JsonStorageError, type JsonEnvelope } from './json-file-store.js';
+import { JsonFileStore, JsonStorageError, updateTenantRecords, type JsonEnvelope, type JsonFileStorePort, type RecordQuery } from './json-file-store.js';
 
 export type JsonCollectionName =
   | 'documents'
@@ -14,10 +14,17 @@ export type JsonCollectionName =
 
 export interface JsonTenantStore {
   readCollection<T>(collection: JsonCollectionName): Promise<T[]>;
+  queryCollection<T>(collection: JsonCollectionName, query: RecordQuery): Promise<T[]>;
   writeCollection<T>(collection: JsonCollectionName, records: T[]): Promise<void>;
   updateCollection<T, R>(collection: JsonCollectionName, mutate: (records: T[]) => R | Promise<R>): Promise<R>;
+  updateTenantCollection<T, R>(collection: JsonCollectionName, organisationId: string, mutate: (records: T[]) => R | Promise<R>): Promise<R>;
   withCollectionLock<R>(collection: JsonCollectionName, operation: () => Promise<R>): Promise<R>;
+  runExclusive<R>(name: string, operation: () => Promise<R>): Promise<R>;
   rootDir: string;
+}
+
+export interface TenantCollectionStore extends JsonTenantStore {
+  readonly rootDir: string;
 }
 
 type TenantRecord = { id: string; organisationId: string };
@@ -42,8 +49,8 @@ function migrateLegacyArray(value: unknown): JsonEnvelope<TenantRecord> | null {
 }
 
 /** Compatibility boundary preserving existing filenames, backed by the shared safe store. */
-export function createJsonTenantStore(storeOrRootDir: JsonFileStore | string, lockTimeoutMs = 5000): JsonTenantStore {
-  const files = typeof storeOrRootDir === 'string'
+export function createJsonTenantStore(storeOrRootDir: JsonFileStorePort | string, lockTimeoutMs = 5000): JsonTenantStore {
+  const files: JsonFileStorePort = typeof storeOrRootDir === 'string'
     ? new JsonFileStore(storeOrRootDir, lockTimeoutMs)
     : storeOrRootDir;
 
@@ -56,6 +63,14 @@ export function createJsonTenantStore(storeOrRootDir: JsonFileStore | string, lo
         migrateLegacyArray,
       );
       return envelope.records as T[];
+    },
+    async queryCollection<T>(collection: JsonCollectionName, query: RecordQuery): Promise<T[]> {
+      return files.findRecords<TenantRecord>(
+        `${collection}.json`,
+        isTenantRecord,
+        query,
+        migrateLegacyArray,
+      ) as Promise<T[]>;
     },
     async writeCollection<T>(collection: JsonCollectionName, records: T[]): Promise<void> {
       const envelope: JsonEnvelope<T> = { schemaVersion: 1, records };
@@ -72,8 +87,15 @@ export function createJsonTenantStore(storeOrRootDir: JsonFileStore | string, lo
         migrateLegacyArray,
       );
     },
+    async updateTenantCollection<T, R>(collection: JsonCollectionName, organisationId: string, mutate: (records: T[]) => R | Promise<R>): Promise<R> {
+      return updateTenantRecords<TenantRecord, R>(files, `${collection}.json`, organisationId, isTenantRecord,
+        records => mutate(records as T[]), migrateLegacyArray);
+    },
     async withCollectionLock<R>(collection: JsonCollectionName, operation: () => Promise<R>): Promise<R> {
       return files.runExclusive(`${collection}-operation.json`, operation);
+    },
+    async runExclusive<R>(name: string, operation: () => Promise<R>): Promise<R> {
+      return files.runExclusive(name, operation);
     },
   };
 }

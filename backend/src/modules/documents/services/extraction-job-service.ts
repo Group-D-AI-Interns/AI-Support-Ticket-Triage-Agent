@@ -28,10 +28,11 @@ export class ExtractionJobService {
       throw new Error('Document does not exist for this tenant.');
     }
 
-    const versions = await this.store.readCollection<{ id: string; documentId: string; organisationId: string; version: number }>('documentVersions');
-    const version = versions
-      .filter((item) => item.organisationId === input.tenant.organisationId)
-      .find((item) => item.documentId === document.id && item.version === document.version);
+    const [version] = await this.store.queryCollection<{ id: string; documentId: string; organisationId: string; version: number }>('documentVersions', {
+      organisationId: input.tenant.organisationId,
+      documentId: document.id,
+      version: document.version,
+    });
     if (!version) {
       throw new Error('Document version does not exist for this tenant.');
     }

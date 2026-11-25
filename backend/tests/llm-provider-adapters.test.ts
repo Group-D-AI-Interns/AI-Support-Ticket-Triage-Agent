@@ -41,6 +41,7 @@ test('OpenAI-compatible LLM adapter sends structured JSON request and parses its
       capturedInit = init;
       return Response.json({
         choices: [{ message: { content: '{"ok":true}' } }],
+        usage: { prompt_tokens: 17, completion_tokens: 5, total_tokens: 22 },
       });
     },
   });
@@ -54,6 +55,14 @@ test('OpenAI-compatible LLM adapter sends structured JSON request and parses its
   assert.equal(body.max_tokens, 321);
   assert.equal(result.provider, 'groq');
   assert.deepEqual(result.output, { ok: true });
+  assert.deepEqual(result.usage, { promptTokens: 17, completionTokens: 5, totalTokens: 22 });
+});
+
+test('LLM adapter ignores missing or malformed provider token counts', async () => {
+  const provider = new OpenAiCompatibleProvider({ name: 'groq', baseUrl: 'https://api.groq.com/openai/v1', apiKey: 'test-key', timeoutMs: 1000,
+    fetcher: async () => Response.json({ choices: [{ message: { content: '{"ok":true}' } }], usage: { prompt_tokens: -1, completion_tokens: 'unknown' } }) });
+  const result = await provider.generateStructured(request);
+  assert.equal(result.usage, undefined);
 });
 
 test('LLM adapter normalizes provider errors without exposing response content', async () => {
@@ -239,7 +248,7 @@ test('Mistral embedding adapter validates and preserves response order', async (
   );
 });
 
-test('live configuration requires explicit development opt-in, categories, providers and credentials', () => {
+test('live configuration requires explicit development opt-in, providers and credentials; tenant categories may be configured at runtime', () => {
   const baseEnvironment = {
     APP_ENV: 'development',
     TICKET_AI_LIVE_ENABLED: 'true',
@@ -261,6 +270,7 @@ test('live configuration requires explicit development opt-in, categories, provi
   assert.equal(configuration?.summarizationProvider, 'groq');
   assert.equal(configuration?.timeoutMs, 20_000);
   assert.equal(configuration?.inceptionBackoffMaxMs, 8_000);
+  assert.deepEqual(liveTicketAiConfigurationFromEnvironment({ ...baseEnvironment, TICKET_AI_CATEGORIES: undefined })?.categories, []);
 
   assert.throws(
     () =>
@@ -322,9 +332,10 @@ test('live ticket orchestrator validates classification and summary after Incept
       const systemMessage = requestBody.messages[0].content as string;
       const output = systemMessage.includes('Classify the ticket')
         ? {
-            category: 'ACCOUNT_ACCESS',
+            categories: ['ACCOUNT_ACCESS'],
             reason: 'The ticket describes an account lockout.',
             confidence: 0.8,
+            evidence: [{ categoryId: 'ACCOUNT_ACCESS', field: 'title', start: 0, end: 27, excerpt: 'Unable to access my account' }],
             requiresHumanReview: false,
             warnings: [],
           }
@@ -332,6 +343,7 @@ test('live ticket orchestrator validates classification and summary after Incept
             summary: 'The requester cannot access their account.',
             symptoms: ['Unable to access my account'],
             attemptedActions: ['Reset the password.'],
+            affectedFunctionality: 'Account sign-in',
             businessImpact: null,
             missingInformation: [],
             warnings: [],
@@ -351,7 +363,7 @@ test('live ticket orchestrator validates classification and summary after Incept
     categories: configuration.categories,
   });
 
-  assert.equal(analysis.classification.category, 'ACCOUNT_ACCESS');
+  assert.deepEqual(analysis.classification.categories, ['ACCOUNT_ACCESS']);
   assert.match(analysis.summary.summary, /cannot access/i);
   assert.deepEqual(
     analysis.executions.map((execution) => execution.provider),

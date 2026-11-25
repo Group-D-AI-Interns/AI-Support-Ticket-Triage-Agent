@@ -2,9 +2,104 @@ import { randomUUID } from "node:crypto";
 import { mkdir, open, readFile, readdir, rename, rm } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { isDeepStrictEqual } from "node:util";
 
 export type JsonEnvelope<T> = { schemaVersion: 1; records: T[] };
 export type JsonEnvelopeMigration<T> = (value: unknown) => JsonEnvelope<T> | null;
+export type RecordQuery = Record<string, unknown>;
+
+/** Persistence contract shared by the local JSON adapter and MongoDB adapter. */
+export interface JsonFileStorePort {
+  readonly rootDir: string;
+  checkReady(): Promise<void>;
+  read<T>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>, migrate?: JsonEnvelopeMigration<T>): Promise<JsonEnvelope<T>>;
+  findRecords<T>(name: string, validateRecord: (value: unknown) => value is T, query: RecordQuery, migrate?: JsonEnvelopeMigration<T>): Promise<T[]>;
+  write<T>(name: string, envelope: JsonEnvelope<T>): Promise<void>;
+  runExclusive<R>(name: string, action: () => Promise<R>): Promise<R>;
+  update<T, R>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>, mutate: (envelope: JsonEnvelope<T>) => R | Promise<R>, migrate?: JsonEnvelopeMigration<T>): Promise<R>;
+  updateTenant?<T extends { id: string; organisationId: string }, R>(name: string, organisationId: string, validateRecord: (value: unknown) => value is T, mutate: (records: T[]) => R | Promise<R>): Promise<R>;
+  insertRecord?<T extends { id: string }>(name: string, validateRecord: (value: unknown) => value is T, record: T): Promise<void>;
+  mutateRecord?<T extends { id: string }, R>(name: string, id: string, validateRecord: (value: unknown) => value is T, mutate: (record: T | null) => { record: T | null; result: R } | Promise<{ record: T | null; result: R }>): Promise<R>;
+}
+
+/** Insert one record atomically in adapters that support record-level writes. */
+export async function insertRecord<T extends { id: string }>(store: JsonFileStorePort, name: string, validateRecord: (value: unknown) => value is T, record: T): Promise<void> {
+  if (!validateRecord(record) || !record.id.trim()) throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Invalid record for ${name}.`);
+  if (store.insertRecord) return store.insertRecord(name, validateRecord, record);
+  await store.update<T, void>(name, (value): value is JsonEnvelope<T> => isRecordEnvelope(value, validateRecord), envelope => {
+    if (envelope.records.some(item => item.id === record.id)) throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Duplicate record ID in ${name}.`);
+    envelope.records.push(structuredClone(record));
+  });
+}
+
+/** Change or remove one record by ID without loading unrelated records in MongoDB. */
+export async function mutateRecordById<T extends { id: string }, R>(
+  store: JsonFileStorePort,
+  name: string,
+  id: string,
+  validateRecord: (value: unknown) => value is T,
+  mutate: (record: T | null) => { record: T | null; result: R } | Promise<{ record: T | null; result: R }>,
+): Promise<R> {
+  if (store.mutateRecord) return store.mutateRecord(name, id, validateRecord, mutate);
+  return store.update<T, R>(name, (value): value is JsonEnvelope<T> => isRecordEnvelope(value, validateRecord), async envelope => {
+    const existing = envelope.records.find(record => record.id === id) ?? null;
+    const outcome = await mutate(existing ? structuredClone(existing) : null);
+    if (outcome.record !== null && (!validateRecord(outcome.record) || outcome.record.id !== id)) {
+      throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Updated record in ${name} is invalid or changed its ID.`);
+    }
+    if (!existing && outcome.record !== null && envelope.records.some(record => record.id === id)) {
+      throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Duplicate record ID in ${name}.`);
+    }
+    if (existing) {
+      const index = envelope.records.indexOf(existing);
+      if (outcome.record === null) envelope.records.splice(index, 1);
+      else envelope.records[index] = outcome.record;
+    } else if (outcome.record !== null) envelope.records.push(outcome.record);
+    return outcome.result;
+  });
+}
+
+/** Tenant-scoped update on MongoDB, with a compatibility fallback for local JSON files. */
+export async function updateTenantRecords<T extends { id: string; organisationId: string }, R>(
+  store: JsonFileStorePort,
+  name: string,
+  organisationId: string,
+  validateRecord: (value: unknown) => value is T,
+  mutate: (records: T[]) => R | Promise<R>,
+  migrate?: JsonEnvelopeMigration<T>,
+): Promise<R> {
+  if (store.updateTenant) return store.updateTenant(name, organisationId, validateRecord, mutate);
+
+  return store.update<T, R>(name,
+    (value): value is JsonEnvelope<T> => isRecordEnvelope(value, validateRecord),
+    async envelope => {
+      const tenantRecords = envelope.records.filter(record => record.organisationId === organisationId);
+      const result = await mutate(tenantRecords);
+      if (!tenantRecords.every(record => validateRecord(record) && record.organisationId === organisationId)) {
+        throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Updated collection ${name} changed tenant ownership.`);
+      }
+      const nextById = new Map<string, T>();
+      for (const record of tenantRecords) {
+        if (nextById.has(record.id)) throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Updated collection ${name} contains duplicate tenant record IDs.`);
+        nextById.set(record.id, record);
+      }
+      if (envelope.records.some(record => record.organisationId !== organisationId && nextById.has(record.id))) {
+        throw new JsonStorageError('STORAGE_INVALID_SCHEMA', `Updated collection ${name} reused a record ID owned by another tenant.`);
+      }
+      const remaining = new Map(nextById);
+      envelope.records = envelope.records.flatMap(record => {
+        if (record.organisationId !== organisationId) return [record];
+        const replacement = remaining.get(record.id);
+        if (!replacement) return [];
+        remaining.delete(record.id);
+        return [replacement];
+      });
+      envelope.records.push(...remaining.values());
+      return result;
+    },
+    migrate,
+  );
+}
 
 export class JsonStorageError extends Error {
   public readonly code: "STORAGE_IO_ERROR" | "STORAGE_INVALID_JSON" | "STORAGE_INVALID_SCHEMA";
@@ -17,7 +112,7 @@ export class JsonStorageError extends Error {
 }
 
 /** Process-local serialized writes plus same-directory atomic replacement. */
-export class JsonFileStore {
+export class JsonFileStore implements JsonFileStorePort {
   private readonly writeQueues = new Map<string, Promise<unknown>>();
   private readonly root: string;
   private readonly lockTimeoutMs: number;
@@ -86,6 +181,12 @@ export class JsonFileStore {
       assertUniqueRecordIds(name, envelope.records);
       await this.writeUnlocked(name, envelope);
     });
+  }
+
+  async findRecords<T>(name: string, validateRecord: (value: unknown) => value is T, query: RecordQuery, migrate?: JsonEnvelopeMigration<T>): Promise<T[]> {
+    const envelope = await this.read(name, (value): value is JsonEnvelope<T> =>
+      isRecordEnvelope(value, validateRecord), migrate);
+    return envelope.records.filter(record => matchesRecordQuery(record, query));
   }
 
   /** Coordinate a legacy repository's complete read/modify/write operation. */
@@ -184,6 +285,33 @@ export class JsonFileStore {
     }
     return path;
   }
+}
+
+function isRecordEnvelope<T>(value: unknown, validateRecord: (record: unknown) => record is T): value is JsonEnvelope<T> {
+  return !!value && typeof value === "object" && !Array.isArray(value) &&
+    (value as { schemaVersion?: unknown }).schemaVersion === 1 &&
+    Array.isArray((value as { records?: unknown }).records) &&
+    (value as { records: unknown[] }).records.every(validateRecord);
+}
+
+function matchesRecordQuery(record: unknown, query: RecordQuery): boolean {
+  if (!record || typeof record !== "object" || Array.isArray(record)) return false;
+  const row = record as Record<string, unknown>;
+  return Object.entries(query).every(([field, expected]) => {
+    if (field === "$or") {
+      return Array.isArray(expected) && expected.some(clause => matchesRecordQuery(record, clause as RecordQuery));
+    }
+    if (field === "$and") {
+      return Array.isArray(expected) && expected.every(clause => matchesRecordQuery(record, clause as RecordQuery));
+    }
+    const actual = field.split(".").reduce<unknown>((value, part) =>
+      value && typeof value === "object" ? (value as Record<string, unknown>)[part] : undefined, row);
+    if (expected && typeof expected === "object" && !Array.isArray(expected) && "$in" in expected) {
+      const values = (expected as { $in?: unknown }).$in;
+      return Array.isArray(values) && values.some(value => isDeepStrictEqual(value, actual));
+    }
+    return isDeepStrictEqual(actual, expected);
+  });
 }
 
 function assertUniqueRecordIds(name: string, records: unknown[]): void {

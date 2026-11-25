@@ -34,14 +34,14 @@ export class TicketAiTriageService {
       try { return { status: 'completed', data: await action() }; }
       catch { return { status: 'failed', code: `${code}_FAILED`, data: null }; }
     }
-    const priority = await optional(this.capabilities.priority ? () => this.capabilities.priority!.recommend(structuredClone(ticket)) : undefined, 'PRIORITY');
+    const priority = await optional(this.capabilities.priority ? () => this.capabilities.priority!.recommend(structuredClone(ticket), input.tenant) : undefined, 'PRIORITY');
     const knowledge = await optional(this.capabilities.knowledge ? () => this.capabilities.knowledge!.listAuthorizedDocuments(input.tenant) : undefined, 'KNOWLEDGE_SOURCE');
     const documents = knowledge.status === 'completed' ? structuredClone(knowledge.data) : null;
     const retrieval = documents ? new KnowledgeRetriever({ async listAuthorizedDocuments() { return structuredClone(documents); } }) : null;
     const evidence = knowledge.status === 'failed' ? knowledge : await optional(retrieval ? () => retrieval.retrieve(input.tenant, `${ticket.title}\n${ticket.description}`, { excludeTicketId: ticket.id }) : undefined, 'RETRIEVAL');
     const resolution = knowledge.status === 'failed' ? knowledge : await optional(retrieval && this.capabilities.resolutionRunner
       ? () => new ResolutionRecommendationService(source, retrieval, this.capabilities.resolutionRunner!).recommend(input.tenant, ticket.id) : undefined, 'RESOLUTION');
-    const routing = await optional(() => recommendRouting(input.tenant, ticket, core.classification.category, this.capabilities.routing), 'ROUTING');
+    const routing = await optional(() => recommendRouting(input.tenant, ticket, core.classification.categories, this.capabilities.routing), 'ROUTING');
     const sla = await optional(() => verifiedSlaInsight(input.tenant, ticket, this.capabilities.sla), 'SLA');
     return { ticketId: ticket.id, organisationId: ticket.organisationId, requiresHumanReview: true as const, core,
       priority, evidence, resolution, routing, sla };

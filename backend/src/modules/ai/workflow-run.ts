@@ -9,6 +9,7 @@ export type AiWorkflowRun = AnalysisOrchestration & {
 };
 const text = z.string().trim().min(1);
 const timestamp = z.iso.datetime({ offset: true });
+const usage = z.strictObject({ promptTokens: z.number().int().nonnegative().optional(), completionTokens: z.number().int().nonnegative().optional(), totalTokens: z.number().int().nonnegative().optional() });
 export const orchestrationSchema = z.strictObject({
   engine: z.literal('langgraph'), version: z.literal('ticket-analysis-v1'), runId: text,
   status: z.enum(['completed', 'insufficient_information', 'invalid_analysis', 'failed']),
@@ -18,7 +19,8 @@ export const orchestrationSchema = z.strictObject({
 });
 const execution = z.strictObject({ executionId: text, task: z.enum(['ticket_classification', 'ticket_summarization']), status: z.literal('completed'),
   validationRetryOf: text.optional(),
-  provider: text, model: text, attempts: z.number().int().positive(), durationMs: z.number().finite().nonnegative(), startedAt: timestamp, completedAt: timestamp });
+  provider: text, model: text, attempts: z.number().int().positive(), durationMs: z.number().finite().nonnegative(), startedAt: timestamp, completedAt: timestamp,
+  usage: usage.optional() });
 const runSchema = orchestrationSchema.extend({
   organisationId: text, ticketId: text, initiatedBy: text, executions: z.array(execution).max(2),
   failure: z.object({ code: text, executionId: text, task: z.enum(['ticket_classification', 'ticket_summarization']) }).nullable(),

@@ -32,6 +32,8 @@ export type SlaPolicy = {
   effectiveFrom: string;
   effectiveTo: string | null;
   calendar: SlaCalendar;
+  /** Optional priority-specific calendars; legacy policies continue to use `calendar`. */
+  calendarByPriority?: Record<string, SlaCalendar>;
   targetsByPriority: Record<string, SlaTargets>;
   pausedStatuses: string[];
   resolvedStatuses: string[];
@@ -68,8 +70,14 @@ export function parseSlaPolicy(
     throw new SlaPolicyValidationError('payload', 'SLA policy must be an object.');
   }
 
-  const calendar = parseCalendar(value.calendar);
   const targetsByPriority = parseTargets(value.targetsByPriority);
+  const calendarByPriority = parseCalendarsByPriority(value.calendarByPriority, targetsByPriority);
+  const calendar = value.calendar === undefined
+    ? calendarByPriority?.[Object.keys(targetsByPriority)[0]!]
+    : parseCalendar(value.calendar);
+  if (!calendar) {
+    throw new SlaPolicyValidationError('calendar', 'A shared calendar or a calendar for each configured priority is required.');
+  }
   const pausedStatuses = parseStatuses(value.pausedStatuses, 'pausedStatuses');
   const resolvedStatuses = parseStatuses(
     value.resolvedStatuses,
@@ -120,11 +128,27 @@ export function parseSlaPolicy(
     ...source,
     ...(teamIds === undefined ? {} : { teamIds }),
     calendar,
+    ...(calendarByPriority === undefined ? {} : { calendarByPriority }),
     targetsByPriority,
     pausedStatuses,
     resolvedStatuses,
     riskAtPercent,
   };
+}
+
+function parseCalendarsByPriority(
+  value: unknown,
+  targetsByPriority: Record<string, SlaTargets>,
+): Record<string, SlaCalendar> | undefined {
+  if (value === undefined) return undefined;
+  if (!isRecord(value)) {
+    throw new SlaPolicyValidationError('calendarByPriority', 'Priority calendars must be an object.');
+  }
+  const priorities = Object.keys(targetsByPriority);
+  if (Object.keys(value).length !== priorities.length || priorities.some(priority => !Object.hasOwn(value, priority))) {
+    throw new SlaPolicyValidationError('calendarByPriority', 'A calendar is required for every configured priority and no others.');
+  }
+  return Object.fromEntries(priorities.map(priority => [priority, parseCalendar(value[priority])]));
 }
 
 function parseOptionalIds(value: unknown, field: string): string[] | undefined {

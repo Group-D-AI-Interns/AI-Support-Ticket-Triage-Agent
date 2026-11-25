@@ -8,6 +8,7 @@ export function createTriageWorker(configuration: AutomationConfiguration, jobs:
   let timer: ReturnType<typeof setInterval> | undefined;
   let busy = false;
   let stopped = false;
+  let inFlight: Promise<void> | undefined;
   const cursors = new Map<string, number>();
   // Trusted injected test configurations default to this process's startup boundary.
   const createdAfter = Date.parse(configuration.createdAfter ?? new Date().toISOString());
@@ -40,10 +41,20 @@ export function createTriageWorker(configuration: AutomationConfiguration, jobs:
       if (!stopped) await jobs.tick();
     } finally { busy = false; }
   }
-  const safeTick = () => { void tick().catch(() => { if (!stopped) console.warn('AI worker tick failed; pending jobs remain recoverable.'); }); };
+  const safeTick = () => {
+    if (inFlight) return;
+    inFlight = tick()
+      .catch(() => { if (!stopped) console.warn('AI worker tick failed; pending jobs remain recoverable.'); })
+      .finally(() => { inFlight = undefined; });
+  };
   return { intake, tick, start() {
     if (!configuration.enabled || timer) return;
     stopped = false;
     safeTick(); timer = setInterval(safeTick, configuration.intervalMs); timer.unref();
-  }, stop() { stopped = true; if (timer) clearInterval(timer); timer = undefined; } };
+  }, async stop() {
+    stopped = true;
+    if (timer) clearInterval(timer);
+    timer = undefined;
+    await inFlight;
+  } };
 }

@@ -17,12 +17,14 @@ export class TriageJobs {
     if (!actor) throw new AiOperationsError(403, 'AI_ACTOR_UNAVAILABLE', 'The processing user is not currently authorized.');
     const ticket = await this.operations.ticket(actor, ticketId);
     const snapshotHash = ticketSnapshotHash(this.operations.deps.project(ticket));
-    const key = JSON.stringify([tenant.organisationId, tenant.userId, ticketId, snapshotHash, this.operations.deps.categories(), 'triage-v1']);
+    const categories = await this.operations.categories(actor);
+    if (!categories.length) throw new AiOperationsError(503, 'TICKET_CATEGORIES_NOT_CONFIGURED', 'Configure ticket categories before triage.');
+    const key = JSON.stringify([tenant.organisationId, tenant.userId, ticketId, snapshotHash, categories, 'triage-v2']);
     const id = automatic ? `job_${createHash('sha256').update(key).digest('hex')}` : `job_${randomUUID()}`;
     const now = new Date(this.clock()).toISOString();
     const job: OfKind<'job'> = { id, kind: 'job', organisationId: tenant.organisationId, actorId: tenant.userId, createdAt: now, updatedAt: now,
       data: { ticketId, snapshotHash, automatic, status: 'queued', attempts: 0, maxAttempts: automatic ? limits.maxAttemptsPerJob : 3, availableAt: now, leaseUntil: null, leaseToken: null, reportId: null, errorCode: null } };
-    return this.operations.store.change(rows => {
+    return this.operations.store.changeForOrganisation(tenant.organisationId, rows => {
       const existing = rows.find(item => item.kind === 'job' && item.id === id && item.organisationId === tenant.organisationId);
       if (existing) return existing as OfKind<'job'>;
       if (automatic && rows.filter(row => row.kind === 'job' && row.organisationId === tenant.organisationId && row.data.automatic !== false && row.createdAt.slice(0, 10) === now.slice(0, 10)).length >= limits.maxJobsPerDay) {
@@ -39,8 +41,10 @@ export class TriageJobs {
     return job;
   }
   async process(id: string) {
+    const selectedJob = await this.operations.store.findJobById(id);
+    if (!selectedJob) return;
     const token = randomUUID();
-    const job = await this.operations.store.change(rows => {
+    const job = await this.operations.store.changeForOrganisation(selectedJob.organisationId, rows => {
       const target = rows.find(item => item.kind === 'job' && item.id === id) as OfKind<'job'> | undefined;
       if (!target || target.data.status === 'completed' || target.data.status === 'failed') return null;
       if (target.data.status === 'running' && Date.parse(target.data.leaseUntil!) > this.clock()) return null;
@@ -64,7 +68,7 @@ export class TriageJobs {
       if (!currentActor) throw new AiOperationsError(403, 'ACCESS_REVOKED', 'Processing access was revoked.');
       const latest = await this.operations.ticket(currentActor, job.data.ticketId);
       if (ticketSnapshotHash(this.operations.deps.project(latest)) !== job.data.snapshotHash) throw new AiOperationsError(409, 'STALE_JOB', 'Ticket changed during processing.');
-      await this.operations.store.change(rows => {
+      await this.operations.store.changeForOrganisation(job.organisationId, rows => {
         const current = rows.find(item => item.kind === 'job' && item.id === id) as OfKind<'job'>;
         if (current.data.leaseToken !== token || current.data.status !== 'running') return;
         if (!rows.some(item => item.kind === 'report' && item.id === reportId)) rows.push(report!);
@@ -73,7 +77,7 @@ export class TriageJobs {
       });
     } catch (error) {
       const transient = error instanceof AiExecutionError && ['TIMEOUT', 'NETWORK_ERROR', 'RATE_LIMITED', 'PROVIDER_UNAVAILABLE'].includes(error.code);
-      await this.operations.store.change(rows => {
+      await this.operations.store.changeForOrganisation(job.organisationId, rows => {
         const current = rows.find(item => item.kind === 'job' && item.id === id) as OfKind<'job'>;
         if (current.data.leaseToken !== token || current.data.status !== 'running') return;
         current.data.status = transient && current.data.attempts < current.data.maxAttempts ? 'queued' : 'failed';
@@ -84,9 +88,9 @@ export class TriageJobs {
     }
   }
   async tick() {
-    const jobs = (await this.operations.store.all()).filter((row): row is OfKind<'job'> => row.kind === 'job' &&
-      ((row.data.status === 'queued' && Date.parse(row.data.availableAt) <= this.clock()) ||
-       (row.data.status === 'running' && Date.parse(row.data.leaseUntil!) <= this.clock())));
+    const jobs = (await this.operations.store.listJobsForPolling()).filter(row =>
+      (row.data.status === 'queued' && Date.parse(row.data.availableAt) <= this.clock()) ||
+      (row.data.status === 'running' && Date.parse(row.data.leaseUntil!) <= this.clock()));
     for (const job of jobs.slice(0, 20)) await this.process(job.id);
   }
 }

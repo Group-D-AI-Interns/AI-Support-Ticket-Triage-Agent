@@ -60,7 +60,7 @@ export class TicketAnalysisGraph {
       .addConditionalEdges('classify', state => state.failure ? (state.status === 'invalid_analysis' ? 'invalid' : 'execution_failed') : 'summarize', ['invalid', 'execution_failed', 'summarize'])
       .addConditionalEdges('summarize', state => {
         if (state.failure) return state.status === 'invalid_analysis' ? 'invalid' : 'execution_failed';
-        return state.classification?.category === null || state.classification?.confidence === null || state.classification?.requiresHumanReview || state.summary?.missingInformation.length ? 'review' : 'complete';
+        return state.classification?.categories.length === 0 || state.classification?.confidence === null || state.classification?.requiresHumanReview || state.summary?.missingInformation.length ? 'review' : 'complete';
       }, ['invalid', 'execution_failed', 'review', 'complete'])
       .addEdge('review', END).addEdge('complete', END).addEdge('invalid', END).addEdge('execution_failed', END)
       .compile(); // No checkpointer/store. Application result files are not graph checkpoints.

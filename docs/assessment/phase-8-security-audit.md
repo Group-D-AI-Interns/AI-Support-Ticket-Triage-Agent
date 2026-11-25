@@ -1,0 +1,34 @@
+# Phase 8 — Authentication, authorisation and security audit
+
+**Status:** Backend controls and synthetic regression verification, 24 November 2026. This is not a live penetration test or production deployment certification.
+
+## Verified in the repository
+
+- **Authentication:** Production configuration requires `AUTH_MODE=keycloak` and configured issuer/audience. The JWT verifier checks the allowed signing algorithm, key ID/signature, issuer, bearer token type, audience, subject, expiry, and not-before time. JWKS keys are cached with refresh for unknown key IDs. Integrated API requests require a bearer token and an explicit organisation selector; the backend resolves an active user and membership before granting tenant context.
+- **Role and tenant authorization:** The backend permission policy recognizes `support_agent`, `support_lead`, `organisation_admin`, and `requester`; permissions are derived from backend roles, not caller-provided role claims. Ticket reads use requester/team/admin scopes, and direct ticket access returns not found when the ticket is outside that scope. Mongo ticket queries include the active organisation in their filter. This verifies code paths, not each live account's current memberships.
+- **Protected routes and ownership:** Integrated API middleware authenticates before protected routes. Ticket creation uses the authenticated requester identity; attachment, document, and ticket operations check permissions and/or accessible ticket scope. Cross-tenant ticket/document storage paths are rejected by tenant-specific repository/storage checks.
+- **Request validation and payload bounds:** JSON API bodies are limited to 1 MB. Multipart upload is limited to one file, a single expected field set, and 25 MB. Document validation rejects path/control characters, empty/oversized data, unsupported extensions and mismatched MIME types; PDF, DOC, DOCX, and image signatures are checked. Regression tests cover MIME mismatch and invalid Word signatures.
+- **File confidentiality:** Local private storage is partitioned by organisation and document ID. Download tokens are short-lived and tenant-scoped. Integrated API responses remove internal storage keys. File validation checks extension/MIME agreement and PDF, legacy Word, ZIP-based Word, and image signatures. This does not prove production object storage or malware scanning.
+- **AI input/output boundaries:** Prompts mark ticket, document, and retrieved evidence as untrusted; provider outputs pass task schemas and provenance/citation checks before use. AI errors are returned as safe task-level messages; the AI does not independently authorize users or perform protected ticket changes.
+- **Logging and secrets:** API and scheduled worker error logs now record request/task identifiers and exception type rather than raw exception messages/objects. `.env.example` contains blank secret fields; frontend source references public Keycloak settings and backend URL, not database credentials or LLM API keys. No credentials are documented in this audit.
+- **Rate limits and intake:** Ticket intake is authenticated only; the backend derives requester and tenant from the validated session and active membership. Integrated API defaults limit failed bearer attempts to **5 per socket peer IP per 60 seconds**, ticket creations to **10 per user/organisation per 60 seconds**, and expensive AI operations to **5 per user/organisation per 60 seconds**. Rejections return HTTP 429 with `Retry-After`. These proposed defaults are not specified numerically by the capstone document. Limits are process-local and bounded; the API does not trust `X-Forwarded-For`.
+
+## Not verified or still open
+
+- **Live identity/role checks:** A real Keycloak token and active membership for each of the four business roles were not exercised in this audit. Keycloak discovery alone is not a user authorization test.
+- **Rate limiting and abuse controls:** Process-local limiters are implemented using proposed defaults. A distributed/shared gateway limiter is still required for multi-instance production. Keycloak's own browser login traffic is external to this API and must use Keycloak/deployment controls. The capstone does not specify the numeric defaults.
+- **Malware scanning and production storage:** The repository provides local private storage. Production managed private file storage, malware scanning/quarantine, and operational recovery have not been selected or verified.
+- **File content authenticity:** PDF, DOC, DOCX, and image basic signatures are checked, but this does not fully parse files or scan for malware. Keep extraction/conversion failures fail-safe and scan files before production use.
+- **Deployment security:** TLS termination, HSTS, network allowlists, secret-manager integration/rotation, database least-privilege credentials, monitoring, and backup/restore controls require deployment evidence. Production startup checks require Keycloak and Mongo configuration but do not establish that deployed credentials or network controls are secure.
+- **Authorization coverage:** Code review confirms core ticket ownership/team/tenant checks. It does not exhaustively execute every route for every role or prove absence of IDOR/race conditions; a dedicated route-by-role negative test matrix and live authorization run remain necessary.
+- **Session behavior:** The backend accepts bearer access tokens and validates expiry; browser session storage/refresh/logout behavior and revocation latency were not tested here.
+
+## Credential handling note
+
+An earlier tracked example file contained a MongoDB credential. Its value has been removed from `backend/.env.example`. Rotate the associated database user's credential before using that account in a shared or production environment. Do not copy credentials into source, logs, or frontend variables.
+
+## Verification
+
+The updated focused document, ticket API, unified authentication/role, and foundation/Keycloak suites passed **45/45**, including 429 behavior for failed auth, ticket creation, and AI operations. Backend type-check/build and `git diff --check` passed. The sandbox blocks the standard test runner with `spawn EPERM`, so focused suites were transpiled and run directly in-process. A broader integrated API suite has previously run **23 tests with 6 failures**: five relied on fixtures unavailable from the isolated compiled-test directory; one stale Jira webhook test expected a route that was intentionally removed.
+
+This document distinguishes code inspection and synthetic tests from live identity, deployment, and infrastructure evidence. Production closure still requires a shared limiter at the chosen gateway, a selected production private storage and malware-scanning service, a real Keycloak role/membership matrix, and deployment security evidence. The specification does not name storage/scanning vendors; no provider was selected or represented as approved.

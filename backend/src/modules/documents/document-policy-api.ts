@@ -175,8 +175,7 @@ async function dispatch(request: IncomingMessage, response: ServerResponse, depe
       if (!policyId) throw new ValidationError('Policy ID is required.');
       const policy = await policyRepository.getPolicyById(tenant, policyId);
       if (!policy) throw new NotFoundError('Policy not found.');
-      const storeVersions = await dependencies.store.readCollection<PolicyVersionRecord>('policyVersions');
-      sendJson(response, 200, { data: storeVersions.filter((version) => version.organisationId === tenant.organisationId && version.policyId === policy.id), requestId });
+      sendJson(response, 200, { data: await policyRepository.listVersionsForPolicy(tenant, policy.id), requestId });
       return;
     }
     if (segments.length === 5 && segments[4] === 'versions' && request.method === 'POST') {

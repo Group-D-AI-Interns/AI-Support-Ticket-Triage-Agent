@@ -44,6 +44,19 @@ export type TicketHistoryEvent = {
   changes: Record<string, JsonValue>;
 };
 
+export type TicketEscalation = {
+  id: string;
+  status: 'open' | 'resolved';
+  reasonCode: 'P1_CRITICAL' | 'P2_HIGH' | 'SLA_AT_RISK' | 'BEYOND_AGENT_AUTHORITY' | 'RECURRING_BREACH' | 'OTHER';
+  handoverNotes: string;
+  escalatedBy: string;
+  escalatedAt: string;
+  resolvedBy?: string;
+  resolvedAt?: string;
+  resolutionNotes?: string;
+  automatic?: boolean;
+};
+
 export type TicketRecord = {
   id: string;
   organisationId: string;
@@ -61,6 +74,7 @@ export type TicketRecord = {
   updatedAt: string;
   comments?: TicketComment[];
   attachments?: TicketAttachment[];
+  escalations?: TicketEscalation[];
   reopenRequests?: TicketReopenRequest[];
   history?: TicketHistoryEvent[];
 };

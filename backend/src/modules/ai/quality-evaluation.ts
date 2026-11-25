@@ -23,8 +23,8 @@ export async function runQualityEvaluation(store: AiOperationsStore, tenant: Ten
     try {
       const analysis = await evaluate(tenant, { id: `evaluation-${randomUUID()}`, organisationId: tenant.organisationId, title: sample.title, description: sample.description }, categories);
       const output = normalized(JSON.stringify(analysis.summary));
-      cases.push({ caseId: sample.id, status: 'completed', expectedCategory: sample.expectedCategory, actualCategory: analysis.classification.category,
-        categoryCorrect: sample.expectedCategory === analysis.classification.category,
+      cases.push({ caseId: sample.id, status: 'completed', expectedCategory: sample.expectedCategory, actualCategory: analysis.classification.categories,
+        categoryCorrect: sample.expectedCategory === null ? analysis.classification.categories.length === 0 : analysis.classification.categories.includes(sample.expectedCategory),
         requiredFacts: sample.requiredFacts.length, matchedFacts: sample.requiredFacts.filter(fact => output.includes(normalized(fact))).length,
         prohibitedFacts: sample.prohibitedFacts.length, prohibitedFactsPresent: sample.prohibitedFacts.filter(fact => output.includes(normalized(fact))).length,
         classification: analysis.classification, summary: analysis.summary,
@@ -49,6 +49,6 @@ export async function runQualityEvaluation(store: AiOperationsStore, tenant: Ten
       groundingMethod: 'lexical_proxy_only', semanticGroundedness: 'requires_human_review' }, cases };
   const record: OfKind<'evaluation'> = { id: `evaluation_${randomUUID()}`, kind: 'evaluation', organisationId: tenant.organisationId,
     actorId: tenant.userId, createdAt: now, updatedAt: now, data: JSON.parse(JSON.stringify(data)) };
-  await store.change(rows => { rows.push(record); });
+  await store.changeForOrganisation(tenant.organisationId, rows => { rows.push(record); });
   return record;
 }

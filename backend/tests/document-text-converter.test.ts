@@ -28,6 +28,16 @@ test('converts text documents with a document section', async () => {
   assert.deepEqual(result.segments, [{ text: 'Respond within two hours.', section: 'document' }]);
 });
 
+test('converts validated Markdown policy sources as strict UTF-8 text', async () => {
+  const content = '# SLA policy\n\nRespond within two hours.';
+  const result = await new LocalDocumentTextConverter().convert(Buffer.from(content), {
+    ...baseVersion, fileName: 'service-level-agreement.md', mimeType: 'text/markdown',
+  });
+  assert.equal(result.format, 'md');
+  assert.equal(result.content, content);
+  assert.deepEqual(result.segments, [{ text: content, section: 'document' }]);
+});
+
 test('rejects invalid DOCX content', async () => {
   const converter = new LocalDocumentTextConverter();
   await assert.rejects(

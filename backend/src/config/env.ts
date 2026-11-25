@@ -10,6 +10,9 @@ export type Environment = {
   keycloakAdminClientId?: string;
   keycloakAdminClientSecret?: string;
   dataDirectory: string;
+  databaseProvider: "json" | "mongodb";
+  mongodbUri?: string;
+  mongodbDatabase?: string;
   jsonWriteLockTimeoutMs: number;
   slaEvaluationIntervalMs: number;
 };
@@ -21,10 +24,27 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
   const port = Number(source.PORT ?? "3000");
   const jsonWriteLockTimeoutMs = Number(source.JSON_WRITE_LOCK_TIMEOUT_MS ?? "5000");
   const slaEvaluationIntervalMs = Number(source.SLA_EVALUATION_INTERVAL_MS ?? "300000");
+  // The application uses MongoDB in development and production. JSON is an
+  // explicit test-fixture adapter only; local demos use isolated test data.
+  const databaseProvider = source.DATABASE_PROVIDER ?? (nodeEnv === "test" ? "json" : "mongodb");
+  const mongodbUri = source.MONGODB_URI?.trim();
+  const mongodbDatabase = source.MONGODB_DATABASE?.trim();
 
   if (!["development", "test", "production"].includes(nodeEnv)) throw new Error("NODE_ENV must be development, test, or production");
   if (!["debug", "info", "warn", "error"].includes(logLevel)) throw new Error("LOG_LEVEL must be debug, info, warn, or error");
   if (!["disabled", "keycloak"].includes(authMode)) throw new Error("AUTH_MODE must be disabled or keycloak");
+  if (!["json", "mongodb"].includes(databaseProvider)) throw new Error("DATABASE_PROVIDER must be json or mongodb");
+  if (nodeEnv !== "test" && databaseProvider !== "mongodb") throw new Error("DATABASE_PROVIDER=mongodb is required outside the test environment; JSON persistence is test-only");
+  if (nodeEnv === "production" && authMode !== "keycloak") throw new Error("AUTH_MODE=keycloak is required in production");
+  if (databaseProvider === "mongodb") {
+    if (!mongodbUri || !mongodbDatabase) throw new Error("MONGODB_URI and MONGODB_DATABASE are required when DATABASE_PROVIDER=mongodb");
+    let parsed: URL;
+    try { parsed = new URL(mongodbUri); } catch { throw new Error("MONGODB_URI must be a valid MongoDB connection URI"); }
+    if (!['mongodb:', 'mongodb+srv:'].includes(parsed.protocol)) throw new Error("MONGODB_URI must use mongodb:// or mongodb+srv://");
+    if (nodeEnv === "production" && parsed.protocol !== "mongodb+srv:") throw new Error("MONGODB_URI must use MongoDB Atlas SRV (mongodb+srv://) in production");
+    if (nodeEnv === "production" && ["localhost", "127.0.0.1"].includes(parsed.hostname)) throw new Error("A local MongoDB address cannot be used in production");
+    if (!/^[a-zA-Z0-9_-]{1,63}$/.test(mongodbDatabase)) throw new Error("MONGODB_DATABASE must be a valid database name");
+  }
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("PORT must be an integer between 0 and 65535");
   if (!Number.isInteger(jsonWriteLockTimeoutMs) || jsonWriteLockTimeoutMs < 1 || jsonWriteLockTimeoutMs > 60000) throw new Error("JSON_WRITE_LOCK_TIMEOUT_MS must be an integer between 1 and 60000");
   if (!Number.isInteger(slaEvaluationIntervalMs) || slaEvaluationIntervalMs < 1000 || slaEvaluationIntervalMs > 86400000) throw new Error("SLA_EVALUATION_INTERVAL_MS must be an integer between 1000 and 86400000");
@@ -58,6 +78,9 @@ export function loadEnvironment(source: NodeJS.ProcessEnv = process.env): Enviro
     ...(keycloakAdminClientId ? { keycloakAdminClientId } : {}),
     ...(keycloakAdminClientSecret ? { keycloakAdminClientSecret } : {}),
     dataDirectory: source.DATA_DIRECTORY ?? "./.local-data",
+    databaseProvider: databaseProvider as Environment["databaseProvider"],
+    ...(mongodbUri ? { mongodbUri } : {}),
+    ...(mongodbDatabase ? { mongodbDatabase } : {}),
     jsonWriteLockTimeoutMs,
     slaEvaluationIntervalMs,
   };

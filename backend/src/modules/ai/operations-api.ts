@@ -22,6 +22,34 @@ export function operationsApi(operations: AiOperationsService, jobs: TriageJobs,
     const tenant = authenticate(req, ['configuration.manage']);
     send(res, await operations.store.list(tenant.organisationId, 'routing'));
   });
+  router.get('/configuration/categories', async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.categoryConfiguration(tenant));
+  });
+  router.post('/configuration/categories', async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.createCategory(tenant, req.body), 201);
+  });
+  router.post('/configuration/categories/:id/disable', async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.setCategoryStatus(tenant, param(req, 'id'), 'disabled', reason.parse(req.body).reason));
+  });
+  router.post('/configuration/categories/:id/enable', async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.setCategoryStatus(tenant, param(req, 'id'), 'active', reason.parse(req.body).reason));
+  });
+  router.get('/configuration/priority-rules', async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.priorityPolicies(tenant));
+  });
+  router.post('/configuration/priority-rules', async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.createPriorityPolicy(tenant, req.body), 201);
+  });
+  for (const action of ['approve', 'activate'] as const) router.post(`/configuration/priority-rules/:id/${action}`, async (req, res) => {
+    const tenant = authenticate(req, ['configuration.manage']);
+    send(res, await operations.decidePriorityPolicy(tenant, param(req, 'id'), action, reason.parse(req.body).reason));
+  });
   router.post('/ai/routing-rules', async (req, res) => send(res,
     await operations.createRouting(authenticate(req, ['configuration.manage']), req.body), 201));
   for (const action of ['approve', 'disable'] as const) router.post(`/ai/routing-rules/:id/${action}`, async (req, res) => {
@@ -53,7 +81,7 @@ export function operationsApi(operations: AiOperationsService, jobs: TriageJobs,
   router.post('/ai/evaluations', async (req, res) => {
     const tenant = authenticate(req, ['configuration.manage', ...ai]);
     if (!evaluate) throw new AiOperationsError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
-    send(res, await runQualityEvaluation(operations.store, tenant, req.body, operations.deps.categories(), evaluate), 201);
+    send(res, await runQualityEvaluation(operations.store, tenant, req.body, await operations.categories(tenant), evaluate), 201);
   });
   router.get('/ai/evaluations', async (req, res) => {
     const tenant = authenticate(req, ['configuration.manage']);

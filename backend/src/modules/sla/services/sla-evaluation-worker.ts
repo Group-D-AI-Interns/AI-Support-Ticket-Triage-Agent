@@ -24,6 +24,8 @@ export class SlaEvaluationWorker {
   private busy = false;
   private pendingRunScheduled = false;
   private stopped = false;
+  private idle: Promise<void> = Promise.resolve();
+  private resolveIdle: (() => void) | undefined;
 
   constructor(
     private readonly service: Pick<
@@ -47,11 +49,12 @@ export class SlaEvaluationWorker {
     void this.runScheduledEvaluation();
   }
 
-  stop(): void {
+  async stop(): Promise<void> {
     this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
     this.pendingTickets.clear();
+    await this.idle;
   }
 
   enqueue(organisationId: string, ticketId: string): void {
@@ -65,10 +68,11 @@ export class SlaEvaluationWorker {
 
   private async runScheduledEvaluation(): Promise<void> {
     if (this.stopped || this.busy) return;
-    this.busy = true;
+    this.beginRun();
     try {
       const organisationIds = await this.options.listOrganisationIds();
       for (const organisationId of organisationIds) {
+        if (this.stopped) return;
         const tenant = workerTenant(organisationId);
         let tickets;
         try {
@@ -76,18 +80,19 @@ export class SlaEvaluationWorker {
         } catch (error) {
           this.options.logger.error(
             'Could not list tickets for scheduled SLA evaluation.',
-            { organisationId, error: errorMessage(error) },
+            { organisationId, errorType: errorType(error) },
           );
           continue;
         }
         for (const ticket of tickets) {
+          if (this.stopped) return;
           try {
             await this.service.evaluateTicket(tenant, ticket.id);
           } catch (error) {
             this.options.logger.error('Scheduled SLA evaluation failed.', {
               organisationId,
               ticketId: ticket.id,
-              error: errorMessage(error),
+              errorType: errorType(error),
             });
           }
         }
@@ -95,10 +100,10 @@ export class SlaEvaluationWorker {
     } catch (error) {
       this.options.logger.error(
         'Could not list organisations for scheduled SLA evaluation.',
-        { error: errorMessage(error) },
+        { errorType: errorType(error) },
       );
     } finally {
-      this.busy = false;
+      this.finishRun();
       this.schedulePendingEvaluation();
     }
   }
@@ -120,7 +125,7 @@ export class SlaEvaluationWorker {
 
   private async runPendingEvaluations(): Promise<void> {
     if (this.stopped || this.busy) return;
-    this.busy = true;
+    this.beginRun();
     try {
       while (!this.stopped && this.pendingTickets.size > 0) {
         const next = this.pendingTickets.entries().next().value;
@@ -137,18 +142,29 @@ export class SlaEvaluationWorker {
             this.options.logger.error('Event-triggered SLA evaluation failed.', {
               organisationId,
               ticketId,
-              error: errorMessage(error),
+              errorType: errorType(error),
             });
           }
         }
       }
     } finally {
-      this.busy = false;
+      this.finishRun();
       this.schedulePendingEvaluation();
     }
   }
+
+  private beginRun(): void {
+    this.busy = true;
+    this.idle = new Promise(resolve => { this.resolveIdle = resolve; });
+  }
+
+  private finishRun(): void {
+    this.busy = false;
+    this.resolveIdle?.();
+    this.resolveIdle = undefined;
+  }
 }
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function errorType(error: unknown): string {
+  return error instanceof Error ? error.name : 'unknown';
 }

@@ -78,8 +78,6 @@ test('unified server authenticates tickets and enforces active organisation memb
       },
     });
 
-    assert.equal((await request('/api/v1/tickets')).status, 401, 'missing bearer token is rejected');
-    assert.equal((await request('/api/v1/tickets', 'Bearer wrong-token')).status, 401, 'invalid bearer token is rejected');
     assert.equal((await request('/api/v1/tickets', 'Bearer valid-user-a')).status, 200, 'active member can use the selected tenant');
 
     const inactive = await request('/api/v1/tickets', 'Bearer inactive-member');
@@ -230,6 +228,42 @@ test('unified server authenticates tickets and enforces active organisation memb
       headers: { authorization: 'Bearer valid-user-a' },
     });
     assert.equal(foundationRoute.status, 200, 'foundation and Express routes share the same server');
+    for (let attempt = 0; attempt < 9; attempt++) {
+      const repeatedCreate = await fetch(`${baseUrl}/api/v1/tickets`, {
+        method: 'POST',
+        headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+        body: JSON.stringify({ title: `Rate limit ticket ${attempt}`, description: 'Synthetic rate-limit coverage' }),
+      });
+      assert.equal(repeatedCreate.status, 201);
+    }
+    const createLimited = await fetch(`${baseUrl}/api/v1/tickets`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Over-limit ticket', description: 'Must be rejected before persistence' }),
+    });
+    assert.equal(createLimited.status, 429, 'ticket creation is limited per authenticated user and tenant');
+    assert.ok(Number(createLimited.headers.get('retry-after')) > 0);
+    const aiLimitedByActor = await Promise.all(Array.from({ length: 6 }, () => fetch(`${baseUrl}/api/v1/tickets/ticket-org-a/triage`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: '{}',
+    })));
+    assert.deepEqual(aiLimitedByActor.slice(0, 5).map(response => response.status), [403, 403, 403, 403, 403]);
+    assert.equal(aiLimitedByActor[5]?.status, 429, 'expensive AI operations are limited per authenticated user and tenant');
+    assert.equal((await request('/api/v1/tickets')).status, 401, 'missing bearer token is rejected');
+    const publicIntakeAttempt = await fetch(`${baseUrl}/api/v1/tickets`, {
+      method: 'POST',
+      headers: { 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ title: 'Unauthenticated intake', description: 'Must require sign-in' }),
+    });
+    assert.equal(publicIntakeAttempt.status, 401, 'ticket intake is not exposed as a public route');
+    assert.equal((await request('/api/v1/tickets', 'Bearer wrong-token')).status, 401, 'invalid bearer token is rejected');
+    for (let attempt = 0; attempt < 2; attempt++) {
+      assert.equal((await request('/api/v1/tickets', 'Bearer wrong-token')).status, 401);
+    }
+    const authLimited = await request('/api/v1/tickets', 'Bearer wrong-token');
+    assert.equal(authLimited.status, 429, 'repeated invalid bearer tokens are throttled by client IP');
+    assert.ok(Number(authLimited.headers.get('retry-after')) > 0);
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     await rm(directory, { recursive: true, force: true });

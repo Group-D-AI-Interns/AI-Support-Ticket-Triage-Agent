@@ -67,15 +67,40 @@ describe("JSON file store", () => {
 
 describe("environment configuration", () => {
   it("rejects invalid ports and JSON lock timeout values", () => {
-    assert.throws(() => loadEnvironment({ PORT: "70000" }), /PORT/);
-    assert.throws(() => loadEnvironment({ JSON_WRITE_LOCK_TIMEOUT_MS: "0" }), /JSON_WRITE_LOCK_TIMEOUT_MS/);
-    assert.equal(loadEnvironment({}).slaEvaluationIntervalMs, 300000);
-    assert.throws(() => loadEnvironment({ SLA_EVALUATION_INTERVAL_MS: "0" }), /SLA_EVALUATION_INTERVAL_MS/);
+    assert.throws(() => loadEnvironment({ NODE_ENV: "test", PORT: "70000" }), /PORT/);
+    assert.throws(() => loadEnvironment({ NODE_ENV: "test", JSON_WRITE_LOCK_TIMEOUT_MS: "0" }), /JSON_WRITE_LOCK_TIMEOUT_MS/);
+    assert.equal(loadEnvironment({ NODE_ENV: "test" }).slaEvaluationIntervalMs, 300000);
+    assert.throws(() => loadEnvironment({ NODE_ENV: "test", SLA_EVALUATION_INTERVAL_MS: "0" }), /SLA_EVALUATION_INTERVAL_MS/);
   });
 
   it("requires issuer and audience when Keycloak mode is enabled", () => {
-    assert.throws(() => loadEnvironment({ AUTH_MODE: "keycloak" }), /AUTH_ISSUER and AUTH_AUDIENCE/);
-    assert.equal(loadEnvironment({ AUTH_MODE: "keycloak", AUTH_ISSUER: "https://sso.example.test/realms/support", AUTH_AUDIENCE: "support-api" }).authMode, "keycloak");
+    assert.throws(() => loadEnvironment({ NODE_ENV: "test", AUTH_MODE: "keycloak" }), /AUTH_ISSUER and AUTH_AUDIENCE/);
+    assert.equal(loadEnvironment({ NODE_ENV: "test", AUTH_MODE: "keycloak", AUTH_ISSUER: "https://sso.example.test/realms/support", AUTH_AUDIENCE: "support-api" }).authMode, "keycloak");
+  });
+
+  it("requires MongoDB for application environments and confines JSON to tests", () => {
+    assert.equal(loadEnvironment({ NODE_ENV: "test" }).databaseProvider, "json");
+    assert.equal(loadEnvironment({ MONGODB_URI: "mongodb+srv://cluster.example.test/", MONGODB_DATABASE: "ai_support" }).databaseProvider, "mongodb");
+    assert.throws(() => loadEnvironment({ DATABASE_PROVIDER: "json" }), /required outside the test environment/);
+    assert.throws(() => loadEnvironment({}), /MONGODB_URI and MONGODB_DATABASE/);
+    assert.throws(() => loadEnvironment({
+      NODE_ENV: "production",
+      AUTH_MODE: "keycloak",
+      AUTH_ISSUER: "https://sso.example.test/realms/support",
+      AUTH_AUDIENCE: "support-api",
+    }), /MONGODB_URI and MONGODB_DATABASE/);
+    const productionBase = {
+      NODE_ENV: "production",
+      AUTH_MODE: "keycloak",
+      AUTH_ISSUER: "https://sso.example.test/realms/support",
+      AUTH_AUDIENCE: "support-api",
+      MONGODB_DATABASE: "ai_support",
+    };
+    assert.throws(() => loadEnvironment({ ...productionBase, DATABASE_PROVIDER: "mongodb", MONGODB_URI: "mongodb://localhost:27017" }), /Atlas SRV/);
+    const production = loadEnvironment({ ...productionBase, MONGODB_URI: "mongodb+srv://cluster.example.test/" });
+    assert.equal(production.databaseProvider, "mongodb");
+    assert.equal(production.mongodbDatabase, "ai_support");
+    assert.throws(() => loadEnvironment({ ...productionBase, MONGODB_URI: "https://cluster.example.test" }), /must use mongodb/);
   });
 });
 
@@ -398,6 +423,14 @@ describe("HTTP foundation", () => {
     const health = await fetch(`${base}/health/ready`, { headers: { "x-request-id": "req_test_1" } });
     assert.equal(health.status, 200);
     assert.equal(health.headers.get("x-request-id"), "req_test_1");
+    assert.equal(health.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(health.headers.get("x-frame-options"), "DENY");
+    assert.equal(health.headers.get("referrer-policy"), "strict-origin-when-cross-origin");
+    assert.equal(health.headers.get("permissions-policy"), "camera=(), microphone=(), geolocation=()");
+
+    const ticketApi = await fetch(`${base}/api/v1/tickets`);
+    assert.equal(ticketApi.headers.get("x-content-type-options"), "nosniff");
+    assert.equal(ticketApi.headers.get("x-powered-by"), null);
   });
 
   it("reports missing provider configuration as a structured service error", async () => {

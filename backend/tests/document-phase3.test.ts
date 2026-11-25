@@ -18,6 +18,35 @@ import type { DocumentRecord } from '../src/modules/documents/domain/document.js
 const tenantA = { organisationId: 'org-1', userId: 'user-1', roles: ['org-admin'] };
 const tenantB = { organisationId: 'org-2', userId: 'user-2', roles: ['org-admin'] };
 
+test('extraction queue updates keep a job in its original tenant and preserve its identifier', async () => {
+  const root = mkdtempSync(join(tmpdir(), 'document-job-tenant-'));
+  try {
+    const store = createJsonTenantStore(root);
+    const queue = new InMemoryExtractionQueue(store);
+    const job = await queue.enqueue({
+      id: 'job-tenant-safe', organisationId: tenantA.organisationId,
+      policyId: 'policy-1', policyVersionId: 'policy-version-1',
+      documentId: 'document-1', documentVersionId: 'document-version-1',
+      status: 'queued', attempts: 0, maxAttempts: 2,
+      correlationId: 'correlation-1', executionId: 'execution-1',
+      createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    });
+
+    const updated = await queue.update(job.id, {
+      id: 'attacker-chosen-id',
+      organisationId: tenantB.organisationId,
+      status: 'succeeded',
+    });
+
+    assert.equal(updated?.id, job.id);
+    assert.equal(updated?.organisationId, tenantA.organisationId);
+    assert.equal(await queue.getById(tenantB, job.id), null);
+    assert.equal((await queue.getById(tenantA, job.id))?.status, 'succeeded');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test('jobs use the current document version and stale provider output cannot overwrite a newer revision', async () => {
   const root = mkdtempSync(join(tmpdir(), 'document-revision-'));
   try {

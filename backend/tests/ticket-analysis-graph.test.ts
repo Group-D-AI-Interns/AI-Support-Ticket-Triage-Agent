@@ -13,21 +13,21 @@ import { TicketClassifier } from '../src/modules/ai/components/ticket-classifier
 import { TicketSummarizer } from '../src/modules/ai/components/ticket-summarizer.js';
 import { DeterministicFakeProvider } from '../src/infrastructure/llm/deterministic-fake-provider.js';
 import { LlmProviderError } from '../src/infrastructure/llm/structured-generation-provider.js';
-import type { AiTask } from '../src/modules/ai/contracts.js';
+import type { AiTask, TicketAiAnalysis } from '../src/modules/ai/contracts.js';
 
 const tenant = { organisationId: 'org-a', userId: 'agent', roles: ['support_agent'] };
 const ticket = { id: 'ticket-a', organisationId: 'org-a', title: 'Locked account', description: 'Sensitive example text: account locked.' };
 const categories = [{ id: 'ACCESS', name: 'Account access' }];
-const classification = { category: 'ACCESS', reason: 'Account locked.', confidence: 0.9, requiresHumanReview: false, warnings: [] };
-const summary = { summary: 'Account locked.', symptoms: ['Locked'], attemptedActions: [], businessImpact: null, missingInformation: [], warnings: [] };
+const classification = { categories: ['ACCESS'], reason: 'Account locked.', confidence: 0.9, evidence: [{ categoryId: 'ACCESS', field: 'title', start: 0, end: 14, excerpt: 'Locked account' }], requiresHumanReview: false, warnings: [] };
+const summary = { summary: 'Account locked.', symptoms: ['Locked'], attemptedActions: [], affectedFunctionality: 'Account sign-in', businessImpact: null, missingInformation: [], warnings: [] };
 function fixture(mode = 'complete') {
   const calls: AiTask[] = [];
   const provider = new DeterministicFakeProvider({ ticket_classification() {
     calls.push('ticket_classification');
     if (mode === 'failure') throw new LlmProviderError('REMOTE_FAILURE', 'secret-provider-error', false);
     if (mode === 'timeout') return new Promise(() => {});
-    if (mode === 'invalid-classification') return { ...classification, category: 'MADE_UP' };
-    if (mode === 'review') return { ...classification, category: null, confidence: null, requiresHumanReview: true };
+    if (mode === 'invalid-classification') return { ...classification, categories: ['MADE_UP'] };
+    if (mode === 'review') return { ...classification, categories: [], confidence: null, evidence: [], requiresHumanReview: true };
     return classification;
   }, ticket_summarization() { calls.push('ticket_summarization'); return mode === 'invalid-summary' ? { summary: 'Only one field' } : summary; } });
   const runner = new AiExecutionRunner(provider, { async record() {} }, { model: 'fixture', timeoutMs: 30, maxRetries: 0 });
@@ -44,7 +44,8 @@ test('LangGraph calls existing components in order and returns typed execution a
   assert.deepEqual(result.trace, ['classify', 'summarize', 'complete']);
   assert.deepEqual(f.calls, ['ticket_classification', 'ticket_summarization']);
   assert.equal(result.orchestration.engine, 'langgraph');
-  assert.equal(result.orchestration.promptVersions?.classification, 'ticket-classification-v1');
+  assert.equal(result.orchestration.promptVersions?.classification, 'ticket-classification-v2');
+  assert.equal(result.orchestration.promptVersions?.summarization, 'ticket-summary-v2');
   assert.match(result.orchestration.snapshotHash, /^[a-f0-9]{64}$/);
   assert.equal(result.executions.length, 2);
   assert.deepEqual(ticket, before);
@@ -53,7 +54,7 @@ test('LangGraph calls existing components in order and returns typed execution a
 test('uncertain classification takes an explicit review branch and still returns the summary', async () => {
   const result = await fixture('review').graph.run({ ticket, categories });
   assert.equal(result.status, 'insufficient_information');
-  assert.equal(result.classification?.category, null);
+  assert.deepEqual(result.classification?.categories, []);
   assert.equal(result.summary?.summary, summary.summary);
   assert.equal(result.trace.at(-1), 'review');
 });
@@ -127,13 +128,16 @@ test('JSON history preserves legacy analyses and persists safe failed-run metada
     const good = new TicketAiAnalysisService({ async getAuthorizedTicket() { return ticket; } }, f.classifier, f.summarizer, repository);
     const analysis = await good.analyze({ tenant, ticketId: ticket.id, categories });
     const { orchestration: _metadata, ...legacy } = analysis;
-    await repository.save(tenant, { ...legacy, id: 'legacy-analysis' });
+    const { affectedFunctionality: _newSummaryField, ...legacySummary } = legacy.summary;
+    await repository.save(tenant, { ...legacy, id: 'legacy-analysis', summary: legacySummary as TicketAiAnalysis['summary'] });
     const bad = fixture('invalid-classification');
     const service = new TicketAiAnalysisService({ async getAuthorizedTicket() { return ticket; } }, bad.classifier, bad.summarizer, repository);
     await assert.rejects(service.analyze({ tenant, ticketId: ticket.id, categories }), error => error instanceof AiExecutionError && error.code === 'INVALID_OUTPUT');
     const runs = await repository.listWorkflowRuns(tenant, ticket.id);
     assert.deepEqual(runs.map(run => run.status), ['completed', 'invalid_analysis']);
-    assert.equal((await repository.listForTicket(tenant, ticket.id)).length, 2);
+    const savedAnalyses = await repository.listForTicket(tenant, ticket.id);
+    assert.equal(savedAnalyses.length, 2);
+    assert.equal(savedAnalyses.find(row => row.id === 'legacy-analysis')?.summary.affectedFunctionality, null);
     assert.equal((await repository.listWorkflowRuns({ ...tenant, organisationId: 'foreign' }, ticket.id)).length, 0);
     assert.equal((await readFile(join(root, 'ai-workflow-runs.json'), 'utf8')).includes(ticket.description), false);
     await assert.rejects(repository.saveWorkflowRun({ ...tenant, organisationId: 'foreign' }, runs[0]!));

@@ -28,9 +28,9 @@ const input = `${head}.${claims}`;
 const token = `${input}.${sign('RSA-SHA256', Buffer.from(input), privateKey).toString('base64url')}`;
 const baseUrl = `http://127.0.0.1:${port}`;
 const priorityCandidate = validatePriorityCandidate(JSON.parse(await readFile(resolve('data/reference/candidates/priority-policy.json'), 'utf8')));
-const app = createIntegratedApp(loadEnvironment({ DATA_DIRECTORY: root, PORT: String(port), LOG_LEVEL: 'error' }), { authenticator }, {
+const app = createIntegratedApp(loadEnvironment({ NODE_ENV: 'test', DATA_DIRECTORY: root, PORT: String(port), LOG_LEVEL: 'error' }), { authenticator }, {
   priorityPreview: { candidate: priorityCandidate, minimumConfidence: 0.75 }, // Synthetic demo setting only, not calibrated policy.
-  settings: { dataDirectory: root, projectMappings: {}, organisations: {} },
+  dataDirectory: root,
   ticketAiDemo: { categories: [{ id: 'ACCOUNT_ACCESS', name: 'Account access', description: 'Login and password reset issues' }, { id: 'BILLING', name: 'Billing', description: 'Invoices and payments' }] }, ticketAiLive: null,
 });
 app.on('error', (error) => { console.error('Cannot start demo:', error.message); process.exitCode = 1; });

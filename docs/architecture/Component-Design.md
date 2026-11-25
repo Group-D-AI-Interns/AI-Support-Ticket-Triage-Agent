@@ -1,58 +1,57 @@
 # Component Design
 
-## 1. Component diagram
+**Status:** Current implemented components, reviewed 23 November 2026.
+
+## Component view
 
 ```mermaid
 flowchart LR
-  UI[React Web UI] --> API[REST API]
-  API --> IAM[Identity and Tenant Context]
-  API --> TICKETS[Ticket Application Service]
-  API --> POLICIES[Policy Application Service]
-  API --> SLA[SLA Application Service]
-  API --> PERF[Performance Application Service]
-  API --> APPROVAL[Approval Service]
-  TICKETS --> AI[AI Orchestrator]
-  POLICIES --> INGEST[Document Ingestion Worker]
-  INGEST --> EXTRACT[Extraction and Rule Structuring]
-  EXTRACT --> APPROVAL
-  AI --> CLASS[Classifier]
-  AI --> SUMMARY[Summarizer]
-  AI --> PRIORITY[Priority Recommender]
-  AI --> RETRIEVE[Similarity Retrieval]
-  AI --> RESOLVE[Resolution Recommender]
-  AI --> ROUTE[Routing Recommender]
-  RETRIEVE --> KB[Tenant-scoped Knowledge Index]
-  AI --> PROVIDER[LLM Provider Adapter]
-  TICKETS --> REPO[(Persistence)]
-  POLICIES --> REPO
-  SLA --> REPO
-  PERF --> REPO
-  APPROVAL --> REPO
-  API --> AUDIT[Audit and Observability]
-  AI --> AUDIT
+  Client[Browser client] --> Server[Integrated Node HTTP server]
+  Server --> Foundation[Foundation route dispatcher]
+  Server --> Domain[Express domain application]
+  Foundation --> Auth[Keycloak authentication and membership authorization]
+  Domain --> Auth
+  Foundation --> Ports[Persistence ports]
+  Domain --> Ports
+  Ports --> Json[(JSON test-fixture adapter)]
+  Ports --> Mongo[(MongoDB adapter; application runtime)]
+  Domain --> Tickets[Ticket and workflow module]
+  Domain --> Docs[Document and policy modules]
+  Domain --> SLA[SLA module]
+  Domain --> AI[AI workflows]
+  Domain --> Knowledge[Knowledge retrieval]
+  Domain --> Reports[Reporting]
+  Tickets --> AI
+  Docs --> Extract[Extraction job service]
+  Extract --> Provider[Structured generation adapter]
+  AI --> Provider
+  AI --> Embeddings[Embedding adapter]
+  AI --> Knowledge
+  Domain --> Workers[In-process AI and SLA workers]
 ```
 
-## 2. Component contracts
+The `Browser client` node is context only; frontend implementation is outside this backend architecture pass. There is no standalone performance service, approval service, durable external queue, or vector index in this component view. Approval and audit behavior is implemented within domain workflows and existing audit records.
 
-| Component | Input | Output |
+## Component responsibilities and constraints
+
+| Component | Responsibility | Contract / constraint |
 |---|---|---|
-| Ticket intake | Authenticated tenant context and validated ticket payload | Persisted ticket and identifier |
-| Document ingestion | Private file reference and tenant context | Extracted text and processing status |
-| Rule extraction | Extracted text and document/version metadata | Candidate structured rules with evidence and uncertainty |
-| Policy approval | Candidate rule, reviewer decision and reason | Approved/rejected version and audit event |
-| Ticket classifier | Ticket content and configured taxonomy | Category labels, evidence and uncertainty |
-| Summarizer | Original ticket | Structured issue/customer-impact summary |
-| Priority recommender | Ticket evidence and active priority rules | Priority recommendation and factors |
-| Similarity retrieval | Tenant context, query and filters | Permission-filtered evidence references |
-| Resolution recommender | Ticket and retrieved approved evidence | Ordered suggested steps with citations |
-| Routing recommender | Ticket, routing rules and permitted workload data | Suggested team and rationale |
-| SLA evaluator | Ticket timestamps, calendar and active SLA version | Due times, risk and evaluation explanation |
-| Approval manager | Proposed action and approval policy | Decision, actor, reason and audit record |
+| Foundation dispatcher | Identity, organisation, department, team, and health endpoints | Uses shared authentication and persistence dependencies. |
+| Express domain application | Ticket, workflow, document, policy, SLA, AI, knowledge, reporting, audit and OpenAPI routes | API authorization and tenant scope are enforced server-side. |
+| Persistence adapters | MongoDB for application runtime; JSON only for isolated tests and offline demo | Preserve IDs, tenant boundaries, schema validation, and transaction scope. Atlas connectivity still depends on environment configuration. |
+| Ticket/workflow module | Ticket lifecycle, access scopes, comments, assignment, escalation and workflow state | Existing product semantics and API tests define supported operations. |
+| Document/policy modules | Upload metadata, versions, text conversion, extraction candidates, review and activation | Candidate extraction cannot silently activate policy. File bytes remain in local storage today. |
+| SLA module | Resolve configured rules and evaluate deadlines/risk | Do not activate unapproved target values or escalation thresholds. |
+| AI workflows | Classification, summary, recommendations, retrieval and operation metadata | Structured output validation, provenance, safe failure, and human review remain required. |
+| Retrieval | Provides permitted evidence references for recommendations | Current retrieval is lexical; embedding provider does not mean vector search is active. |
+| In-process workers | Poll AI and SLA work in backend runtime; coordinate extraction jobs | Not independently deployable; extraction queue is not an external durable broker. |
+| Audit feed | Admin-scoped aggregation of existing audit records | Not a guarantee of complete audit-event coverage across all mutations. |
 
-## 3. Design constraints
+## Cross-component invariants
 
-- No component may bypass tenant/permission checks.
-- AI components do not directly mutate policy configuration or execute consequential ticket actions.
-- All downstream consumers validate AI outputs.
-- Evidence must retain source identifiers and version information.
-- Provider-specific code remains behind adapters.
+- Authenticate and derive active tenant membership before tenant data access.
+- Keep authorization at the backend boundary even when a client hides a control.
+- Validate external and provider data at boundaries; preserve safe error behavior.
+- Keep provider adapters replaceable without assuming a provider change.
+- Preserve human review and evidence/provenance for AI recommendations and policy candidates.
+- Never infer missing business rules, retention periods, limits, or deployment products from component diagrams.

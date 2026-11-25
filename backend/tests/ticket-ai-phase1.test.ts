@@ -24,6 +24,7 @@ import type {
   TicketAiView,
   TicketClassificationCategory,
 } from '../src/modules/ai/contracts.js';
+import { normalizeStoredTicketClassification, normalizeStoredTicketSummary, validateTicketSummary, AiOutputValidationError } from '../src/modules/ai/contracts.js';
 import { TicketClassifier } from '../src/modules/ai/components/ticket-classifier.js';
 import { TicketSummarizer } from '../src/modules/ai/components/ticket-summarizer.js';
 import type { TenantContext } from '../src/shared/tenant.js';
@@ -48,16 +49,20 @@ const categories: TicketClassificationCategory[] = [
     description: 'Login, password reset, and account lockout issues.',
   },
   {
-    id: 'BILLING',
-    name: 'Billing',
-    description: 'Invoices and payment issues.',
+    id: 'PASSWORD_RESET',
+    name: 'Password reset',
+    description: 'Reset credentials and password recovery.',
   },
 ];
 
 const classificationOutput = {
-  category: 'ACCOUNT_ACCESS',
+  categories: ['ACCOUNT_ACCESS', 'PASSWORD_RESET'],
   reason: 'The ticket describes an account lockout after password resets.',
   confidence: 0.9,
+  evidence: [
+    { categoryId: 'ACCOUNT_ACCESS', field: 'title', start: 0, end: 27, excerpt: 'Unable to access my account' },
+    { categoryId: 'PASSWORD_RESET', field: 'description', start: 32, end: 47, excerpt: 'password resets' },
+  ],
   requiresHumanReview: false,
   warnings: [],
 };
@@ -66,6 +71,7 @@ const summaryOutput = {
   summary: 'The requester cannot access an account after resetting the password twice.',
   symptoms: ['The account is locked.'],
   attemptedActions: ['Reset the password twice.'],
+  affectedFunctionality: 'Account sign-in',
   businessImpact: null,
   missingInformation: ['Exact error message'],
   warnings: [],
@@ -150,13 +156,23 @@ test('analyzes an authorized ticket with configured categories and saves one rea
 
   assert.equal(result.ticketId, ticket.id);
   assert.equal(result.organisationId, tenant.organisationId);
-  assert.equal(result.classification.category, 'ACCOUNT_ACCESS');
+  assert.deepEqual(result.classification.categories, ['ACCOUNT_ACCESS', 'PASSWORD_RESET']);
+  assert.equal(result.classification.evidence[0]?.excerpt, ticket.title);
   assert.equal(result.summary.missingInformation[0], 'Exact error message');
+  assert.equal(result.summary.affectedFunctionality, 'Account sign-in');
   assert.equal(result.executions.length, 2);
   assert.equal(repository.records.length, 1);
   assert.equal((await service.listAnalyses(tenant, ticket.id)).length, 1);
   assert.equal(logger.events.length, 2);
   assert.ok(logger.events.every((event) => event.status === 'completed'));
+});
+
+test('summary requires a distinct affected-functionality field and accepts unknown as null', () => {
+  assert.equal(validateTicketSummary({ ...summaryOutput, affectedFunctionality: null }).affectedFunctionality, null);
+  const { affectedFunctionality: _legacyField, ...legacySummary } = summaryOutput;
+  assert.throws(() => validateTicketSummary(legacySummary), AiOutputValidationError);
+  assert.throws(() => validateTicketSummary({ ...summaryOutput, affectedFunctionality: '' }), AiOutputValidationError);
+  assert.equal(normalizeStoredTicketSummary(legacySummary).affectedFunctionality, null);
 });
 
 test('rejects a ticket projection from another tenant before calling a provider', async () => {
@@ -175,7 +191,7 @@ test('rejects a ticket projection from another tenant before calling a provider'
 
 test('rejects an unconfigured category returned by the provider', async () => {
   const { service, logger, repository } = createService({
-    classification: { ...classificationOutput, category: 'UNCONFIGURED' },
+    classification: { ...classificationOutput, categories: ['UNCONFIGURED'] },
   });
 
   await assert.rejects(
@@ -191,6 +207,15 @@ test('rejects an unconfigured category returned by the provider', async () => {
   assert.equal(repository.records.length, 0);
 });
 
+test('rejects duplicate labels and fabricated evidence while accepting multiple configured labels', async () => {
+  const duplicate = createService({ classification: { ...classificationOutput, categories: ['ACCOUNT_ACCESS', 'ACCOUNT_ACCESS'] } }).service;
+  await assert.rejects(duplicate.analyze({ tenant, ticketId: ticket.id, categories }), (error: unknown) => error instanceof AiExecutionError && error.code === 'INVALID_OUTPUT');
+  const fabricated = createService({ classification: { ...classificationOutput, evidence: [{ categoryId: 'ACCOUNT_ACCESS', field: 'title', start: 0, end: 5, excerpt: 'Wrong' }, classificationOutput.evidence[1]] } }).service;
+  await assert.rejects(fabricated.analyze({ tenant, ticketId: ticket.id, categories }), (error: unknown) => error instanceof AiExecutionError && error.code === 'INVALID_OUTPUT');
+  const uncitedLabel = createService({ classification: { ...classificationOutput, evidence: [classificationOutput.evidence[0]] } }).service;
+  await assert.rejects(uncitedLabel.analyze({ tenant, ticketId: ticket.id, categories }), (error: unknown) => error instanceof AiExecutionError && error.code === 'INVALID_OUTPUT');
+});
+
 test('rejects missing configured categories before calling the provider', async () => {
   const { service, logger } = createService();
 
@@ -204,9 +229,10 @@ test('rejects missing configured categories before calling the provider', async 
 
 test('requires review for uncertain classification and rejects malformed summaries', async () => {
   const uncertain = {
-    category: null,
+    categories: [],
     reason: 'The provided information does not identify a configured category.',
     confidence: null,
+    evidence: [],
     requiresHumanReview: true,
     warnings: ['Insufficient evidence.'],
   };
@@ -216,7 +242,7 @@ test('requires review for uncertain classification and rejects malformed summari
     ticketId: ticket.id,
     categories,
   });
-  assert.equal(uncertainResult.classification.category, null);
+  assert.deepEqual(uncertainResult.classification.categories, []);
   assert.equal(uncertainResult.classification.requiresHumanReview, true);
 
   const malformedService = createService({
@@ -227,6 +253,14 @@ test('requires review for uncertain classification and rejects malformed summari
     (error: unknown) => error instanceof AiExecutionError
       && error.code === 'INVALID_OUTPUT',
   );
+});
+
+test('legacy single-category history is surfaced as review-required without fabricated evidence', () => {
+  const migrated = normalizeStoredTicketClassification({ category: 'ACCOUNT_ACCESS', reason: 'Previously stored explanation.', confidence: 0.9, requiresHumanReview: false, warnings: [] });
+  assert.deepEqual(migrated.categories, ['ACCOUNT_ACCESS']);
+  assert.equal(migrated.requiresHumanReview, true);
+  assert.deepEqual(migrated.evidence, []);
+  assert.ok(migrated.warnings.includes('LEGACY_CLASSIFICATION_EVIDENCE_UNAVAILABLE'));
 });
 
 test('retries only retryable provider failures and records attempt count', async () => {
@@ -304,7 +338,7 @@ test('keeps prompt-injection text in ticket data and sends only the AI ticket pr
         provider: 'recording-test-provider',
         model: request.model,
         output: request.task === 'ticket_classification'
-          ? classificationOutput
+          ? { ...classificationOutput, categories: ['ACCOUNT_ACCESS'], evidence: [classificationOutput.evidence[0]] }
           : summaryOutput,
       };
     },

@@ -19,6 +19,11 @@ The existing classifier/summarizer service and stored analysis shape remain unch
 ## Model response contract
 
 The response has exactly `impact`, `urgency`, `missingInformation`, `warnings`.
+Impact reasoning considers the stated scope of affected users, departments and services,
+and business criticality. Urgency reasoning considers time before disruption and any
+stated usable workaround. These considerations inform the existing impact/urgency matrix;
+they do not create additional factors or invented weighting rules.
+
 Each factor has exactly:
 
 - `value`: `high`, `medium`, `low`, or null when unknown.
@@ -64,7 +69,7 @@ const recommendation = await service.recommend(trustedTenant, ticketId);
 
 The caller supplies the draft explicitly. This module does not load reference files,
 activate policies, save data, assign teams, close tickets or change internal priority.
-It does not automatically map P1-P4 to existing free-form or Jira priority labels.
+It does not automatically map P1-P4 to legacy external source priority labels.
 The local heuristic demo now returns unknown factors and explicit DEMO_ONLY warnings;
 `DeterministicFakeProvider` can supply task-specific fixtures for independent tests.
 

@@ -23,7 +23,10 @@ export class GovernedKnowledgeSource implements AuthorizedKnowledgeSource {
     const permissions = this.authorization.permissionsFor(tenant.roles);
     const administrator = permissions.has('configuration.manage');
     if (!administrator && !permissions.has('tickets.resolution.review')) return [];
-    const approvals = await this.store.readCollection<{ id: string; organisationId: string; policyVersionId: string; extractedRuleId?: string; decision: string }>('policyApprovals');
+    const approvals = await this.store.queryCollection<{ id: string; organisationId: string; policyVersionId: string; extractedRuleId?: string; decision: string }>('policyApprovals', {
+      organisationId: tenant.organisationId,
+      decision: 'approved',
+    });
     const published: KnowledgeDocument[] = [];
     for (const policy of await this.policies.listPolicies(tenant)) {
       if (policy.policyType !== 'knowledge' || policy.organisationId !== tenant.organisationId) continue;

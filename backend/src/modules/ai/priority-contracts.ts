@@ -24,7 +24,7 @@ export type PriorityFactorOutput = {
 export type PriorityRecommendation = {
   ticketId: string;
   organisationId: string;
-  policyStatus: 'draft';
+  policyStatus: 'draft' | 'active';
   status: 'recommendation' | 'insufficient_information';
   priority: IncidentPriority | null;
   factors: PriorityFactorOutput;

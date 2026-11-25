@@ -1,0 +1,11 @@
+.git
+**/node_modules
+**/dist
+**/coverage
+**/.next
+**/.local-data
+**/.env
+**/.env.*
+!backend/.env.example
+**/*.log
+frontend

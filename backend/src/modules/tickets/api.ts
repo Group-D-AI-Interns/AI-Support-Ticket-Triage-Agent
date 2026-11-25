@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { resolve } from 'node:path';
 import express, {
   type Express,
   type ErrorRequestHandler,
@@ -9,6 +10,7 @@ import express, {
 import multer from 'multer';
 import type { AuthenticationProvider, TenantContext, TenantResolver } from '../../shared/auth/authentication.js';
 import { applicationAuthorization, type Permission, type RolePermissionPolicy } from '../../shared/auth/authorization.js';
+import { InMemoryRateLimiter, type RateLimitDecision } from '../../shared/middleware/in-memory-rate-limiter.js';
 import {
   AiExecutionError,
   type AiExecutionRunner,
@@ -23,6 +25,7 @@ import { PriorityRecommender } from '../ai/components/priority-recommender.js';
 import { PriorityRecommendationService } from '../ai/priority-recommendation.service.js';
 import {
   priorityPreviewFromEnvironment,
+  priorityMinimumConfidence,
   type PriorityPreviewConfiguration,
 } from '../ai/priority-preview-config.js';
 import {
@@ -50,7 +53,7 @@ import { TriageJobs, automationFromEnvironment, type AutomationConfiguration } f
 import { createTriageWorker } from '../ai/triage-worker.js';
 import { aiDocumentation } from '../ai/ai-documentation.js';
 import { JsonTeamRepository } from '../teams/repositories.js';
-import { JsonFileStore } from '../../infrastructure/persistence/json/json-file-store.js';
+import { JsonFileStore, type JsonFileStorePort } from '../../infrastructure/persistence/json/json-file-store.js';
 import { FreshVerifiedSlaSource } from '../ai/verified-sla-source.js';
 import { ProviderDocumentExtractionAdapter, type ApprovedExtractionSchemas } from '../ai/provider-document-extraction.adapter.js';
 import { documentExtractionSchemas } from '../ai/document-extraction-schemas.js';
@@ -97,13 +100,10 @@ import {
 import type { OperationalReport } from '../reporting/domain/operational-report.js';
 import type { SlaEvaluationService as SlaEvaluationServiceType } from '../sla/services/sla-evaluation.service.js';
 import {
-  ConfigurationError,
-  jiraSettingsFromEnvironment,
-  type JiraSettings,
-} from './config.js';
-import {
   JsonTicketReadService,
+  type TicketListFilters,
   type TicketReadModel,
+  type TicketReadScope,
   type TicketReadService,
 } from './application/ticket-read.service.js';
 import {
@@ -115,9 +115,10 @@ import {
 import type {
   JsonValue,
   TicketAttachment,
+  TicketHistoryEvent,
   TicketRecord,
-  TicketSource,
 } from './domain/ticket.js';
+import type { PolicyAuditRecord } from '../policies/domain/policy.js';
 import type {
   TicketReopenRequest,
   TicketWorkflowConfig,
@@ -144,7 +145,11 @@ import {
 } from './services/ticket-workflow-validation.js';
 
 type ApiErrorField = { field: string; message: string };
-const ticketAppDisposers = new WeakMap<Express, () => void>();
+const ticketAppDisposers = new WeakMap<Express, () => Promise<void>>();
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const FAILED_AUTH_LIMIT_PER_IP = 5;
+const TICKET_CREATE_LIMIT_PER_USER = 10;
+const AI_OPERATION_LIMIT_PER_USER = 5;
 
 class ApiError extends Error {
   constructor(
@@ -158,7 +163,7 @@ class ApiError extends Error {
 }
 
 export type TicketAppOptions = {
-  settings?: JiraSettings;
+  dataDirectory?: string;
   ticketStore?: JsonTicketStore;
   ticketWorkflowStore?: JsonTicketWorkflowStore;
   ticketReadService?: TicketReadService;
@@ -168,6 +173,7 @@ export type TicketAppOptions = {
   listTeamIdsForUser?: (tenant: TenantContext, userId: string) => Promise<string[]>;
   authorization?: RolePermissionPolicy;
   tenantStore?: JsonTenantStore;
+  fileStore?: JsonFileStorePort;
   attachmentStorage?: DocumentStorageAdapter;
   policyRepository?: PolicyRepository;
   slaEvaluationRepository?: SlaEvaluationRepository;
@@ -186,20 +192,20 @@ export type TicketAppOptions = {
   documentExtractionSchemas?: ApprovedExtractionSchemas;
 };
 
-export function stopTicketApp(app: Express): void {
-  ticketAppDisposers.get(app)?.();
+export async function stopTicketApp(app: Express): Promise<void> {
+  await ticketAppDisposers.get(app)?.();
   ticketAppDisposers.delete(app);
 }
 
 export function createTicketApp(options: TicketAppOptions = {}) {
-  const settings = options.settings ?? jiraSettingsFromEnvironment();
-  const store = options.ticketStore ?? new JsonTicketStore(settings.dataDirectory);
+  const dataDirectory = options.dataDirectory ?? resolve(process.cwd(), process.env.DATA_DIRECTORY || '.local-data');
+  const store = options.ticketStore ?? new JsonTicketStore(dataDirectory);
   const workflowStore =
     options.ticketWorkflowStore ??
-    new JsonTicketWorkflowStore(settings.dataDirectory);
+    new JsonTicketWorkflowStore(dataDirectory);
   const ticketReadService =
     options.ticketReadService ?? new JsonTicketReadService(store);
-  const tenantStore = options.tenantStore ?? createJsonTenantStore(settings.dataDirectory);
+  const tenantStore = options.tenantStore ?? createJsonTenantStore(dataDirectory);
   const policyRepository =
     options.policyRepository ?? new JsonPolicyRepository(tenantStore);
   const documentRepository = new JsonDocumentRepository(tenantStore);
@@ -242,11 +248,15 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         'The source document must be processed and belong to this organisation.',
       );
     }
-    const sourceVersions = await tenantStore.readCollection<{
+    const sourceVersions = await tenantStore.queryCollection<{
       id: string;
       documentId: string;
       organisationId: string;
-    }>('documentVersions');
+    }>('documentVersions', {
+      id: sourceDocumentVersionId,
+      documentId: sourceDocumentId,
+      organisationId: tenant.organisationId,
+    });
     if (
       !sourceVersions.some(
         (version) =>
@@ -295,11 +305,15 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         'The SLA source document must remain processed and tenant-scoped.',
       );
     }
-    const sourceVersions = await tenantStore.readCollection<{
+    const sourceVersions = await tenantStore.queryCollection<{
       id: string;
       documentId: string;
       organisationId: string;
-    }>('documentVersions');
+    }>('documentVersions', {
+      id: sourceDocumentVersionId,
+      documentId: sourceDocumentId,
+      organisationId: tenant.organisationId,
+    });
     if (
       !sourceVersions.some(
         (sourceVersion) =>
@@ -331,7 +345,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   );
   const attachmentStorage =
     options.attachmentStorage ??
-    createLocalPrivateStorageAdapter(settings.dataDirectory);
+    createLocalPrivateStorageAdapter(dataDirectory);
   const documentLifecycle = new DocumentLifecycleService(tenantStore, attachmentStorage);
   const attachmentService = new TicketAttachmentService(
     store,
@@ -389,16 +403,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     ? priorityPreviewFromEnvironment()
     : options.priorityPreview;
   const priorityRunner = priorityConfig?.runner ?? ticketAiRuntime?.priorityRunner;
-  const priorityService = priorityConfig && priorityRunner
-    ? new PriorityRecommendationService(
-      ticketAiSource,
-      new PriorityRecommender(
-        priorityRunner,
-        priorityConfig.candidate,
-        priorityConfig.minimumConfidence,
-      ),
-    )
-    : null;
+  const priorityConfidence = priorityConfig?.minimumConfidence ?? priorityMinimumConfidence();
   const resolutionRunner = options.resolutionRunner ?? ticketAiRuntime?.priorityRunner;
   const baseKnowledge = options.knowledgeSource ?? new GovernedKnowledgeSource(policyRepository, tenantStore, authorization);
   let operations: AiOperationsService;
@@ -424,12 +429,8 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         revision: createHash('sha256').update(JSON.stringify(ticket)).digest('hex'),
         domain: { createdAt: ticket.createdAt, ...(ticket.priority === undefined ? {} : { priority: ticket.priority }), ...(ticket.teamId === undefined ? {} : { teamId: ticket.teamId }) } };
     }, tenant => authorization.permissionsFor(tenant.roles).has('configuration.manage'));
-  const triageService = ticketAiRuntime?.createTriageService({ knowledge: knowledgeSource, sla: slaInsightSource,
-    ...(resolutionRunner ? { resolutionRunner } : {}),
-    ...(priorityConfig && priorityRunner ? { priority: new PriorityRecommender(priorityRunner, priorityConfig.candidate, priorityConfig.minimumConfidence) } : {}),
-    routing: options.routingSource ?? { getAuthorizedRoutingContext: (tenant, ticket) => operations.getAuthorizedRoutingContext(tenant, ticket) },
-  });
-  const operationFiles = new JsonFileStore(settings.dataDirectory);
+  const operationFiles = options.fileStore ?? new JsonFileStore(dataDirectory);
+  const aiOperationStore = new AiOperationsStore(operationFiles);
   const operationTeams = new JsonTeamRepository(operationFiles);
   const canRunAi = (tenant: TenantContext) => ['tickets.ai.review', 'tickets.resolution.review'].every(permission =>
     authorization.permissionsFor(tenant.roles).has(permission as Permission));
@@ -440,7 +441,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     const teamIds = options.tenantResolver ? await options.listTeamIdsForUser?.(tenant, userId) ?? [] : principal?.teamIds ?? [];
     return { ...tenant, teamIds } as DevelopmentPrincipal;
   };
-  operations = new AiOperationsService(new AiOperationsStore(operationFiles), {
+  operations = new AiOperationsService(aiOperationStore, {
     async ticket(tenant, id) {
       const ticket = await store.findTicket(tenant, id);
       const caller = tenant as DevelopmentPrincipal;
@@ -454,12 +455,34 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       const policy = await slaEvaluationService.resolvePolicyForTicket(tenant, ticket);
       return typeof ticket.status === 'string' && (policy?.resolvedStatuses.includes(ticket.status) ?? false);
     },
-    categories: () => ticketAiCategories ?? [], knowledge: baseKnowledge,
+    defaultCategories: ticketAiCategories ?? [], categories: tenant => operations.categories(tenant), knowledge: baseKnowledge,
+    async prioritySource(tenant, documentId, versionId) {
+      const document = await documentRepository.getById(tenant, documentId);
+      const version = await documentRepository.getVersionById(tenant, versionId);
+      if (!document || document.status !== 'processed' || document.processingStatus !== 'completed' || !version ||
+        version.documentId !== documentId || version.organisationId !== tenant.organisationId) return null;
+      return { sha256: version.checksumSha256 };
+    },
     ...(options.routingSource ? { routing: options.routingSource } : {}),
     async triage(tenant, ticketId) {
-      if (!triageService || !ticketAiCategories) throw new AiOperationsError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
-      return triageService.analyze({ tenant, ticketId, categories: ticketAiCategories });
+      const categories = await operations.categories(tenant);
+      if (!triageService || !categories.length) throw new AiOperationsError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI or tenant ticket categories are not configured.');
+      return triageService.analyze({ tenant, ticketId, categories });
     },
+  });
+  const dynamicPriorityRecommender = priorityRunner && priorityConfidence !== null
+    ? new PriorityRecommender(priorityRunner, priorityConfig?.candidate ?? null, priorityConfidence, async tenant => {
+      const record = await operations.activePriorityPolicy(tenant);
+      if (!record) return priorityConfig ? { candidate: priorityConfig.candidate, status: 'draft' as const } : null;
+      return { status: 'active' as const, candidate: { schemaVersion: 1, status: 'draft', requiresHumanReview: true,
+        source: { documentId: record.data.sourceDocumentId, version: record.data.sourceDocumentVersionId,
+          path: `tenant-document:${record.data.sourceDocumentId}`, sha256: record.data.sourceChecksumSha256, section: `Approved tenant priority policy v${record.data.version}` },
+        matrix: record.data.matrix } };
+    }) : null;
+  const priorityService = dynamicPriorityRecommender ? new PriorityRecommendationService(ticketAiSource, dynamicPriorityRecommender) : null;
+  const triageService = ticketAiRuntime?.createTriageService({ knowledge: knowledgeSource, sla: slaInsightSource,
+    ...(resolutionRunner ? { resolutionRunner } : {}), ...(dynamicPriorityRecommender ? { priority: dynamicPriorityRecommender } : {}),
+    routing: options.routingSource ?? { getAuthorizedRoutingContext: (tenant, ticket) => operations.getAuthorizedRoutingContext(tenant, ticket) },
   });
   const triageJobs = new TriageJobs(operations, resolveAiActor);
   const worker = createTriageWorker(options.aiAutomation ?? automationFromEnvironment(), triageJobs, resolveAiActor, tenant => store.listTickets(tenant));
@@ -489,6 +512,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   );
 
   const app = express();
+  app.disable('x-powered-by');
   app.locals.aiWorker = worker;
   app.use(aiDocumentation());
   const slaEvaluationWorker = options.slaEvaluationWorker
@@ -540,12 +564,16 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   });
   app.use(express.json({ limit: '1mb' }));
   if (options.authenticator && options.tenantResolver) {
+    const failedAuthLimiter = new InMemoryRateLimiter(FAILED_AUTH_LIMIT_PER_IP, RATE_LIMIT_WINDOW_MS);
+    const ticketCreateLimiter = new InMemoryRateLimiter(TICKET_CREATE_LIMIT_PER_USER, RATE_LIMIT_WINDOW_MS);
+    const aiOperationLimiter = new InMemoryRateLimiter(AI_OPERATION_LIMIT_PER_USER, RATE_LIMIT_WINDOW_MS);
     app.use(async (request, _response, next) => {
-      if (request.path.startsWith('/api/v1/tickets/ingest/jira/')) {
-        next();
-        return;
-      }
       try {
+        const authKey = request.socket.remoteAddress ?? 'unknown-client';
+        if (!failedAuthLimiter.check(authKey).allowed) {
+          sendRateLimitError(_response, failedAuthLimiter.check(authKey));
+          return;
+        }
         let authenticated;
         try {
           authenticated = await options.authenticator!.authenticate(request);
@@ -553,6 +581,11 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           throw new ApiError(503, 'AUTH_PROVIDER_UNAVAILABLE', 'Authentication is temporarily unavailable.');
         }
         if (!authenticated) {
+          const decision = failedAuthLimiter.consume(authKey);
+          if (!decision.allowed) {
+            sendRateLimitError(_response, decision);
+            return;
+          }
           throw new ApiError(401, 'UNAUTHENTICATED', 'A valid bearer access token is required.');
         }
         const selectedOrganisation = request.header('x-organisation-id') ?? request.query.organisationId;
@@ -570,6 +603,21 @@ export function createTicketApp(options: TicketAppOptions = {}) {
           teamIds,
           permissions: [...authorization.permissionsFor(tenant.roles)],
         };
+        const principalRequest = request as Request & { integratedPrincipal?: DevelopmentPrincipal };
+        const rateLimitKey = `${tenant.organisationId}:${tenant.userId}`;
+        if (request.method === 'POST' && /^\/api\/v1\/tickets\/?$/.test(request.path)) {
+          const decision = ticketCreateLimiter.consume(rateLimitKey);
+          if (!decision.allowed) {
+            sendRateLimitError(_response, decision);
+            return;
+          }
+        } else if (isAiOperationRequest(request)) {
+          const decision = aiOperationLimiter.consume(rateLimitKey);
+          if (!decision.allowed) {
+            sendRateLimitError(_response, decision);
+            return;
+          }
+        }
         next();
       } catch (error) {
         next(error);
@@ -646,19 +694,17 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       throw new ApiError(404, 'NOT_FOUND', 'Document not found.');
     }
     const versions = (
-      await tenantStore.readCollection<{
+      await tenantStore.queryCollection<{
         id: string;
         documentId: string;
         organisationId: string;
         version: number;
         storageKey?: string;
-      }>('documentVersions')
+      }>('documentVersions', {
+        documentId,
+        organisationId: authenticated.organisationId,
+      })
     )
-      .filter(
-        (version) =>
-          version.documentId === documentId &&
-          version.organisationId === authenticated.organisationId,
-      )
       .map(({ storageKey: _storageKey, ...version }) => version);
     const { storageKey: _storageKey, ...safeDocument } = document;
     response.json({
@@ -991,11 +1037,15 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       }
       await validateStoredSlaDocumentSource(version, authenticated);
       const approvalRecords =
-        await tenantStore.readCollection<{
+        await tenantStore.queryCollection<{
           policyVersionId: string;
           organisationId: string;
           decision: string;
-        }>('policyApprovals');
+        }>('policyApprovals', {
+          policyVersionId: version.id,
+          organisationId: authenticated.organisationId,
+          decision: 'approved',
+        });
       const existingApproval = approvalRecords.some(
         (record) =>
           record.policyVersionId === version.id &&
@@ -1094,11 +1144,15 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         );
       }
       const approvals =
-        await tenantStore.readCollection<{
+        await tenantStore.queryCollection<{
           policyVersionId: string;
           organisationId: string;
           decision: string;
-        }>('policyApprovals');
+        }>('policyApprovals', {
+          policyVersionId: version.id,
+          organisationId: authenticated.organisationId,
+          decision: 'approved',
+        });
       if (
         !approvals.some(
           (approval) =>
@@ -1370,8 +1424,9 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
     requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
     parseObjectBody(request.body ?? {}, []);
-    if (!triageService || !ticketAiCategories) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
+    if (!triageService) throw new ApiError(503, 'TICKET_AI_NOT_CONFIGURED', 'Ticket AI is not enabled.');
     try {
+      if (!(await operations.categories(authenticated)).length) throw new ApiError(503, 'TICKET_CATEGORIES_NOT_CONFIGURED', 'Configure at least one ticket category before running AI triage.');
       const report = await operations.run(authenticated, routeParam(request, 'ticketId'));
       const result = { ...(report.data.result as Record<string, unknown>), triageId: report.id };
       response.setHeader('Cache-Control', 'no-store');
@@ -1393,7 +1448,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     const authenticated = authenticatedPrincipal(request, principal);
     requireSharedPermission(authenticated, authorization, 'tickets.ai.review');
     parseObjectBody(request.body ?? {}, []);
-    if (!ticketAiRuntime || !ticketAiCategories) {
+    if (!ticketAiRuntime) {
       throw new ApiError(
         503,
         'TICKET_AI_NOT_CONFIGURED',
@@ -1401,10 +1456,12 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       );
     }
     try {
+      const categories = await operations.categories(authenticated);
+      if (!categories.length) throw new ApiError(503, 'TICKET_CATEGORIES_NOT_CONFIGURED', 'Configure at least one ticket category before running AI analysis.');
       const analysis = await ticketAiRuntime.service.analyze({
         tenant: authenticated,
         ticketId: routeParam(request, 'ticketId'),
-        categories: ticketAiCategories,
+        categories,
       });
       response.setHeader('Cache-Control', 'no-store');
       response.json({ data: analysis, requestId: requestId(response) });
@@ -1451,6 +1508,24 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       ...(teamId === undefined ? {} : { teamId }),
       ...(requesterId === undefined ? {} : { requesterId }),
     };
+    if (q === undefined && ticketReadService.listTicketsPage) {
+      const scope = ticketReadScope(authenticated);
+      const page = await ticketReadService.listTicketsPage(
+        authenticated,
+        filters satisfies TicketListFilters,
+        scope,
+        limit,
+        offset,
+      );
+      if (page) {
+        response.json({
+          data: page.data.map(ticket => ticketResponse(ticket)),
+          pagination: { limit, offset, total: page.total },
+          requestId: requestId(response),
+        });
+        return;
+      }
+    }
     const tickets = await ticketReadService.listTickets(authenticated);
     const filtered = tickets
       .filter((ticket) => canAccessTicket(authenticated, ticket))
@@ -1461,10 +1536,73 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       });
 
     response.json({
-      data: filtered.slice(offset, offset + limit).map(ticketResponse),
+      data: filtered.slice(offset, offset + limit).map(ticket => ticketResponse(ticket)),
       pagination: { limit, offset, total: filtered.length },
       requestId: requestId(response),
     });
+  });
+
+  app.get('/api/v1/ticket-escalations', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    if (!isSupportStaff(authenticated)) throw new ApiError(403, 'FORBIDDEN', 'Support staff access is required.');
+    const escalationStore = store as JsonTicketStore & {
+      listOpenEscalatedTickets?: (tenant: TenantContext, scope: TicketReadScope) => Promise<TicketRecord[]>;
+    };
+    const tickets = escalationStore.listOpenEscalatedTickets
+      ? (await escalationStore.listOpenEscalatedTickets(authenticated, ticketReadScope(authenticated)))
+        .filter(ticket => canAccessTicket(authenticated, ticket))
+      : (await store.listTickets(authenticated)).filter(ticket => canAccessTicket(authenticated, ticket));
+    const data = tickets.flatMap(ticket => (ticket.escalations ?? [])
+      .filter(escalation => escalation.status === 'open')
+      .map(escalation => ({ ticket: ticketResponse(ticket, true), escalation })));
+    response.setHeader('Cache-Control', 'no-store');
+    response.json({ data, requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/tickets/:ticketId/escalations', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    if (!isSupportStaff(authenticated)) throw new ApiError(403, 'FORBIDDEN', 'Support staff access is required.');
+    const ticket = await findAccessibleTicket(store, authenticated, routeParam(request, 'ticketId'));
+    const body = parseObjectBody(request.body, ['reasonCode', 'handoverNotes']);
+    const reasonCode = body.reasonCode;
+    const allowed = ['P1_CRITICAL', 'P2_HIGH', 'SLA_AT_RISK', 'BEYOND_AGENT_AUTHORITY', 'RECURRING_BREACH', 'OTHER'];
+    if (typeof reasonCode !== 'string' || !allowed.includes(reasonCode)) {
+      throw validationError('reasonCode', 'Select a supported escalation reason.');
+    }
+    const handoverNotes = requiredText(body, 'handoverNotes').trim();
+    if (handoverNotes.length > 4000) throw validationError('handoverNotes', 'Handover notes must be 4,000 characters or fewer.');
+    const updated = await store.openEscalation(authenticated, ticket.id, {
+      reasonCode: reasonCode as import('./domain/ticket.js').TicketEscalation['reasonCode'],
+      handoverNotes,
+    });
+    if (!updated) throw ticketNotFound();
+    response.status(201).json({ data: (updated.escalations ?? []).at(-1), requestId: requestId(response) });
+  });
+
+  app.post('/api/v1/tickets/:ticketId/escalations/:escalationId/resolve', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    requireEscalationManager(authenticated);
+    const ticket = await findAccessibleTicket(store, authenticated, routeParam(request, 'ticketId'));
+    const body = parseObjectBody(request.body, ['resolutionNotes']);
+    const resolutionNotes = requiredText(body, 'resolutionNotes').trim();
+    if (resolutionNotes.length > 4000) throw validationError('resolutionNotes', 'Resolution notes must be 4,000 characters or fewer.');
+    const updated = await store.resolveEscalation(authenticated, ticket.id, routeParam(request, 'escalationId'), resolutionNotes);
+    if (!updated) throw ticketNotFound();
+    response.json({ data: (updated.escalations ?? []).find(item => item.id === routeParam(request, 'escalationId')), requestId: requestId(response) });
+  });
+
+  app.get('/api/v1/tickets/:ticketId/workflow-context', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    const ticket = await findAccessibleTicket(store, authenticated, routeParam(request, 'ticketId'));
+    const workflow = await workflowForTicket(workflowStore, authenticated, ticket);
+    const currentStatus = canonicalStatus(workflow.config, ticket.status ?? workflow.config.initialStatus);
+    const slaPolicy = await slaEvaluationService.resolvePolicyForTicket(authenticated, ticket);
+    response.json({ data: {
+      workflowId: workflow.id,
+      currentStatus,
+      transitions: currentStatus ? workflow.config.transitions[currentStatus] ?? [] : [],
+      resolvedStatuses: slaPolicy?.resolvedStatuses ?? [],
+    }, requestId: requestId(response) });
   });
 
   app.get('/api/v1/tickets/:ticketId', async (request, response) => {
@@ -1476,7 +1614,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     );
     response.json({
       data: {
-        ...ticketResponse(ticket),
+        ...ticketResponse(ticket, isSupportStaff(authenticated)),
         comments: visibleComments(authenticated, ticket),
         attachments: (ticket.attachments ?? []).map(publicAttachment),
         reopenRequests: ticket.reopenRequests ?? [],
@@ -1739,7 +1877,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       throw ticketNotFound();
     }
     response.json({
-      data: ticketResponse(updated),
+      data: ticketResponse(updated, isSupportStaff(authenticated)),
       requestId: requestId(response),
     });
   });
@@ -2011,7 +2149,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       throw ticketNotFound();
     }
     response.json({
-      data: ticketResponse(updated),
+      data: ticketResponse(updated, isSupportStaff(authenticated)),
       requestId: requestId(response),
     });
   });
@@ -2080,69 +2218,50 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     });
   });
 
-  app.post(
-    '/api/v1/tickets/ingest/jira/:webhookSecret',
-    async (request, response) => {
-      const body = parseJiraBody(request.body);
-      const fields = body.issue.fields;
-      const project = isRecord(fields.project) ? fields.project : undefined;
-      const projectKey = project?.key;
-      if (typeof projectKey !== 'string' || !projectKey) {
-        throw validationError(
-          'issue.fields.project.key',
-          'Project key is required.',
-        );
-      }
+  app.get('/api/v1/audit-logs', async (request, response) => {
+    const authenticated = authenticatedPrincipal(request, principal);
+    if (!hasAnyRole(authenticated, ['organisation_admin'])) {
+      throw new ApiError(403, 'FORBIDDEN', 'Only organisation administrators can read organisation audit logs.');
+    }
+    const tenant = authenticated;
+    const page = queryInteger(request, 'page', 1, 1);
+    const pageSize = queryInteger(request, 'pageSize', 50, 1, 100);
 
-      const organisationId = settings.projectMappings[projectKey];
-      if (!organisationId) {
-        throw jiraUnauthorized();
-      }
-      const organisationConfig = settings.organisations[organisationId];
-      if (
-        !organisationConfig ||
-        !secureStringEqual(
-          routeParam(request, 'webhookSecret'),
-          organisationConfig.webhookSecret,
-        )
-      ) {
-        throw jiraUnauthorized();
-      }
-
-      const mappedTicket = mapJiraIssue(
-        body.webhookEvent,
-        body.issue,
-        fields,
-        projectKey,
-        organisationId,
-        organisationConfig.reporterMappings,
-      );
-      const workflow = await workflowStore.getActive({
-        organisationId,
-        userId: mappedTicket.requesterId,
-        roles: [],
-      });
-      const ticket = workflow
-        ? {
-            ...mappedTicket,
-            workflowId: workflow.id,
-            status: workflow.config.initialStatus,
-          }
-        : mappedTicket;
-      const [stored, outcome] = await store.upsertJiraTicket(ticket);
-      if (outcome === 'created') await notifyIntake(organisationId, stored.id, stored.createdAt);
-      response.status(outcome === 'created' ? 201 : 200).json({
-        data: {
-          id: stored.id,
-          sourceIssueKey: stored.source?.issueKey,
-          outcome,
-          createdAt: stored.createdAt,
-          updatedAt: stored.updatedAt,
-        },
-        requestId: requestId(response),
-      });
-    },
-  );
+    const policyAudit = await tenantStore.queryCollection<PolicyAuditRecord>('auditLogs', {
+      organisationId: tenant.organisationId,
+    });
+    const aiAudit = await aiOperationStore.list(tenant.organisationId, 'audit');
+    const ticketAudit = (await store.listTickets(tenant)).flatMap(ticket => (ticket.history ?? []).map((event: TicketHistoryEvent) => ({
+      id: event.id,
+      organisationId: ticket.organisationId,
+      actorId: event.actorId,
+      action: event.action,
+      targetType: 'ticket',
+      targetId: ticket.id,
+      createdAt: event.createdAt,
+      source: 'ticket',
+      details: { changes: event.changes },
+    })));
+    const entries = [
+      ...policyAudit.map(record => ({
+        id: record.id, organisationId: record.organisationId, actorId: record.actorId,
+        action: record.action, targetType: record.targetType, targetId: record.targetId,
+        createdAt: record.createdAt, source: 'policy',
+        details: { ...(record.before ? { before: record.before } : {}), ...(record.after ? { after: record.after } : {}) },
+      })),
+      ...aiAudit.map(record => ({
+        id: record.id, organisationId: record.organisationId, actorId: record.actorId,
+        action: record.data.action, targetType: 'ai_operation', targetId: record.data.targetId,
+        createdAt: record.createdAt, source: 'ai', details: { reason: record.data.reason },
+      })),
+      ...ticketAudit,
+    ].sort((left, right) => right.createdAt.localeCompare(left.createdAt) || left.id.localeCompare(right.id));
+    response.json({
+      data: entries.slice((page - 1) * pageSize, page * pageSize),
+      pagination: { page, pageSize, total: entries.length },
+      requestId: requestId(response),
+    });
+  });
 
   app.get('/api/v1/extracted-rules', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
@@ -2248,9 +2367,9 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       slaEvaluationWorker.enqueue(organisationId, ticketId);
     });
     slaEvaluationWorker.start();
-    ticketAppDisposers.set(app, () => {
+    ticketAppDisposers.set(app, async () => {
       unsubscribe();
-      slaEvaluationWorker.stop();
+      await slaEvaluationWorker.stop();
     });
   }
   return app;
@@ -2312,6 +2431,15 @@ function canAccessTicket(
     ticket.teamId != null &&
     principal.teamIds.includes(ticket.teamId)
   );
+}
+
+function ticketReadScope(principal: DevelopmentPrincipal): TicketReadScope {
+  return {
+    readAll: hasSharedPermission(principal, 'tickets.read.all'),
+    ...(hasSharedPermission(principal, 'tickets.read.own') ? { requesterId: principal.userId } : {}),
+    includeUnassigned: hasSharedPermission(principal, 'tickets.read.team'),
+    teamIds: isSupportStaff(principal) ? principal.teamIds : [],
+  };
 }
 
 async function findAccessibleTicket(
@@ -2393,6 +2521,7 @@ function matchesTicketFilters(
 
 function ticketResponse(
   ticket: TicketRecord | TicketReadModel,
+  includeEscalations = false,
 ): Omit<TicketRecord, 'comments' | 'history' | 'attachments'> {
   return {
     id: ticket.id,
@@ -2409,6 +2538,7 @@ function ticketResponse(
     ...(ticket.teamId !== undefined ? { teamId: ticket.teamId } : {}),
     ...(ticket.status !== undefined ? { status: ticket.status } : {}),
     ...(ticket.priority !== undefined ? { priority: ticket.priority } : {}),
+    ...(includeEscalations && 'escalations' in ticket && ticket.escalations !== undefined ? { escalations: ticket.escalations } : {}),
     ...(ticket.source !== undefined ? { source: ticket.source } : {}),
     createdAt: ticket.createdAt,
     updatedAt: ticket.updatedAt,
@@ -2421,122 +2551,6 @@ function publicAttachment(attachment: TicketAttachment) {
     ...publicMetadata
   } = attachment;
   return publicMetadata;
-}
-
-function parseJiraBody(value: unknown): {
-  webhookEvent: string;
-  issue: Record<string, unknown> & { fields: Record<string, unknown> };
-} {
-  if (!isRecord(value)) {
-    throw validationError('body', 'The request body must be an object.');
-  }
-  if (typeof value.webhookEvent !== 'string' || !value.webhookEvent) {
-    throw validationError('webhookEvent', 'Webhook event is required.');
-  }
-  if (!isRecord(value.issue) || !isRecord(value.issue.fields)) {
-    throw validationError('issue.fields', 'Issue fields are required.');
-  }
-  return {
-    webhookEvent: value.webhookEvent,
-    issue: value.issue as Record<string, unknown> & {
-      fields: Record<string, unknown>;
-    },
-  };
-}
-
-function mapJiraIssue(
-  webhookEvent: string,
-  issue: Record<string, unknown>,
-  fields: Record<string, unknown>,
-  projectKey: string,
-  organisationId: string,
-  reporterMappings: Record<string, string>,
-) {
-  if (
-    webhookEvent !== 'jira:issue_created' &&
-    webhookEvent !== 'jira:issue_updated'
-  ) {
-    throw new ApiError(
-      400,
-      'UNSUPPORTED_JIRA_EVENT',
-      'Only Jira issue-created and issue-updated events are supported.',
-    );
-  }
-  if (typeof issue.id !== 'string' || !issue.id) {
-    throw validationError('issue.id', 'Jira issue ID is required.');
-  }
-  if (
-    typeof issue.key !== 'string' ||
-    !new RegExp(`^${escapeRegExp(projectKey)}-\\d+$`).test(issue.key)
-  ) {
-    throw validationError(
-      'issue.key',
-      'Issue key must match the configured Jira project.',
-    );
-  }
-
-  const reporter = isRecord(fields.reporter) ? fields.reporter : undefined;
-  const accountId = reporter?.accountId;
-  if (typeof accountId !== 'string' || !accountId) {
-    throw validationError(
-      'issue.fields.reporter.accountId',
-      'Jira reporter account ID is required.',
-    );
-  }
-  const requesterId = reporterMappings[accountId];
-  if (!requesterId) {
-    throw new ApiError(
-      403,
-      'JIRA_REPORTER_UNMAPPED',
-      'The Jira reporter has no configured internal user mapping.',
-    );
-  }
-  if (typeof fields.summary !== 'string' || !fields.summary.trim()) {
-    throw validationError(
-      'issue.fields.summary',
-      'Issue summary is required.',
-    );
-  }
-  const description = fields.description;
-  if (description !== undefined && !isJsonValue(description)) {
-    throw validationError(
-      'issue.fields.description',
-      'Description must be JSON-compatible.',
-    );
-  }
-
-  const source: TicketSource = {
-    system: 'jira',
-    issueId: issue.id,
-    issueKey: issue.key,
-    projectKey,
-    ...optionalName(fields, 'status'),
-    ...optionalName(fields, 'priority'),
-  };
-  return {
-    organisationId,
-    requesterId,
-    title: fields.summary,
-    ...(description !== undefined ? { description } : {}),
-    source,
-  };
-}
-
-function optionalName(
-  fields: Record<string, unknown>,
-  field: 'status' | 'priority',
-): Partial<Pick<TicketSource, 'status' | 'priority'>> {
-  const value = fields[field];
-  if (value === undefined || value === null) {
-    return {};
-  }
-  if (!isRecord(value) || typeof value.name !== 'string') {
-    throw validationError(
-      `issue.fields.${field}`,
-      `${field === 'status' ? 'Status' : 'Priority'} must contain a name.`,
-    );
-  }
-  return { [field]: value.name };
 }
 
 function parseObjectBody(
@@ -2720,6 +2734,12 @@ function requireSlaEvidenceManager(principal: DevelopmentPrincipal): void {
   }
 }
 
+function requireEscalationManager(principal: DevelopmentPrincipal): void {
+  if (!principal.roles.includes('support_lead') && !principal.roles.includes('organisation_admin')) {
+    throw new ApiError(403, 'FORBIDDEN', 'Only a support lead or organisation administrator can close an escalation.');
+  }
+}
+
 function requireSharedPermission(
   principal: DevelopmentPrincipal,
   authorization: RolePermissionPolicy,
@@ -2863,22 +2883,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-}
-
 function validationError(field: string, message: string): ApiError {
   return new ApiError(400, 'VALIDATION_ERROR', 'The request is invalid.', [
     { field, message },
   ]);
-}
-
-function jiraUnauthorized(): ApiError {
-  return new ApiError(
-    401,
-    'JIRA_WEBHOOK_UNAUTHORIZED',
-    'Jira webhook authentication failed.',
-  );
 }
 
 function ticketNotFound(): ApiError {
@@ -2887,6 +2895,7 @@ function ticketNotFound(): ApiError {
 
 function ticketAiApiError(error: unknown): unknown {
   if (error instanceof AiOperationsError) return new ApiError(error.status, error.code, error.message);
+  if (error instanceof TicketAiAnalysisError && error.code === 'PRIORITY_POLICY_NOT_ACTIVE') return new ApiError(503, error.code, error.message);
   if (error instanceof TicketAiAnalysisError && error.code === 'TICKET_NOT_FOUND') {
     return ticketNotFound();
   }
@@ -2928,6 +2937,24 @@ function requestId(response: Response): string {
   return response.locals.requestId as string;
 }
 
+function sendRateLimitError(response: Response, decision: RateLimitDecision): void {
+  response.setHeader('Retry-After', String(decision.retryAfterSeconds));
+  response.setHeader('Cache-Control', 'no-store');
+  response.status(429).json({ error: {
+    code: 'RATE_LIMITED',
+    message: 'Too many requests. Try again after the indicated delay.',
+    requestId: requestId(response),
+    fields: [],
+  } });
+}
+
+function isAiOperationRequest(request: Request): boolean {
+  if (request.method !== 'POST') return false;
+  return /^\/api\/v1\/tickets\/[^/]+\/(?:recommend-resolution|recommend-priority|triage|triage-jobs)\/?$/.test(request.path) ||
+    /^\/api\/v1\/ai\/triage-jobs\/[^/]+\/process\/?$/.test(request.path) ||
+    /^\/api\/v1\/ai\/evaluations\/?$/.test(request.path);
+}
+
 const errorHandler: ErrorRequestHandler = (
   error: unknown,
   _request,
@@ -2958,12 +2985,12 @@ const errorHandler: ErrorRequestHandler = (
     });
     return;
   }
-  if (error instanceof ConfigurationError || error instanceof DevelopmentAuthConfigurationError) {
-    console.error('Ticket API configuration error', error);
+  if (error instanceof DevelopmentAuthConfigurationError) {
+    console.error('Ticket API configuration error', { requestId: id, errorType: error.name });
     response.status(500).json({
       error: {
         code: 'CONFIGURATION_ERROR',
-        message: error.message,
+        message: 'The authentication configuration is invalid.',
         requestId: id,
         fields: [],
       },
@@ -2993,7 +3020,7 @@ const errorHandler: ErrorRequestHandler = (
     return;
   }
   if (error instanceof TicketStoreError) {
-    console.error('Ticket storage error', error);
+    console.error('Ticket storage error', { requestId: id });
     response.status(500).json({
       error: {
         code: 'STORAGE_ERROR',
@@ -3005,7 +3032,7 @@ const errorHandler: ErrorRequestHandler = (
     return;
   }
   if (error instanceof TicketWorkflowStoreError) {
-    console.error('Ticket workflow storage error', error);
+    console.error('Ticket workflow storage error', { requestId: id });
     response.status(500).json({
       error: {
         code: 'STORAGE_ERROR',
@@ -3103,7 +3130,10 @@ const errorHandler: ErrorRequestHandler = (
     return;
   }
 
-  console.error('Unhandled ticket API error', error);
+  console.error('Unhandled ticket API error', {
+    requestId: id,
+    errorType: error instanceof Error ? error.name : 'unknown',
+  });
   response.status(500).json({
     error: {
       code: 'INTERNAL_ERROR',

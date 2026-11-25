@@ -9,7 +9,7 @@ export type DocumentTextSegment = {
 export type ConvertedDocumentText = {
   content: string;
   segments: DocumentTextSegment[];
-  format: 'txt' | 'pdf' | 'docx';
+  format: 'txt' | 'md' | 'pdf' | 'docx';
 };
 
 export interface DocumentTextConverter {
@@ -20,12 +20,13 @@ export class LocalDocumentTextConverter implements DocumentTextConverter {
   async convert(buffer: Buffer, version: DocumentVersionRecord): Promise<ConvertedDocumentText> {
     const extension = version.fileName.split('.').pop()?.toLowerCase();
 
-    if (extension === 'txt' || version.mimeType === 'text/plain') {
-      const content = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+    if (extension === 'txt' || extension === 'md' || version.mimeType === 'text/plain' || version.mimeType === 'text/markdown') {
+      const decoded = new TextDecoder('utf-8', { fatal: true }).decode(buffer);
+      const content = extension === 'md' ? decoded.trim() : decoded;
       return {
         content,
         segments: [{ text: content, section: 'document' }],
-        format: 'txt',
+        format: extension === 'md' ? 'md' : 'txt',
       };
     }
 
@@ -71,6 +72,6 @@ export class LocalDocumentTextConverter implements DocumentTextConverter {
       };
     }
 
-    throw new Error('Unsupported document format. Only TXT, PDF and DOCX conversion are supported.');
+    throw new Error('Unsupported document format. Only TXT, Markdown, PDF and DOCX conversion are supported.');
   }
 }

@@ -11,6 +11,7 @@ import { TicketSummarizer } from './components/ticket-summarizer.js';
 import { loadAuthorizedTicket } from './authorized-ticket.js';
 import { TicketAnalysisGraph } from './ticket-analysis.graph.js';
 import { AiExecutionError } from './ai-execution-runner.js';
+import { validateClassificationEvidenceAgainstTicket } from './contracts.js';
 export { TicketAiAnalysisError } from './authorized-ticket.js';
 
 export type AnalyzeTicketInput = {
@@ -64,8 +65,10 @@ export class TicketAiAnalysisService {
     tenant: TenantContext,
     ticketId: string,
   ): Promise<TicketAiAnalysis[]> {
-    await this.getAuthorizedTicket(tenant, ticketId);
-    return this.repository.listForTicket(tenant, ticketId);
+    const ticket = await this.getAuthorizedTicket(tenant, ticketId);
+    const analyses = await this.repository.listForTicket(tenant, ticketId);
+    for (const analysis of analyses) validateClassificationEvidenceAgainstTicket(analysis.classification, ticket);
+    return analyses;
   }
 
   async listWorkflowRuns(tenant: TenantContext, ticketId: string) {

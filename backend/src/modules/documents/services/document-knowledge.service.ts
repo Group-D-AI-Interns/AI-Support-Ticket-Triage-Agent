@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { TenantContext } from '../../../shared/tenant.js';
-import { JsonFileStore } from '../../../infrastructure/persistence/json/json-file-store.js';
 import type { JsonTenantStore } from '../../../infrastructure/persistence/json/json-store.js';
 import type { PolicyRepository } from '../../policies/repositories/policy.repository.js';
 import type { PolicyAuditRecord, PolicyVersionRecord } from '../../policies/domain/policy.js';
@@ -24,17 +23,20 @@ function hash(value: unknown) { return createHash('sha256').update(JSON.stringif
 /** Application commands; API must enforce document-management permission before invoking. */
 export class DocumentKnowledgeService {
   private readonly documents: JsonDocumentRepository;
-  private readonly files: JsonFileStore;
+  private readonly files: Pick<JsonTenantStore, 'runExclusive'>;
   constructor(private readonly store: JsonTenantStore, private readonly policies: PolicyRepository,
     private readonly storage: DocumentStorageAdapter, private readonly adapter: ExtractionAdapter) {
     this.documents = new JsonDocumentRepository(store);
-    this.files = new JsonFileStore(store.rootDir);
+    this.files = store;
   }
   private async current(tenant: TenantContext, documentId: string) {
     const document = await this.documents.getById(tenant, documentId);
     if (!document) throw new DocumentKnowledgeError(404, 'NOT_FOUND', 'Document not found.');
-    const version = (await this.store.readCollection<DocumentVersionRecord>('documentVersions'))
-      .find(item => item.organisationId === tenant.organisationId && item.documentId === document.id && item.version === document.version);
+    const [version] = await this.store.queryCollection<DocumentVersionRecord>('documentVersions', {
+      organisationId: tenant.organisationId,
+      documentId: document.id,
+      version: document.version,
+    });
     if (!version) throw new DocumentKnowledgeError(409, 'DOCUMENT_NOT_READY', 'Current document version is unavailable.');
     return { document, version };
   }
@@ -49,8 +51,12 @@ export class DocumentKnowledgeService {
       const { document, version } = await this.current(tenant, documentId);
       const policyId = this.policyId(tenant, documentId);
       const versionId = `extraction_${hash([tenant.organisationId, version.id])}`;
-      const existing = (await this.store.readCollection<ExtractionJobRecord>('extractionJobs'))
-        .filter(job => job.organisationId === tenant.organisationId && job.documentId === document.id && job.documentVersionId === version.id && job.policyVersionId === versionId)
+      const existing = (await this.store.queryCollection<ExtractionJobRecord>('extractionJobs', {
+        organisationId: tenant.organisationId,
+        documentId: document.id,
+        documentVersionId: version.id,
+        policyVersionId: versionId,
+      }))
         .sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
       if (existing && !(existing.status === 'failed' && retry)) return existing;
       const now = new Date().toISOString();
@@ -77,20 +83,23 @@ export class DocumentKnowledgeService {
 
   async history(tenant: TenantContext, documentId: string) {
     await this.current(tenant, documentId);
-    return (await this.store.readCollection<ExtractionJobRecord>('extractionJobs')).filter(job => job.organisationId === tenant.organisationId && job.documentId === documentId);
+    return this.store.queryCollection<ExtractionJobRecord>('extractionJobs', {
+      organisationId: tenant.organisationId,
+      documentId,
+    });
   }
 
   private async recordPublication(tenant: TenantContext, version: PolicyVersionRecord, reason: string) {
     await this.store.withCollectionLock('auditLogs', async () => {
-      const records = await this.store.readCollection<PolicyAuditRecord>('auditLogs');
       const id = `knowledge-published-${version.id}`;
-      if (!records.some(record => record.id === id && record.organisationId === tenant.organisationId)) {
-        records.push({ id, organisationId: tenant.organisationId, actorId: tenant.userId, action: 'knowledge.published',
+      await this.store.updateTenantCollection<PolicyAuditRecord, void>('auditLogs', tenant.organisationId, records => {
+        if (!records.some(record => record.id === id)) {
+          records.push({ id, organisationId: tenant.organisationId, actorId: tenant.userId, action: 'knowledge.published',
           targetType: 'policy_version', targetId: version.id, createdAt: new Date().toISOString(),
           after: { status: version.status, visibility: version.payload.visibility, reason: reason.trim(),
             sourceDocumentId: version.sourceDocumentId, sourceDocumentVersionId: version.sourceDocumentVersionId } });
-        await this.store.writeCollection('auditLogs', records);
-      }
+        }
+      });
     });
   }
 
@@ -110,7 +119,11 @@ export class DocumentKnowledgeService {
       const extractionVersionId = `extraction_${hash([tenant.organisationId, version.id])}`;
       const rules = await this.policies.listExtractedRules(tenant, extractionVersionId);
       const selected = input.ruleIds.map(id => rules.find(rule => rule.id === id));
-      const approvals = await this.store.readCollection<{ id: string; organisationId: string; extractedRuleId?: string; policyVersionId: string; decision: string; reviewerId: string }>('policyApprovals');
+      const approvals = await this.store.queryCollection<{ id: string; organisationId: string; extractedRuleId?: string; policyVersionId: string; decision: string; reviewerId: string }>('policyApprovals', {
+        organisationId: tenant.organisationId,
+        policyVersionId: extractionVersionId,
+        decision: 'approved',
+      });
       if (selected.some(rule => !rule || rule.reviewStatus !== 'approved' || rule.documentId !== document.id || rule.documentVersionId !== version.id ||
         !approvals.some(approval => approval.organisationId === tenant.organisationId && approval.extractedRuleId === rule.id &&
           approval.policyVersionId === extractionVersionId && approval.decision === 'approved' && approval.reviewerId === rule.reviewedBy))) {

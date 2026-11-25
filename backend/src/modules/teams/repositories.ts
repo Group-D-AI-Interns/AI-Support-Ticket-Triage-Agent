@@ -1,8 +1,8 @@
 import { randomUUID } from "node:crypto";
 import { AppError } from "../../shared/errors/app-error.ts";
 import type { TenantContext } from "../../shared/auth/authentication.ts";
-import { JsonFileStore } from "../../infrastructure/persistence/json/json-file-store.ts";
-import { isEnvelope, isMembership, isUser } from "../identity/model.ts";
+import { updateTenantRecords, type JsonFileStorePort } from "../../infrastructure/persistence/json/json-file-store.ts";
+import { isMembership, isUser } from "../identity/model.ts";
 import { isDepartment, isTeam, isTeamMembership, type Department, type Team, type TeamMembership } from "./model.ts";
 
 export interface TeamRepository {
@@ -17,17 +17,15 @@ export interface TeamRepository {
 }
 
 export class JsonTeamRepository implements TeamRepository {
-  private readonly store: JsonFileStore;
-  constructor(store: JsonFileStore) { this.store = store; }
+  private readonly store: JsonFileStorePort;
+  constructor(store: JsonFileStorePort) { this.store = store; }
 
   async listDepartments(tenant: TenantContext): Promise<Department[]> {
-    return (await this.store.read("departments.json", isEnvelope(isDepartment))).records
-      .filter((department) => department.organisationId === tenant.organisationId);
+    return this.store.findRecords("departments.json", isDepartment, { organisationId: tenant.organisationId });
   }
 
   async createDepartment(tenant: TenantContext, name: string): Promise<Department> {
-    return this.store.update("departments.json", isEnvelope(isDepartment), (envelope) => {
-      const records = envelope.records;
+    return updateTenantRecords<Department, Department>(this.store, "departments.json", tenant.organisationId, isDepartment, records => {
       if (records.some((item) => item.organisationId === tenant.organisationId && item.name.toLowerCase() === name.toLowerCase())) {
         throw new AppError(409, "DUPLICATE_DEPARTMENT", "A department with this name already exists.");
       }
@@ -39,16 +37,14 @@ export class JsonTeamRepository implements TeamRepository {
   }
 
   async listTeams(tenant: TenantContext): Promise<Team[]> {
-    return (await this.store.read("teams.json", isEnvelope(isTeam))).records
-      .filter((team) => team.organisationId === tenant.organisationId);
+    return this.store.findRecords("teams.json", isTeam, { organisationId: tenant.organisationId });
   }
 
   async createTeam(tenant: TenantContext, name: string, departmentId: string | null): Promise<Team> {
-    return this.store.update("teams.json", isEnvelope(isTeam), async (envelope) => {
-      const records = envelope.records;
+    return updateTenantRecords<Team, Team>(this.store, "teams.json", tenant.organisationId, isTeam, async records => {
       if (departmentId) {
-        const departments = (await this.store.read("departments.json", isEnvelope(isDepartment))).records;
-        if (!departments.some((department) => department.id === departmentId && department.organisationId === tenant.organisationId)) {
+        const department = (await this.store.findRecords("departments.json", isDepartment, { id: departmentId, organisationId: tenant.organisationId }))[0];
+        if (!department) {
           throw new AppError(400, "INVALID_DEPARTMENT", "The department does not belong to this organisation.");
         }
       }
@@ -63,83 +59,89 @@ export class JsonTeamRepository implements TeamRepository {
   }
 
   async updateTeam(tenant: TenantContext, teamId: string, changes: { name?: string; departmentId?: string | null }): Promise<Team> {
-    return this.store.update("teams.json", isEnvelope(isTeam), async (envelope) => {
-      const index = envelope.records.findIndex((team) => team.id === teamId && team.organisationId === tenant.organisationId);
+    return updateTenantRecords<Team, Team>(this.store, "teams.json", tenant.organisationId, isTeam, async teams => {
+      const index = teams.findIndex((team) => team.id === teamId);
       if (index < 0) throw new AppError(404, "NOT_FOUND", "The team was not found.");
       if (changes.departmentId) {
-        const departments = (await this.store.read("departments.json", isEnvelope(isDepartment))).records;
-        if (!departments.some((department) => department.id === changes.departmentId && department.organisationId === tenant.organisationId)) {
+        const department = (await this.store.findRecords("departments.json", isDepartment, { id: changes.departmentId, organisationId: tenant.organisationId }))[0];
+        if (!department) {
           throw new AppError(400, "INVALID_DEPARTMENT", "The department does not belong to this organisation.");
         }
       }
-      if (changes.name && envelope.records.some((team) => team.organisationId === tenant.organisationId && team.id !== teamId && team.name.toLowerCase() === changes.name!.toLowerCase())) {
+      if (changes.name && teams.some((team) => team.id !== teamId && team.name.toLowerCase() === changes.name!.toLowerCase())) {
         throw new AppError(409, "DUPLICATE_TEAM", "A team with this name already exists.");
       }
-      envelope.records[index] = { ...envelope.records[index]!, ...changes, updatedAt: new Date().toISOString() };
-      return envelope.records[index]!;
+      teams[index] = { ...teams[index]!, ...changes, updatedAt: new Date().toISOString() };
+      return teams[index]!;
     });
   }
 
   async setTeamMembership(tenant: TenantContext, teamId: string, userId: string, role: TeamMembership["role"], status: TeamMembership["status"]): Promise<TeamMembership> {
-    const teams = (await this.store.read("teams.json", isEnvelope(isTeam))).records;
-    if (!teams.some((team) => team.id === teamId && team.organisationId === tenant.organisationId)) {
+    const team = (await this.store.findRecords("teams.json", isTeam, { id: teamId, organisationId: tenant.organisationId }))[0];
+    if (!team) {
       throw new AppError(404, "NOT_FOUND", "The team was not found.");
     }
-    const users = (await this.store.read("memberships.json", isEnvelope(isMembership))).records;
-    if (!users.some((membership) => membership.organisationId === tenant.organisationId && membership.userId === userId && membership.status === "active")) {
+    const organisationMembership = (await this.store.findRecords("memberships.json", isMembership, {
+      organisationId: tenant.organisationId, userId, status: "active",
+    }))[0];
+    if (!organisationMembership) {
       throw new AppError(400, "INVALID_USER_MEMBERSHIP", "The user is not an active member of this organisation.");
     }
-    const accounts = (await this.store.read("users.json", isEnvelope(isUser))).records;
-    if (!accounts.some((user) => user.id === userId && user.status === "active")) {
+    const account = (await this.store.findRecords("users.json", isUser, { id: userId, status: "active" }))[0];
+    if (!account) {
       throw new AppError(400, "INVALID_USER_MEMBERSHIP", "The user account is not active.");
     }
-    return this.store.update("team-memberships.json", isEnvelope(isTeamMembership), (envelope) => {
-      const matches = envelope.records.filter((member) => member.organisationId === tenant.organisationId && member.teamId === teamId && member.userId === userId);
+    return updateTenantRecords<TeamMembership, TeamMembership>(this.store, "team-memberships.json", tenant.organisationId, isTeamMembership, members => {
+      const matches = members.filter((member) => member.teamId === teamId && member.userId === userId);
       if (matches.length > 1) throw new AppError(500, "DATA_INTEGRITY_ERROR", "Team membership data is inconsistent.");
       const timestamp = new Date().toISOString();
       const current = matches[0];
       if (current) {
-        const index = envelope.records.indexOf(current);
-        envelope.records[index] = { ...current, role, status, updatedAt: timestamp };
-        return envelope.records[index]!;
+        const index = members.indexOf(current);
+        members[index] = { ...current, role, status, updatedAt: timestamp };
+        return members[index]!;
       }
       const record: TeamMembership = { id: `team_membership_${randomUUID()}`, organisationId: tenant.organisationId, teamId, userId, role, status, createdAt: timestamp, updatedAt: timestamp };
-      envelope.records.push(record);
+      members.push(record);
       return record;
     });
   }
 
   async listTeamMemberships(tenant: TenantContext, teamId: string): Promise<TeamMembership[]> {
-    const teams = (await this.store.read("teams.json", isEnvelope(isTeam))).records;
-    if (!teams.some((team) => team.id === teamId && team.organisationId === tenant.organisationId)) {
+    const team = (await this.store.findRecords("teams.json", isTeam, { id: teamId, organisationId: tenant.organisationId }))[0];
+    if (!team) {
       throw new AppError(404, "NOT_FOUND", "The team was not found.");
     }
-    const [members, organisationMemberships, users] = await Promise.all([
-      this.store.read("team-memberships.json", isEnvelope(isTeamMembership)),
-      this.store.read("memberships.json", isEnvelope(isMembership)),
-      this.store.read("users.json", isEnvelope(isUser)),
+    const members = await this.store.findRecords("team-memberships.json", isTeamMembership, {
+      organisationId: tenant.organisationId, teamId, status: "active",
+    });
+    const ids = members.map(member => member.userId);
+    if (!ids.length) return [];
+    const [organisationMemberships, users] = await Promise.all([
+      this.store.findRecords("memberships.json", isMembership, {
+        organisationId: tenant.organisationId, status: "active", userId: { $in: ids },
+      }),
+      this.store.findRecords("users.json", isUser, { status: "active", id: { $in: ids } }),
     ]);
-    const activeMemberIds = new Set(organisationMemberships.records
-      .filter((membership) => membership.organisationId === tenant.organisationId && membership.status === "active")
-      .map((membership) => membership.userId));
-    const activeUserIds = new Set(users.records.filter((user) => user.status === "active").map((user) => user.id));
-    return members.records.filter((member) => member.organisationId === tenant.organisationId && member.teamId === teamId &&
-      member.status === "active" && activeMemberIds.has(member.userId) && activeUserIds.has(member.userId));
+    const activeMemberIds = new Set(organisationMemberships.map(membership => membership.userId));
+    const activeUserIds = new Set(users.map(user => user.id));
+    return members.filter(member => activeMemberIds.has(member.userId) && activeUserIds.has(member.userId));
   }
 
   async listTeamIdsForUser(tenant: TenantContext, userId: string): Promise<string[]> {
-    const [members, organisationMemberships, users] = await Promise.all([
-      this.store.read("team-memberships.json", isEnvelope(isTeamMembership)),
-      this.store.read("memberships.json", isEnvelope(isMembership)),
-      this.store.read("users.json", isEnvelope(isUser)),
+    const [members, organisationMembership, user] = await Promise.all([
+      this.store.findRecords("team-memberships.json", isTeamMembership, {
+        organisationId: tenant.organisationId, userId, status: "active",
+      }),
+      this.store.findRecords("memberships.json", isMembership, {
+        organisationId: tenant.organisationId, userId, status: "active",
+      }),
+      this.store.findRecords("users.json", isUser, { id: userId, status: "active" }),
     ]);
-    const hasActiveOrganisationMembership = organisationMemberships.records.some((membership) =>
-      membership.organisationId === tenant.organisationId && membership.userId === userId && membership.status === "active");
-    const isActiveUser = users.records.some((user) => user.id === userId && user.status === "active");
+    const hasActiveOrganisationMembership = organisationMembership.length > 0;
+    const isActiveUser = user.length > 0;
     if (!hasActiveOrganisationMembership || !isActiveUser) return [];
-    return members.records
-      .filter((membership) => membership.organisationId === tenant.organisationId && membership.userId === userId && membership.status === "active")
-      .map((membership) => membership.teamId);
+    return members.map(membership => membership.teamId);
   }
 
 }

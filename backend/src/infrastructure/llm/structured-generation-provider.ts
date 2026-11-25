@@ -14,6 +14,8 @@ export type StructuredGenerationResponse = {
   model: string;
   output: unknown;
   attempts?: number;
+  /** Provider-reported counts only; omitted when the provider does not return them. */
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
 };
 
 export interface StructuredGenerationProvider {

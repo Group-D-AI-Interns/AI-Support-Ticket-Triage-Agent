@@ -19,9 +19,6 @@
     },
     {
       "name": "SLA evidence"
-    },
-    {
-      "name": "Jira ingestion"
     }
   ],
   "security": [
@@ -1055,64 +1052,6 @@
         }
       }
     },
-    "/tickets/ingest/jira/{webhookSecret}": {
-      "parameters": [
-        {
-          "name": "webhookSecret",
-          "in": "path",
-          "required": true,
-          "description": "Per-organisation Jira webhook secret. Keep this value private.",
-          "schema": {
-            "type": "string"
-          }
-        }
-      ],
-      "post": {
-        "tags": [
-          "Jira ingestion"
-        ],
-        "summary": "Ingest a Jira issue-created or issue-updated webhook",
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JiraWebhookRequest"
-              }
-            }
-          }
-        },
-        "responses": {
-          "201": {
-            "description": "New Jira issue ingested",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JiraIngestionEnvelope"
-                }
-              }
-            }
-          },
-          "200": {
-            "description": "Duplicate or updated Jira issue",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JiraIngestionEnvelope"
-                }
-              }
-            }
-          },
-          "400": {
-            "$ref": "#/components/responses/BadRequest"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
-          }
-        }
-      }
-    },
     "/tickets/{ticketId}/triage": {
       "post": {
         "tags": [
@@ -2081,7 +2020,7 @@
           "AI triage"
         ],
         "summary": "Record immutable human review (lead/admin)",
-        "description": "Requires an active tenant membership and current ticket/source access. No ticket lifecycle changes.",
+        "description": "Requires an active tenant membership and current ticket/source access. Optional resolution edits are citation-validated and stored as an immutable revision with before/after audit values; no ticket lifecycle changes.",
         "security": [
           {
             "AiBearer": []
@@ -2157,6 +2096,81 @@
                   "reason": {
                     "type": "string",
                     "minLength": 1
+                  },
+                  "editedResolution": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "summary",
+                      "steps",
+                      "missingInformation",
+                      "warnings"
+                    ],
+                    "properties": {
+                      "summary": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 4000
+                      },
+                      "steps": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {
+                          "type": "object",
+                          "additionalProperties": false,
+                          "required": [
+                            "instruction",
+                            "citations"
+                          ],
+                          "properties": {
+                            "instruction": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 4000
+                            },
+                            "citations": {
+                              "type": "array",
+                              "minItems": 1,
+                              "maxItems": 5,
+                              "items": {
+                                "type": "object",
+                                "additionalProperties": false,
+                                "required": [
+                                  "passageId",
+                                  "excerpt"
+                                ],
+                                "properties": {
+                                  "passageId": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  },
+                                  "excerpt": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "missingInformation": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      },
+                      "warnings": {
+                        "type": "array",
+                        "maxItems": 20,
+                        "items": {
+                          "type": "string",
+                          "minLength": 1
+                        }
+                      }
+                    }
                   },
                   "quality": {
                     "type": "object",
@@ -2723,7 +2737,7 @@
         }
       },
       "Unauthorized": {
-        "description": "Authentication or Jira webhook validation failed",
+        "description": "Authentication or request validation failed",
         "content": {
           "application/json": {
             "schema": {
@@ -3606,88 +3620,6 @@
             "format": "date-time"
           }
         }
-      },
-      "JiraWebhookRequest": {
-        "type": "object",
-        "required": [
-          "webhookEvent",
-          "issue"
-        ],
-        "properties": {
-          "webhookEvent": {
-            "type": "string",
-            "enum": [
-              "jira:issue_created",
-              "jira:issue_updated"
-            ]
-          },
-          "issue": {
-            "type": "object",
-            "required": [
-              "id",
-              "key",
-              "fields"
-            ],
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "key": {
-                "type": "string"
-              },
-              "fields": {
-                "type": "object",
-                "additionalProperties": true
-              }
-            }
-          }
-        }
-      },
-      "JiraIngestionEnvelope": {
-        "allOf": [
-          {
-            "$ref": "#/components/schemas/Envelope"
-          },
-          {
-            "type": "object",
-            "properties": {
-              "data": {
-                "type": "object",
-                "required": [
-                  "id",
-                  "sourceIssueKey",
-                  "outcome",
-                  "createdAt",
-                  "updatedAt"
-                ],
-                "properties": {
-                  "id": {
-                    "type": "string"
-                  },
-                  "sourceIssueKey": {
-                    "type": "string"
-                  },
-                  "outcome": {
-                    "type": "string",
-                    "enum": [
-                      "created",
-                      "updated",
-                      "duplicate"
-                    ]
-                  },
-                  "createdAt": {
-                    "type": "string",
-                    "format": "date-time"
-                  },
-                  "updatedAt": {
-                    "type": "string",
-                    "format": "date-time"
-                  }
-                }
-              }
-            }
-          }
-        ]
       }
     }
   }

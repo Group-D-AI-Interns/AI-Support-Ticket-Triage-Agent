@@ -10,7 +10,7 @@ import { loadEnvironment } from '../src/config/env.js';
 import { liveTicketAiConfigurationFromEnvironment } from '../src/modules/ai/live-ticket-ai-runtime.js';
 import { validatePriorityCandidate } from '../src/modules/ai/components/priority-matrix.js';
 
-// Live providers, synthetic users/source documents only. No real Keycloak/Jira changes.
+// Live providers, synthetic users/source documents only. No real Keycloak changes.
 // Review/publication calls simulate an administrator solely inside temporary fixture data.
 const localRoot = resolve('.local-data');
 await mkdir(localRoot, { recursive: true });
@@ -43,8 +43,8 @@ try {
     return `${unsigned}.${sign('RSA-SHA256', Buffer.from(unsigned), privateKey).toString('base64url')}`;
   }
   const candidate = validatePriorityCandidate(JSON.parse(await readFile('data/reference/candidates/priority-policy.json', 'utf8')));
-  server = createIntegratedApp(loadEnvironment({ DATA_DIRECTORY: root, PORT: '0', LOG_LEVEL: 'error' }), { authenticator }, {
-    settings: { dataDirectory: root, projectMappings: {}, organisations: {} }, ticketAiLive: configuration, ticketAiDemo: null,
+  server = createIntegratedApp(loadEnvironment({ NODE_ENV: 'test', DATA_DIRECTORY: root, PORT: '0', LOG_LEVEL: 'error' }), { authenticator }, {
+    dataDirectory: root, ticketAiLive: configuration, ticketAiDemo: null,
     priorityPreview: { candidate, minimumConfidence: 0.75 },
   });
   await new Promise<void>((done, reject) => { server!.once('error', reject); server!.listen(0, '127.0.0.1', done); });

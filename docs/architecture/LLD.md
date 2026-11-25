@@ -1,138 +1,60 @@
-# Low-Level Design (LLD)
+# Low-Level Design
 
-## 1. Design conventions
+**Status:** Repository-aligned design reference, reviewed 23 November 2026. This describes existing boundaries and constraints; it does not prescribe a restructuring project.
 
-- TypeScript strict mode where TypeScript is used.
-- Validate external input at boundaries (Zod is the recommended option in the capstone specification).
-- Keep controllers thin; place use-case orchestration in application services.
-- Keep domain rules independent of UI and provider SDKs.
-- Access persistence through tenant-scoped repositories.
-- Use explicit DTOs and versioned contracts.
-- Store timestamps in UTC; apply configured organisation/business time zones for calendar calculations.
-
-## 2. Suggested backend module structure
+## Backend layout
 
 ```text
-src/
-  app.ts
-  server.ts
-  config/
-  shared/
-    errors/
-    middleware/
-    validation/
-    logging/
-    auth/
-    tenancy/
-  modules/
-    organisations/
-    identity/
-    teams/
-    documents/
-    policies/
-    sla/
-    tickets/
-    ai/
-    knowledge/
-    coaching/
-    approvals/
-    reporting/
-    audit/
+backend/src/
+  main.ts                         process entry and shutdown
+  server.ts                       environment, persistence, and server composition
+  integrated-app.ts                shared foundation + Express listener
+  app.ts                           foundation HTTP dispatcher
+  config/                          environment and logging
+  shared/                           auth, tenant, validation, errors, request context
   infrastructure/
-    database/
-    object-storage/
-    queue/
-    llm/
-    embeddings/
-  workers/
-  tests/
+    auth/                           Keycloak integration
+    persistence/json/               isolated test/demo adapter and compatibility port
+    persistence/mongodb/             MongoDB database, collection, ticket/workflow adapters
+    llm/                             structured generation provider adapters
+    embeddings/                      embedding provider adapter
+  modules/
+    identity/ organisations/ teams/  foundation services and repositories
+    tickets/                         Express API, domain, workflow and read services
+    documents/                       lifecycle, extraction, storage and jobs
+    policies/ sla/                   policy lifecycle and SLA evaluation
+    ai/ knowledge/ reporting/         recommendations, evidence, and reports
 ```
 
-Adapt this structure to the repository's existing conventions instead of forcing a rewrite.
+This layout is not uniformly split into route/controller/service/repository folders. In particular, `modules/tickets/api.ts` is a large route-composition file. Preserve the existing boundaries when making focused changes; do not claim that each module is independently deployable.
 
-## 3. Suggested module internals
+## Request and authorization path
 
-Each domain module may contain:
-- `routes/` — route registration.
-- `controllers/` — HTTP translation only.
-- `schemas/` — request/response validation.
-- `services/` — application use cases.
-- `domain/` — entities, value objects and business rules.
-- `repositories/` — persistence interfaces and implementations.
-- `mappers/` — persistence/API transformations.
-- `tests/` — unit and integration tests.
+1. Shared request context assigns or propagates a request ID and safe structured logging metadata.
+2. Foundation endpoints are dispatched in `app.ts`; ticket and domain endpoint prefixes are delegated to the Express application.
+3. Keycloak authentication verifies the bearer token. The backend resolves the matching active local user and active organisation membership.
+4. Permission policy derives allowed operations from backend membership roles. Tenant context is passed into protected repository/service calls.
+5. Boundary validation rejects malformed or unknown inputs where specified. Stable API errors do not disclose stack traces or provider secrets.
 
-## 4. Tenant-scoped repository contract
+## Persistence contracts
 
-A tenant-owned repository method should require tenant scope explicitly. Conceptual example:
+- Application code uses persistence ports/adapters selected during server composition.
+- Local/test mode may use JSON file persistence. Production configuration selects MongoDB and validates required settings.
+- MongoDB collection names are prefixed `app_`; IDs are string-based to preserve existing application identifiers.
+- Mongo operations use tenant-scoped query/mutation methods where implemented, with transaction session reuse for multi-record work. Compatibility snapshot operations still exist; broad list paths and free-text ticket search remain optimization gaps.
+- Do not treat a schema/index declaration or unit test as proof of live Atlas operation. Atlas indexes, transactions, migration, backup, restore, and query sizing require environment-backed verification.
+- File bytes are not migrated by the JSON record migration. Local file storage remains a separate production readiness gap.
 
-```ts
-type TenantContext = {
-  organisationId: string;
-  userId: string;
-  roles: string[];
-};
+## AI and document contracts
 
-interface TicketRepository {
-  findById(
-    tenant: TenantContext,
-    ticketId: string
-  ): Promise<Ticket | null>;
+AI provider adapters return structured content that is validated against task-specific schemas before persistence/use. Preserve execution identifiers, provenance/evidence and uncertainty metadata. Invalid provider responses fail safely and must not mutate the source ticket or activate a policy. Document extraction uses converted text and document/version context; extraction results remain candidates subject to review, not automatic policy activation.
 
-  list(
-    tenant: TenantContext,
-    filters: TicketFilters
-  ): Promise<PaginatedResult<Ticket>>;
-}
-```
+AI workflow and SLA polling workers currently run within the backend process. Extraction jobs use the configured queue abstraction, whose current in-memory implementation is not a cross-process durable queue. Do not present these as separately deployable workers.
 
-Do not trust an organisation ID supplied in a request body as proof of access. Resolve and validate membership from the authenticated identity.
+## API contract and verification
 
-## 5. Policy lifecycle state machine
+The integrated API contract is published at `/api/v1/openapi.json`. The legacy AI contract remains separate. Route-parity tests cover registered Express routes; the foundation dispatcher and exhaustive request/response schema conformance require separate verification. The backend test runner is Node's built-in test runner. Browser E2E coverage is not established by backend HTTP tests.
 
-```mermaid
-stateDiagram-v2
-  [*] --> Draft
-  Draft --> PendingApproval: Submit
-  PendingApproval --> Approved: Approve
-  PendingApproval --> Draft: Request changes
-  PendingApproval --> Rejected: Reject
-  Approved --> Active: Activate at permitted effective date
-  Active --> Expired: Expiry reached
-  Active --> Archived: Retire
-  Expired --> Archived
-```
+## Explicit non-decisions
 
-Only approved, effective, active versions may be consumed as enforceable rules. Every transition records actor, timestamp, reason and version.
-
-## 6. AI workflow contracts
-
-Each AI component should accept a typed input containing tenant context, execution ID, task-specific content and permitted evidence. Outputs should include structured result, confidence/uncertainty, evidence references, model/config version and warnings. Validate output before persistence or downstream use.
-
-Example conceptual result:
-
-```ts
-type EvidenceReference = {
-  sourceType: "approved_policy" | "knowledge_article" | "historical_ticket";
-  sourceId: string;
-  version?: string;
-  excerpt?: string;
-};
-
-type Recommendation<T> = {
-  result: T;
-  confidence?: number;
-  evidence: EvidenceReference[];
-  warnings: string[];
-  executionId: string;
-  requiresHumanReview: boolean;
-};
-```
-
-## 8. Error handling and observability
-
-Use a consistent error envelope with stable error code, safe message, request ID and field errors where applicable. Do not expose stack traces or secrets. Record request ID, execution ID, module, status, duration and relevant usage metadata. Avoid unnecessary personal data in logs.
-
-## 9. Concurrency and idempotency
-
-Use idempotency keys for retryable external ingestion and consequential action requests where appropriate. Protect policy activation and approval transitions against concurrent updates using version checks or optimistic concurrency. Make background jobs safe to retry.
+This LLD does not choose a queue, hosting platform, private object store, malware scanner, monitoring vendor, retention schedule, rate limit, tenant SLA target/calendar, or new AI provider. Each requires a specified requirement or owner decision before implementation.

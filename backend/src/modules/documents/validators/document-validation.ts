@@ -7,11 +7,19 @@ export class DocumentValidationError extends Error {}
 const allowedMimeTypes = new Set([
   'application/pdf',
   'text/plain',
+  'text/markdown',
   'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ]);
 
-const allowedExtensions = new Set(['pdf', 'txt', 'doc', 'docx']);
+const allowedExtensions = new Set(['pdf', 'txt', 'md', 'doc', 'docx']);
+const documentMimeTypes = new Map([
+  ['pdf', 'application/pdf'],
+  ['txt', 'text/plain'],
+  ['md', 'text/markdown'],
+  ['doc', 'application/msword'],
+  ['docx', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'],
+]);
 const imageMimeTypes = new Map([
   ['jpg', 'image/jpeg'],
   ['jpeg', 'image/jpeg'],
@@ -60,7 +68,7 @@ export function validateDocumentUpload(
 
   if (
     (isAllowedImage && mimeType !== expectedImageMimeType) ||
-    (!isAllowedImage && !allowedMimeTypes.has(mimeType))
+    (!isAllowedImage && (!allowedMimeTypes.has(mimeType) || !isDocumentMimeTypeValid(extension, mimeType)))
   ) {
     throw new DocumentValidationError(`Unsupported MIME type: ${mimeType}`);
   }
@@ -74,10 +82,28 @@ export function validateDocumentUpload(
   if (extension === 'pdf' && !buffer.subarray(0, 5).toString('ascii').startsWith('%PDF-')) {
     throw new DocumentValidationError('Uploaded PDF content is corrupted or invalid.');
   }
-
-  if (extension === 'txt' && mimeType !== 'text/plain') {
-    throw new DocumentValidationError('Text file MIME type does not match the extension.');
+  if (extension === 'doc' && !hasLegacyWordSignature(buffer)) {
+    throw new DocumentValidationError('Uploaded Word document content does not match the selected file type.');
   }
+  if (extension === 'docx' && !hasZipSignature(buffer)) {
+    throw new DocumentValidationError('Uploaded Word document content does not match the selected file type.');
+  }
+
+}
+
+function isDocumentMimeTypeValid(extension: string, mimeType: string): boolean {
+  const expectedMimeType = documentMimeTypes.get(extension);
+  if (extension === 'md') return mimeType === 'text/markdown' || mimeType === 'text/plain';
+  return expectedMimeType === mimeType;
+}
+
+function hasLegacyWordSignature(buffer: Buffer): boolean {
+  return buffer.length >= 8 && buffer.subarray(0, 8).equals(Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]));
+}
+
+function hasZipSignature(buffer: Buffer): boolean {
+  return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b &&
+    ((buffer[2] === 0x03 && buffer[3] === 0x04) || (buffer[2] === 0x05 && buffer[3] === 0x06));
 }
 
 function hasValidImageSignature(extension: string, buffer: Buffer): boolean {

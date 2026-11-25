@@ -2,7 +2,7 @@
   "info": {
     "_postman_id": "d702c97c-ade2-4c7e-a136-87c2fd251111",
     "name": "AI Support Ticket Triage Agent - Current API",
-    "description": "Postman requests for the HTTP functionality wired in the current development branch: health, Keycloak-authenticated identity/tenant and ticket APIs, document evidence, ticket workflows, tenant-configured SLA and reports, plus Jira webhook intake. Set the blank variables before running. For login, use Postman OAuth 2.0 Authorization Code (With PKCE): Auth URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/auth; Access Token URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/token; Client ID support-web; scope openid; S256; no client secret. Add Postman's callback URI to the support-web client's valid redirect URIs in Keycloak. After Postman receives a token, copy it into accessToken and the relevant role variable(s); use separate tokens for distinct users/roles. The API also requires an active local user and membership; X-Organisation-ID selects a tenant but does not grant access. Jira ingestion uses the configured secret in the URL, not a bearer token. For Jira, configure JIRA_TENANT_CONFIG in backend/.env. This is a local-development test collection: do not export real tokens or secrets. AI analysis components, generic extracted-rule review, and generic policy routes are not exposed as HTTP routes in the current backend and are intentionally not included.",
+    "description": "Postman requests for the HTTP functionality wired in the current development branch: health, Keycloak-authenticated identity/tenant and ticket APIs, document evidence, ticket workflows, tenant-configured SLA and reports. Set the blank variables before running. For login, use Postman OAuth 2.0 Authorization Code (With PKCE): Auth URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/auth; Access Token URL http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/protocol/openid-connect/token; Client ID support-web; scope openid; S256; no client secret. Add Postman's callback URI to the support-web client's valid redirect URIs in Keycloak. After Postman receives a token, copy it into accessToken and the relevant role variable(s); use separate tokens for distinct users/roles. The API also requires an active local user and membership; X-Organisation-ID selects a tenant but does not grant access. This is a local-development test collection: do not export real tokens or secrets. AI analysis components, generic extracted-rule review, and generic policy routes are not exposed as HTTP routes in the current backend and are intentionally not included.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "auth": {
@@ -123,21 +123,6 @@
     },
     {
       "key": "slaVersionId",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "jiraWebhookSecret",
-      "value": "",
-      "type": "string"
-    },
-    {
-      "key": "jiraProjectKey",
-      "value": "SUP",
-      "type": "string"
-    },
-    {
-      "key": "jiraReporterAccountId",
       "value": "",
       "type": "string"
     },
@@ -2395,7 +2380,7 @@
               ]
             }
           },
-          "description": "Only tickets with an internal priority matching an active policy target are evaluated. Jira source priority is retained as source metadata and is not automatically translated."
+          "description": "Only tickets with an internal priority matching an active policy target are evaluated. Legacy external source priority metadata is read-only."
         },
         {
           "name": "List SLA evaluations",
@@ -2483,52 +2468,6 @@
               ]
             }
           }
-        }
-      ]
-    },
-    {
-      "name": "Jira webhook intake",
-      "item": [
-        {
-          "name": "Ingest Jira issue created or updated",
-          "request": {
-            "auth": {
-              "type": "noauth"
-            },
-            "method": "POST",
-            "header": [
-              {
-                "key": "Content-Type",
-                "value": "application/json"
-              }
-            ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\"webhookEvent\":\"jira:issue_created\",\"issue\":{\"id\":\"10042\",\"key\":\"{{jiraProjectKey}}-42\",\"fields\":{\"project\":{\"key\":\"{{jiraProjectKey}}\"},\"summary\":\"Postman Jira test ticket\",\"description\":{\"type\":\"doc\",\"content\":[{\"type\":\"paragraph\",\"content\":[{\"type\":\"text\",\"text\":\"Testing Jira webhook ingestion.\"}]}]},\"reporter\":{\"accountId\":\"{{jiraReporterAccountId}}\"},\"status\":{\"name\":\"Open\"},\"priority\":{\"name\":\"High\"}}}}",
-              "options": {
-                "raw": {
-                  "language": "json"
-                }
-              }
-            },
-            "url": {
-              "raw": "http://{{baseHost}}:{{basePort}}/api/v1/tickets/ingest/jira/{{jiraWebhookSecret}}",
-              "protocol": "http",
-              "host": [
-                "{{baseHost}}"
-              ],
-              "port": "{{basePort}}",
-              "path": [
-                "api",
-                "v1",
-                "tickets",
-                "ingest",
-                "jira",
-                "{{jiraWebhookSecret}}"
-              ]
-            }
-          },
-          "description": "Set jiraWebhookSecret and jiraReporterAccountId to match backend JIRA_TENANT_CONFIG. Jira reporter accountId must have an internal user mapping. The first call should return 201; a repeated event is idempotent."
         }
       ]
     }

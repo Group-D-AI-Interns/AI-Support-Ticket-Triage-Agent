@@ -1,11 +1,12 @@
 import * as z from 'zod';
-import { validateTicketClassification, validateTicketSummary } from './contracts.js';
+import { normalizeStoredTicketClassification, normalizeStoredTicketSummary, validateClassificationEvidenceAgainstTicket, type TicketAiView } from './contracts.js';
 import { validatePriorityFactors } from './priority-contracts.js';
 import { validateResolutionOutput } from './resolution-recommendation.service.js';
 import { orchestrationSchema } from './workflow-run.js';
 import type { TicketAiTriageService } from './ticket-ai-triage.service.js';
 
-type Result = Awaited<ReturnType<TicketAiTriageService['analyze']>>;
+export type ValidatedTriageResult = Awaited<ReturnType<TicketAiTriageService['analyze']>>;
+type Result = ValidatedTriageResult;
 const text = z.string().min(1);
 const passage = z.strictObject({ passageId: text, sourceId: text, version: text, sourceType: z.enum(['approved_policy', 'knowledge_article', 'historical_ticket']),
   title: text, excerpt: text, start: z.number().int().nonnegative(), end: z.number().int().positive(), score: z.number().finite() });
@@ -15,14 +16,14 @@ const shape = z.strictObject({ ticketId: text, organisationId: text, requiresHum
   priority: capability, evidence: capability, resolution: capability, routing: capability, sla: capability });
 
 /** Guard durable aggregate records before serving or writing them; reuse model-output validators. */
-export function validTriageResult(value: unknown): value is Result {
+export function validTriageResult(value: unknown, snapshot?: import('./contracts.js').TicketAiView): value is Result {
   if (!shape.safeParse(value).success) return false;
   try {
     const result = value as Result;
     if (result.core.ticketId !== result.ticketId || result.core.organisationId !== result.organisationId || result.core.status !== 'completed') return false;
-    const category = result.core.classification.category;
-    validateTicketClassification(result.core.classification, category ? [{ id: category, name: category }] : []);
-    validateTicketSummary(result.core.summary);
+    const classification = normalizeStoredTicketClassification(result.core.classification);
+    if (snapshot) validateClassificationEvidenceAgainstTicket(classification, snapshot);
+    normalizeStoredTicketSummary(result.core.summary);
     if (!orchestrationSchema.safeParse(result.core.orchestration).success) return false;
     if (result.evidence.status === 'completed' && !z.array(passage).safeParse(result.evidence.data).success) return false;
     if (result.resolution.status === 'completed') {
@@ -42,6 +43,14 @@ export function validTriageResult(value: unknown): value is Result {
     }
     return true;
   } catch { return false; }
+}
+
+/** Read-only normalization for persisted reports created before affectedFunctionality was added. */
+export function normalizeStoredTriageResult(value: unknown, snapshot: TicketAiView): ValidatedTriageResult {
+  if (!validTriageResult(value, snapshot)) throw new TypeError('Stored triage result does not match a supported schema.');
+  const result = structuredClone(value) as ValidatedTriageResult;
+  result.core.summary = normalizeStoredTicketSummary(result.core.summary);
+  return result;
 }
 
 export function validPriorityEvidence(result: Result, snapshot: import('./contracts.js').TicketAiView) {

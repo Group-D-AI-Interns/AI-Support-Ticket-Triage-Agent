@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AppError } from "../../shared/errors/app-error.ts";
 import { JsonFileStore } from "../../infrastructure/persistence/json/json-file-store.ts";
+import type { JsonEnvelope, JsonEnvelopeMigration } from "../../infrastructure/persistence/json/json-file-store.ts";
 import { JsonOrganisationRepository } from "./repositories.ts";
 import type { TenantContext } from "../../shared/auth/authentication.ts";
 
@@ -25,7 +26,7 @@ async function setup() {
   const repository = new JsonOrganisationRepository(store);
   const tenant: TenantContext = { organisationId: "org-a", userId: "user-a", roles: ["organisation_admin"] };
   const create = (name: string) => repository.create({ name }, { userId: tenant.userId, role: "organisation_admin" });
-  return { repository, tenant, create };
+  return { repository, tenant, create, store };
 }
 
 describe("organisation management", () => {
@@ -52,5 +53,20 @@ describe("organisation management", () => {
     await assert.rejects(repository.update(tenantForSecond, { name: "SUPPORT A" }), (error: unknown) => error instanceof AppError && error.code === "DUPLICATE_ORGANISATION");
     assert.equal((await repository.findById(tenantForSecond, second.id))?.name, "Support B");
     assert.equal((await repository.findById({ ...tenant, organisationId: first.id }, first.id))?.name, "Support A");
+  });
+
+  it("maps a database uniqueness race to the existing conflict response and rolls back membership", async () => {
+    const { repository, tenant, create, store } = await setup();
+    const originalUpdate = store.update.bind(store);
+    store.update = (async <T, R>(name: string, validate: (value: unknown) => value is JsonEnvelope<T>, mutate: (envelope: JsonEnvelope<T>) => R | Promise<R>, migrate?: JsonEnvelopeMigration<T>): Promise<R> => {
+      if (name === "organisations.json") throw Object.assign(new Error("duplicate key"), { code: 11000 });
+      return originalUpdate(name, validate, mutate, migrate);
+    }) as typeof store.update;
+
+    await assert.rejects(create("Race"), (error: unknown) => error instanceof AppError && error.code === "DUPLICATE_ORGANISATION");
+    assert.deepEqual(await store.findRecords("memberships.json", (value): value is { id: string; organisationId: string; userId: string } =>
+      !!value && typeof value === "object" && typeof (value as { id?: unknown }).id === "string" &&
+      typeof (value as { organisationId?: unknown }).organisationId === "string" &&
+      typeof (value as { userId?: unknown }).userId === "string", { userId: tenant.userId }), []);
   });
 });

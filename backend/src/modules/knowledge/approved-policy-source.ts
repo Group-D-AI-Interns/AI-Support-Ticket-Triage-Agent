@@ -8,7 +8,10 @@ export class ApprovedPolicyKnowledgeSource implements AuthorizedKnowledgeSource 
   constructor(private readonly policies: PolicyRepository, private readonly store: JsonTenantStore) {}
   async listAuthorizedDocuments(tenant: TenantContext): Promise<KnowledgeDocument[]> {
     if (!tenant.roles.includes('organisation_admin')) return [];
-    const approvals = await this.store.readCollection<{ id: string; organisationId: string; policyVersionId: string; extractedRuleId?: string; decision: string }>('policyApprovals');
+    const approvals = await this.store.queryCollection<{ id: string; organisationId: string; policyVersionId: string; extractedRuleId?: string; decision: string }>('policyApprovals', {
+      organisationId: tenant.organisationId,
+      decision: 'approved',
+    });
     const documents: KnowledgeDocument[] = [];
     for (const policy of await this.policies.listPolicies(tenant)) {
       if (policy.organisationId !== tenant.organisationId) continue;

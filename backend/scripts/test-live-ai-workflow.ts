@@ -9,7 +9,7 @@ import { JsonAiAnalysisRepository } from '../src/modules/ai/json-ai-analysis.rep
 import { JsonFileStore } from '../src/infrastructure/persistence/json/json-file-store.js';
 
 // Explicit live test. Only synthetic ticket/document/runbook data leaves this process.
-// Keycloak, Jira, real application collections and shared configuration are untouched.
+// Keycloak, real application collections and shared configuration are untouched.
 const environment = { ...process.env, APP_ENV: 'development', TICKET_AI_DEMO_ENABLED: 'false', TICKET_AI_LIVE_ENABLED: 'true',
   TICKET_AI_CATEGORIES: JSON.stringify([{ id: 'ACCOUNT_ACCESS', name: 'Account access' }]) };
 const localRoot = resolve('.local-data');
@@ -37,7 +37,7 @@ try {
       eligibleTeams: [{ id: 'synthetic-account-team', organisationId: tenant.organisationId, name: 'Synthetic account support' }],
       rules: [{ id: 'synthetic-routing-rule', version: '1', organisationId: tenant.organisationId, teamId: 'synthetic-account-team', categoryIds: ['ACCOUNT_ACCESS'], approved: true, effectiveFrom: '2020-01-01T00:00:00Z', effectiveTo: null }] }; } },
   });
-  console.log('Live AI-only verification: synthetic identity and evidence; no Keycloak or Jira changes.');
+  console.log('Live AI-only verification: synthetic identity and evidence; no Keycloak changes.');
   const result = await service.analyze({ tenant, ticketId: ticket.id, categories: configuration.categories });
   assert.equal(result.core.orchestration?.engine, 'langgraph');
   assert.equal(result.core.classification.category, 'ACCOUNT_ACCESS');

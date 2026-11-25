@@ -63,11 +63,11 @@ export class ExtractionWorker {
         );
       }
       if (
-        !['txt', 'pdf', 'docx'].includes(version.fileName.split('.').pop()?.toLowerCase() ?? '')
+        !['txt', 'md', 'pdf', 'docx'].includes(version.fileName.split('.').pop()?.toLowerCase() ?? '')
       ) {
         throw new PermanentExtractionError(
           'UNSUPPORTED_DOCUMENT_TYPE',
-          'Only TXT, PDF and DOCX documents are supported. Legacy DOC conversion remains deferred.',
+          'Only TXT, Markdown, PDF and DOCX documents are supported. Legacy DOC conversion remains deferred.',
         );
       }
 
@@ -150,12 +150,17 @@ export class ExtractionWorker {
 
       // Make worker extraction visible through the existing document detail/history API.
       await this.store.withCollectionLock('documentExtractions', async () => {
-        const records = await this.store.readCollection<DocumentExtractionRecord>('documentExtractions');
         const id = `document-extraction-${job.executionId}`;
-        if (!records.some(record => record.id === id && record.organisationId === tenant.organisationId)) {
-          records.push({ id, organisationId: tenant.organisationId, documentId: job.documentId,
-            documentVersionId: job.documentVersionId, createdAt: new Date().toISOString(), result });
-          await this.store.writeCollection('documentExtractions', records);
+        const existing = await this.store.queryCollection<DocumentExtractionRecord>('documentExtractions', {
+          id,
+          organisationId: tenant.organisationId,
+        });
+        if (existing.length === 0) {
+          await this.store.updateTenantCollection<DocumentExtractionRecord, void>('documentExtractions', tenant.organisationId, records => {
+            if (records.some(record => record.id === id)) return;
+            records.push({ id, organisationId: tenant.organisationId, documentId: job.documentId,
+              documentVersionId: job.documentVersionId, createdAt: new Date().toISOString(), result });
+          });
         }
       });
 

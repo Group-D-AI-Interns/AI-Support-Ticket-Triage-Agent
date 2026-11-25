@@ -87,7 +87,8 @@ export function liveTicketAiConfigurationFromEnvironment(
   }
 
   return {
-    categories: ticketAiCategoriesFromEnvironment(environment),
+    // Environment categories remain a compatibility default; tenant category records override them at request time.
+    categories: environment.TICKET_AI_CATEGORIES ? ticketAiCategoriesFromEnvironment(environment) : [],
     classificationProvider,
     summarizationProvider,
     groqModel: requiredValue(environment.GROQ_MODEL, 'GROQ_MODEL'),

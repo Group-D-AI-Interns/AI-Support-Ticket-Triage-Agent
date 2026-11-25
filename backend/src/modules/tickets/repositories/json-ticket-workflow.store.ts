@@ -29,7 +29,7 @@ export class JsonTicketWorkflowStore {
   }
 
   async list(tenant: TenantContext): Promise<TicketWorkflowRecord[]> {
-    return this.withLock(async () =>
+    return this.withLock(tenant.organisationId, async () =>
       (await this.readRecords()).filter(
         (record) => record.organisationId === tenant.organisationId,
       ),
@@ -40,7 +40,7 @@ export class JsonTicketWorkflowStore {
     tenant: TenantContext,
     workflowId: string,
   ): Promise<TicketWorkflowRecord | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const record = (await this.readRecords()).find(
         (workflow) =>
           workflow.id === workflowId &&
@@ -53,7 +53,7 @@ export class JsonTicketWorkflowStore {
   async getActive(
     tenant: TenantContext,
   ): Promise<TicketWorkflowRecord | null> {
-    return this.withLock(async () =>
+    return this.withLock(tenant.organisationId, async () =>
       (await this.readRecords()).find(
         (record) =>
           record.organisationId === tenant.organisationId &&
@@ -67,7 +67,7 @@ export class JsonTicketWorkflowStore {
     config: TicketWorkflowConfig,
     createdBy: string,
   ): Promise<TicketWorkflowRecord> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const now = new Date().toISOString();
       const record: TicketWorkflowRecord = {
@@ -90,7 +90,7 @@ export class JsonTicketWorkflowStore {
     workflowId: string,
     approvedBy: string,
   ): Promise<TicketWorkflowRecord | null> {
-    return this.withLock(async () => {
+    return this.withLock(tenant.organisationId, async () => {
       const records = await this.readRecords();
       const index = records.findIndex(
         (record) =>
@@ -140,7 +140,7 @@ export class JsonTicketWorkflowStore {
     });
   }
 
-  private async withLock<T>(operation: () => Promise<T>): Promise<T> {
+  protected async withLock<T>(_organisationId: string, operation: () => Promise<T>): Promise<T> {
     let release: (() => Promise<void>) | undefined;
     try {
       await mkdir(this.dataDirectory, { recursive: true });
@@ -177,7 +177,7 @@ export class JsonTicketWorkflowStore {
     }
   }
 
-  private async readRecords(): Promise<TicketWorkflowRecord[]> {
+  protected async readRecords(): Promise<TicketWorkflowRecord[]> {
     let value: unknown;
     try {
       value = JSON.parse(await readFile(this.recordsPath, 'utf8'));
@@ -204,7 +204,7 @@ export class JsonTicketWorkflowStore {
     return value.records;
   }
 
-  private async writeRecords(records: TicketWorkflowRecord[]): Promise<void> {
+  protected async writeRecords(records: TicketWorkflowRecord[]): Promise<void> {
     const temporaryPath = `${this.recordsPath}.${randomUUID().replace(/-/g, '')}.tmp`;
     let file: Awaited<ReturnType<typeof open>> | undefined;
     try {
@@ -239,7 +239,7 @@ export class JsonTicketWorkflowStore {
   }
 }
 
-function isWorkflowRecord(value: unknown): value is TicketWorkflowRecord {
+export function isWorkflowRecord(value: unknown): value is TicketWorkflowRecord {
   return (
     isRecord(value) &&
     ['id', 'organisationId', 'createdBy', 'createdAt', 'updatedAt'].every(

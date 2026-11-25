@@ -129,10 +129,12 @@ export class OpenAiCompatibleProvider implements StructuredGenerationProvider {
           false,
         );
       }
+      const usage = providerUsage(payload);
       return {
         provider: this.options.name,
         model: request.model,
         output,
+        ...(usage ? { usage } : {}),
       };
     } catch (error) {
       if (error instanceof LlmProviderError) {
@@ -150,6 +152,17 @@ export class OpenAiCompatibleProvider implements StructuredGenerationProvider {
       request.signal.removeEventListener('abort', abortFromCaller);
     }
   }
+}
+
+function providerUsage(value: unknown): StructuredGenerationResponse['usage'] {
+  if (!isRecord(value) || !isRecord(value.usage)) return undefined;
+  const usage = value.usage;
+  const result: NonNullable<StructuredGenerationResponse['usage']> = {};
+  for (const [source, target] of [['prompt_tokens', 'promptTokens'], ['completion_tokens', 'completionTokens'], ['total_tokens', 'totalTokens']] as const) {
+    const count = usage[source];
+    if (Number.isSafeInteger(count) && (count as number) >= 0) result[target] = count as number;
+  }
+  return Object.keys(result).length ? result : undefined;
 }
 
 function firstMessageContent(value: unknown): string | null {

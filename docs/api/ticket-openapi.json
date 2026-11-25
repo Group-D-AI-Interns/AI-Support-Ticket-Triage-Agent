@@ -20,9 +20,6 @@
     },
     {
       "name": "SLA evidence"
-    },
-    {
-      "name": "Jira ingestion"
     }
   ],
   "security": [
@@ -34,7 +31,9 @@
   "paths": {
     "/ticket-workflows": {
       "get": {
-        "tags": ["Ticket workflows"],
+        "tags": [
+          "Ticket workflows"
+        ],
         "summary": "List tenant ticket workflow versions",
         "description": "Organisation administrators only. Draft workflows do not affect ticket creation or status transitions.",
         "responses": {
@@ -44,13 +43,17 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
                       "properties": {
                         "data": {
                           "type": "array",
-                          "items": { "$ref": "#/components/schemas/TicketWorkflow" }
+                          "items": {
+                            "$ref": "#/components/schemas/TicketWorkflow"
+                          }
                         }
                       }
                     }
@@ -59,19 +62,27 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
         }
       },
       "post": {
-        "tags": ["Ticket workflows"],
+        "tags": [
+          "Ticket workflows"
+        ],
         "summary": "Create a draft tenant ticket workflow",
         "description": "Organisation administrators only. The draft requires explicit approval before it becomes active.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateTicketWorkflowRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateTicketWorkflowRequest"
+              }
             }
           }
         },
@@ -82,26 +93,42 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketWorkflow" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketWorkflow"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "409": { "$ref": "#/components/responses/Conflict" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
         }
       }
     },
     "/ticket-workflows/active": {
       "get": {
-        "tags": ["Ticket workflows"],
+        "tags": [
+          "Ticket workflows"
+        ],
         "summary": "Get the active tenant ticket workflow",
         "responses": {
           "200": {
@@ -110,18 +137,28 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketWorkflow" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketWorkflow"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
@@ -131,18 +168,25 @@
           "name": "workflowId",
           "in": "path",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "post": {
-        "tags": ["Ticket workflows"],
+        "tags": [
+          "Ticket workflows"
+        ],
         "summary": "Approve and activate a ticket workflow draft",
         "description": "Organisation administrators only. Approval records the actor and server timestamp. The prior active version is archived.",
         "requestBody": {
           "required": false,
           "content": {
             "application/json": {
-              "schema": { "type": "object", "additionalProperties": false }
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
             }
           }
         },
@@ -153,62 +197,97 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketWorkflow" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketWorkflow"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
         }
       }
     },
     "/tickets": {
       "get": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Search and list tickets visible to the caller",
         "parameters": [
           {
             "name": "q",
             "in": "query",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "status",
             "in": "query",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "priority",
             "in": "query",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "teamId",
             "in": "query",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "requesterId",
             "in": "query",
-            "schema": { "type": "string" }
+            "schema": {
+              "type": "string"
+            }
           },
           {
             "name": "limit",
             "in": "query",
-            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100,
+              "default": 20
+            }
           },
           {
             "name": "offset",
             "in": "query",
-            "schema": { "type": "integer", "minimum": 0, "default": 0 }
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0
+            }
           }
         ],
         "responses": {
@@ -218,15 +297,21 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
                       "properties": {
                         "data": {
                           "type": "array",
-                          "items": { "$ref": "#/components/schemas/Ticket" }
+                          "items": {
+                            "$ref": "#/components/schemas/Ticket"
+                          }
                         },
-                        "pagination": { "$ref": "#/components/schemas/Pagination" }
+                        "pagination": {
+                          "$ref": "#/components/schemas/Pagination"
+                        }
                       }
                     }
                   ]
@@ -234,20 +319,30 @@
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
         }
       },
       "post": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Create a ticket for the authenticated requester",
         "description": "Tenant and requester identity are derived from the authenticated context, not the request body.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateTicketRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateTicketRequest"
+              }
             }
           }
         },
@@ -258,28 +353,44 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/Ticket" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
         }
       }
     },
     "/tickets/{ticketId}": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
       ],
       "get": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Read a ticket and caller-visible related data",
         "responses": {
           "200": {
@@ -288,29 +399,43 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketDetail" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketDetail"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       },
       "patch": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Update permitted ticket fields",
         "description": "Support staff may update a ticket in their scope. Team assignment and priority override require their respective permissions. A priority change requires both reason and business justification.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/UpdateTicketRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/UpdateTicketRequest"
+              }
             }
           }
         },
@@ -321,36 +446,57 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/Ticket" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/tickets/{ticketId}/status": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
       ],
       "patch": {
-        "tags": ["Tickets", "SLA evidence"],
+        "tags": [
+          "Tickets",
+          "SLA evidence"
+        ],
         "summary": "Change status using an approved tenant workflow",
         "description": "When entering a configured paused status, support leads or organisation admins must supply pauseEvidence. Leaving that status records the resume timestamp. Entering a configured resolved status requires support-staff resolutionEvidence. Reopening excludes resolved time without resetting the resolution clock.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ChangeTicketStatusRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/ChangeTicketStatusRequest"
+              }
             }
           }
         },
@@ -361,37 +507,314 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/Ticket" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/Ticket"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/ticket-escalations": {
+      "get": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "List open escalations visible to support staff",
+        "description": "Returns only open escalations on tickets already visible to the caller's team/ticket permissions. No external notification is sent.",
+        "responses": {
+          "200": {
+            "description": "Visible open escalations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/EscalationQueueItem"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/tickets/{ticketId}/workflow-context": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Ticket workflows",
+          "SLA evidence"
+        ],
+        "summary": "Read allowed next statuses for a visible ticket",
+        "description": "Returns transitions from the approved workflow attached to this ticket and resolved status names from its applicable active SLA policy, when available.",
+        "responses": {
+          "200": {
+            "description": "Ticket workflow context",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketWorkflowContext"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
+        }
+      }
+    },
+    "/tickets/{ticketId}/escalations": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
+      ],
+      "post": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Escalate a visible ticket to the support lead queue",
+        "description": "Support staff only. Requires a reason and handover notes; one open escalation is allowed per ticket. Setting an internal priority to P1 also opens an escalation automatically.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "reasonCode",
+                  "handoverNotes"
+                ],
+                "properties": {
+                  "reasonCode": {
+                    "type": "string",
+                    "enum": [
+                      "P1_CRITICAL",
+                      "P2_HIGH",
+                      "SLA_AT_RISK",
+                      "BEYOND_AGENT_AUTHORITY",
+                      "RECURRING_BREACH",
+                      "OTHER"
+                    ]
+                  },
+                  "handoverNotes": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Escalation opened",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketEscalation"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/tickets/{ticketId}/escalations/{escalationId}/resolve": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TicketId"
+        },
+        {
+          "name": "escalationId",
+          "in": "path",
+          "required": true,
+          "schema": {
+            "type": "string"
+          }
+        }
+      ],
+      "post": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "Record support lead follow-up and close an escalation",
+        "description": "Support leads and organisation administrators only. Resolution notes are required and added to ticket history.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "resolutionNotes"
+                ],
+                "properties": {
+                  "resolutionNotes": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 4000
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Escalation follow-up recorded",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketEscalation"
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
         }
       }
     },
     "/tickets/{ticketId}/sla-events": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
       ],
       "post": {
-        "tags": ["SLA evidence"],
+        "tags": [
+          "SLA evidence"
+        ],
         "summary": "Record assessment or exclusion evidence",
         "description": "Support staff can record one assessment event. Only support leads and organisation admins can start or end exclusion intervals. The server generates the interval identifier and timestamps. Exclusion intervals require a contract reference and do not remove tickets from reporting.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/SlaEvidenceRequest" },
+              "schema": {
+                "$ref": "#/components/schemas/SlaEvidenceRequest"
+              },
               "examples": {
                 "assessment": {
                   "value": {
@@ -424,45 +847,14 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
                     {
-                      "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketHistoryEvent" } }
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" }
-        }
-      }
-    },
-    "/tickets/{ticketId}/comments": {
-      "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
-      ],
-      "get": {
-        "tags": ["Tickets"],
-        "summary": "List comments visible to the caller",
-        "responses": {
-          "200": {
-            "description": "Visible comments",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
                       "properties": {
                         "data": {
-                          "type": "array",
-                          "items": { "$ref": "#/components/schemas/TicketComment" }
+                          "$ref": "#/components/schemas/TicketHistoryEvent"
                         }
                       }
                     }
@@ -471,19 +863,82 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
+        }
+      }
+    },
+    "/tickets/{ticketId}/comments": {
+      "parameters": [
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
+      ],
+      "get": {
+        "tags": [
+          "Tickets"
+        ],
+        "summary": "List comments visible to the caller",
+        "responses": {
+          "200": {
+            "description": "Visible comments",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "data": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/TicketComment"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       },
       "post": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Add a public or internal comment",
         "description": "Requesters can add public comments to their own tickets. Internal comments are limited to support staff. A support-authored public comment records acknowledgement evidence but is not sufficient by itself to complete first-response evidence.",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/CreateCommentRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/CreateCommentRequest"
+              }
             }
           }
         },
@@ -494,29 +949,48 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketComment" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketComment"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/tickets/{ticketId}/audit": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
       ],
       "get": {
-        "tags": ["Tickets", "SLA evidence"],
+        "tags": [
+          "Tickets",
+          "SLA evidence"
+        ],
         "summary": "Read ticket history",
         "description": "Requires the tickets.audit.read permission. History events include SLA acknowledgement, assignment, assessment, resolution, pause, and exclusion actions when applicable.",
         "responses": {
@@ -526,13 +1000,17 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
                       "properties": {
                         "data": {
                           "type": "array",
-                          "items": { "$ref": "#/components/schemas/TicketHistoryEvent" }
+                          "items": {
+                            "$ref": "#/components/schemas/TicketHistoryEvent"
+                          }
                         }
                       }
                     }
@@ -541,18 +1019,28 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/tickets/{ticketId}/attachments": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
       ],
       "post": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Upload a private ticket attachment",
         "description": "Development prototype only. Accepts the supported document and image types up to 25 MB. Uploads are not malware-scanned and this route is not production-ready.",
         "requestBody": {
@@ -561,9 +1049,14 @@
             "multipart/form-data": {
               "schema": {
                 "type": "object",
-                "required": ["file"],
+                "required": [
+                  "file"
+                ],
                 "properties": {
-                  "file": { "type": "string", "format": "binary" }
+                  "file": {
+                    "type": "string",
+                    "format": "binary"
+                  }
                 }
               }
             }
@@ -576,25 +1069,41 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/TicketAttachment" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/TicketAttachment"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
           "413": {
             "description": "Upload exceeds the configured request limit",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/ErrorEnvelope" }
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
               }
             }
           }
@@ -603,48 +1112,78 @@
     },
     "/tickets/{ticketId}/attachments/{attachmentId}": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" },
+        {
+          "$ref": "#/components/parameters/TicketId"
+        },
         {
           "name": "attachmentId",
           "in": "path",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "get": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Download an authorized ticket attachment",
         "responses": {
           "200": {
             "description": "Attachment bytes",
             "headers": {
-              "Content-Disposition": { "schema": { "type": "string" } },
-              "X-Content-Type-Options": { "schema": { "type": "string", "example": "nosniff" } }
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                }
+              },
+              "X-Content-Type-Options": {
+                "schema": {
+                  "type": "string",
+                  "example": "nosniff"
+                }
+              }
             },
             "content": {
               "*/*": {
-                "schema": { "type": "string", "format": "binary" }
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          }
         }
       }
     },
     "/tickets/{ticketId}/reopen-requests": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" }
+        {
+          "$ref": "#/components/parameters/TicketId"
+        }
       ],
       "post": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Request reopening an eligible ticket",
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/ReopenRequestBody" }
+              "schema": {
+                "$ref": "#/components/schemas/ReopenRequestBody"
+              }
             }
           }
         },
@@ -655,42 +1194,67 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
-                      "properties": { "data": { "$ref": "#/components/schemas/ReopenRequest" } }
+                      "properties": {
+                        "data": {
+                          "$ref": "#/components/schemas/ReopenRequest"
+                        }
+                      }
                     }
                   ]
                 }
               }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          }
         }
       }
     },
     "/tickets/{ticketId}/reopen-requests/{requestId}/approve": {
       "parameters": [
-        { "$ref": "#/components/parameters/TicketId" },
+        {
+          "$ref": "#/components/parameters/TicketId"
+        },
         {
           "name": "requestId",
           "in": "path",
           "required": true,
-          "schema": { "type": "string" }
+          "schema": {
+            "type": "string"
+          }
         }
       ],
       "post": {
-        "tags": ["Tickets"],
+        "tags": [
+          "Tickets"
+        ],
         "summary": "Approve a pending reopen request",
         "requestBody": {
           "required": false,
           "content": {
             "application/json": {
-              "schema": { "type": "object", "additionalProperties": false }
+              "schema": {
+                "type": "object",
+                "additionalProperties": false
+              }
             }
           }
         },
@@ -701,16 +1265,25 @@
               "application/json": {
                 "schema": {
                   "allOf": [
-                    { "$ref": "#/components/schemas/Envelope" },
+                    {
+                      "$ref": "#/components/schemas/Envelope"
+                    },
                     {
                       "type": "object",
                       "properties": {
                         "data": {
                           "type": "object",
-                          "required": ["ticket", "reopenRequest"],
+                          "required": [
+                            "ticket",
+                            "reopenRequest"
+                          ],
                           "properties": {
-                            "ticket": { "$ref": "#/components/schemas/Ticket" },
-                            "reopenRequest": { "$ref": "#/components/schemas/ReopenRequest" }
+                            "ticket": {
+                              "$ref": "#/components/schemas/Ticket"
+                            },
+                            "reopenRequest": {
+                              "$ref": "#/components/schemas/ReopenRequest"
+                            }
                           }
                         }
                       }
@@ -720,54 +1293,18 @@
               }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" },
-          "404": { "$ref": "#/components/responses/NotFound" },
-          "409": { "$ref": "#/components/responses/Conflict" }
-        }
-      }
-    },
-    "/tickets/ingest/jira/{webhookSecret}": {
-      "parameters": [
-        {
-          "name": "webhookSecret",
-          "in": "path",
-          "required": true,
-          "description": "Per-organisation Jira webhook secret. Keep this value private.",
-          "schema": { "type": "string" }
-        }
-      ],
-      "post": {
-        "tags": ["Jira ingestion"],
-        "summary": "Ingest a Jira issue-created or issue-updated webhook",
-        "security": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": { "$ref": "#/components/schemas/JiraWebhookRequest" }
-            }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           }
-        },
-        "responses": {
-          "201": {
-            "description": "New Jira issue ingested",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/JiraIngestionEnvelope" }
-              }
-            }
-          },
-          "200": {
-            "description": "Duplicate or updated Jira issue",
-            "content": {
-              "application/json": {
-                "schema": { "$ref": "#/components/schemas/JiraIngestionEnvelope" }
-              }
-            }
-          },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" }
         }
       }
     }
@@ -790,59 +1327,116 @@
         "name": "ticketId",
         "in": "path",
         "required": true,
-        "schema": { "type": "string" }
+        "schema": {
+          "type": "string"
+        }
       }
     },
     "responses": {
       "BadRequest": {
         "description": "Invalid request",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
       },
       "Unauthorized": {
-        "description": "Authentication or Jira webhook validation failed",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+        "description": "Authentication or request validation failed",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
       },
       "Forbidden": {
         "description": "Caller is not permitted to perform the operation",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
       },
       "NotFound": {
         "description": "Ticket or related resource not found in the caller's scope",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
       },
       "Conflict": {
         "description": "Workflow, evidence, or concurrency conflict",
-        "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ErrorEnvelope" } } }
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
       }
     },
     "schemas": {
       "Envelope": {
         "type": "object",
-        "required": ["data", "requestId"],
+        "required": [
+          "data",
+          "requestId"
+        ],
         "properties": {
           "data": {},
-          "requestId": { "type": "string" }
+          "requestId": {
+            "type": "string"
+          }
         }
       },
       "ErrorEnvelope": {
         "type": "object",
-        "required": ["error"],
+        "required": [
+          "error"
+        ],
         "properties": {
           "error": {
             "type": "object",
-            "required": ["code", "message", "requestId", "fields"],
+            "required": [
+              "code",
+              "message",
+              "requestId",
+              "fields"
+            ],
             "properties": {
-              "code": { "type": "string" },
-              "message": { "type": "string" },
-              "requestId": { "type": "string" },
+              "code": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              },
               "fields": {
                 "type": "array",
                 "items": {
                   "type": "object",
-                  "required": ["field", "message"],
+                  "required": [
+                    "field",
+                    "message"
+                  ],
                   "properties": {
-                    "field": { "type": "string" },
-                    "message": { "type": "string" }
+                    "field": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
                   }
                 }
               }
@@ -852,19 +1446,33 @@
       },
       "Pagination": {
         "type": "object",
-        "required": ["limit", "offset", "total"],
+        "required": [
+          "limit",
+          "offset",
+          "total"
+        ],
         "properties": {
-          "limit": { "type": "integer" },
-          "offset": { "type": "integer" },
-          "total": { "type": "integer" }
+          "limit": {
+            "type": "integer"
+          },
+          "offset": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "integer"
+          }
         }
       },
       "CreateTicketWorkflowRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["config"],
+        "required": [
+          "config"
+        ],
         "properties": {
-          "config": { "$ref": "#/components/schemas/TicketWorkflowConfig" }
+          "config": {
+            "$ref": "#/components/schemas/TicketWorkflowConfig"
+          }
         }
       },
       "TicketWorkflowConfig": {
@@ -881,30 +1489,51 @@
           "permissions"
         ],
         "properties": {
-          "sourceReference": { "type": "string", "minLength": 1 },
-          "initialStatus": { "type": "string", "minLength": 1 },
-          "reopenStatus": { "type": "string", "minLength": 1 },
+          "sourceReference": {
+            "type": "string",
+            "minLength": 1
+          },
+          "initialStatus": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reopenStatus": {
+            "type": "string",
+            "minLength": 1
+          },
           "statuses": {
             "type": "array",
             "minItems": 1,
-            "items": { "type": "string", "minLength": 1 }
+            "items": {
+              "type": "string",
+              "minLength": 1
+            }
           },
           "transitions": {
             "type": "object",
             "additionalProperties": {
               "type": "array",
-              "items": { "type": "string", "minLength": 1 }
+              "items": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "requestableReopenFrom": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
           "restrictedReopenFrom": {
             "type": "array",
-            "items": { "type": "string" }
+            "items": {
+              "type": "string"
+            }
           },
-          "permissions": { "$ref": "#/components/schemas/TicketWorkflowPermissions" }
+          "permissions": {
+            "$ref": "#/components/schemas/TicketWorkflowPermissions"
+          }
         }
       },
       "TicketWorkflowPermissions": {
@@ -918,11 +1547,36 @@
           "administratorOverrideRoles"
         ],
         "properties": {
-          "directStatusChangeRoles": { "type": "array", "items": { "type": "string" } },
-          "closedReopenRoles": { "type": "array", "items": { "type": "string" } },
-          "reopenRequestRoles": { "type": "array", "items": { "type": "string" } },
-          "reopenApprovalRoles": { "type": "array", "items": { "type": "string" } },
-          "administratorOverrideRoles": { "type": "array", "items": { "type": "string" } }
+          "directStatusChangeRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "closedReopenRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reopenRequestRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reopenApprovalRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "administratorOverrideRoles": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       },
       "TicketWorkflow": {
@@ -944,39 +1598,107 @@
           "updatedAt"
         ],
         "properties": {
-          "id": { "type": "string" },
-          "organisationId": { "type": "string" },
-          "sourceReference": { "type": "string" },
-          "initialStatus": { "type": "string" },
-          "reopenStatus": { "type": "string" },
-          "statuses": { "type": "array", "items": { "type": "string" } },
+          "id": {
+            "type": "string"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "sourceReference": {
+            "type": "string"
+          },
+          "initialStatus": {
+            "type": "string"
+          },
+          "reopenStatus": {
+            "type": "string"
+          },
+          "statuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "transitions": {
             "type": "object",
             "additionalProperties": {
               "type": "array",
-              "items": { "type": "string" }
+              "items": {
+                "type": "string"
+              }
             }
           },
-          "requestableReopenFrom": { "type": "array", "items": { "type": "string" } },
-          "restrictedReopenFrom": { "type": "array", "items": { "type": "string" } },
-          "permissions": { "$ref": "#/components/schemas/TicketWorkflowPermissions" },
-          "status": { "type": "string", "enum": ["draft", "active", "archived"] },
-          "createdBy": { "type": "string" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" },
-          "approvedBy": { "type": "string" },
-          "approvedAt": { "type": "string", "format": "date-time" }
+          "requestableReopenFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "restrictedReopenFrom": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "permissions": {
+            "$ref": "#/components/schemas/TicketWorkflowPermissions"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "draft",
+              "active",
+              "archived"
+            ]
+          },
+          "createdBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approvedBy": {
+            "type": "string"
+          },
+          "approvedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "CreateTicketRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["title", "description"],
+        "required": [
+          "title",
+          "description"
+        ],
         "properties": {
-          "title": { "type": "string", "minLength": 1 },
-          "description": { "type": "string", "minLength": 1 },
-          "product": { "type": ["string", "null"] },
-          "affectedService": { "type": ["string", "null"] }
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "product": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "affectedService": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
         }
       },
       "UpdateTicketRequest": {
@@ -984,39 +1706,202 @@
         "additionalProperties": false,
         "minProperties": 1,
         "properties": {
-          "title": { "type": "string", "minLength": 1 },
-          "description": { "type": ["string", "null"] },
-          "product": { "type": ["string", "null"] },
-          "affectedService": { "type": ["string", "null"] },
-          "teamId": { "type": ["string", "null"] },
-          "priority": { "type": "string", "enum": ["P1", "P2", "P3", "P4"] },
-          "priorityOverride": { "$ref": "#/components/schemas/PriorityOverride" }
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "product": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "affectedService": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "teamId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "P1",
+              "P2",
+              "P3",
+              "P4"
+            ]
+          },
+          "priorityOverride": {
+            "$ref": "#/components/schemas/PriorityOverride"
+          }
         }
       },
       "PriorityOverride": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reason", "businessJustification"],
+        "required": [
+          "reason",
+          "businessJustification"
+        ],
         "properties": {
-          "reason": { "type": "string", "minLength": 1 },
-          "businessJustification": { "type": "string", "minLength": 1 }
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          },
+          "businessJustification": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "ChangeTicketStatusRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["status"],
+        "required": [
+          "status"
+        ],
         "properties": {
-          "status": { "type": "string", "minLength": 1 },
-          "reason": { "type": ["string", "null"] },
-          "pauseEvidence": { "$ref": "#/components/schemas/SlaPauseEvidence" },
-          "resolutionEvidence": { "$ref": "#/components/schemas/SlaResolutionEvidence" }
+          "status": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "pauseEvidence": {
+            "$ref": "#/components/schemas/SlaPauseEvidence"
+          },
+          "resolutionEvidence": {
+            "$ref": "#/components/schemas/SlaResolutionEvidence"
+          }
+        }
+      },
+      "TicketEscalation": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "reasonCode",
+          "handoverNotes",
+          "escalatedBy",
+          "escalatedAt"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "open",
+              "resolved"
+            ]
+          },
+          "reasonCode": {
+            "type": "string",
+            "enum": [
+              "P1_CRITICAL",
+              "P2_HIGH",
+              "SLA_AT_RISK",
+              "BEYOND_AGENT_AUTHORITY",
+              "RECURRING_BREACH",
+              "OTHER"
+            ]
+          },
+          "handoverNotes": {
+            "type": "string"
+          },
+          "escalatedBy": {
+            "type": "string"
+          },
+          "escalatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolvedBy": {
+            "type": "string"
+          },
+          "resolvedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "resolutionNotes": {
+            "type": "string"
+          },
+          "automatic": {
+            "type": "boolean"
+          }
+        }
+      },
+      "EscalationQueueItem": {
+        "type": "object",
+        "required": [
+          "ticket",
+          "escalation"
+        ],
+        "properties": {
+          "ticket": {
+            "$ref": "#/components/schemas/Ticket"
+          },
+          "escalation": {
+            "$ref": "#/components/schemas/TicketEscalation"
+          }
+        }
+      },
+      "TicketWorkflowContext": {
+        "type": "object",
+        "required": [
+          "workflowId",
+          "transitions",
+          "resolvedStatuses"
+        ],
+        "properties": {
+          "workflowId": {
+            "type": "string"
+          },
+          "currentStatus": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "resolvedStatuses": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
         }
       },
       "SlaPauseEvidence": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reasonCode", "evidence", "contractReference"],
+        "required": [
+          "reasonCode",
+          "evidence",
+          "contractReference"
+        ],
         "properties": {
           "reasonCode": {
             "type": "string",
@@ -1027,19 +1912,48 @@
               "waiting_for_contractually_eligible_third_party"
             ]
           },
-          "evidence": { "type": "string", "minLength": 1 },
-          "contractReference": { "type": "string", "minLength": 1 }
+          "evidence": {
+            "type": "string",
+            "minLength": 1
+          },
+          "contractReference": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "SlaResolutionEvidence": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["outcome", "note", "customerConfirmation", "customerConfirmationEvidence"],
+        "required": [
+          "outcome",
+          "note",
+          "customerConfirmation",
+          "customerConfirmationEvidence"
+        ],
         "properties": {
-          "outcome": { "type": "string", "enum": ["service_restored", "agreed_solution"] },
-          "note": { "type": "string", "minLength": 1 },
-          "customerConfirmation": { "type": "string", "enum": ["received", "not_applicable"] },
-          "customerConfirmationEvidence": { "type": "string", "minLength": 1 }
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "service_restored",
+              "agreed_solution"
+            ]
+          },
+          "note": {
+            "type": "string",
+            "minLength": 1
+          },
+          "customerConfirmation": {
+            "type": "string",
+            "enum": [
+              "received",
+              "not_applicable"
+            ]
+          },
+          "customerConfirmationEvidence": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "SlaEvidenceRequest": {
@@ -1047,18 +1961,33 @@
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["type", "evidence"],
+            "required": [
+              "type",
+              "evidence"
+            ],
             "properties": {
-              "type": { "const": "assessment_completed" },
-              "evidence": { "type": "string", "minLength": 1 }
+              "type": {
+                "const": "assessment_completed"
+              },
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["type", "reasonCode", "evidence", "contractReference"],
+            "required": [
+              "type",
+              "reasonCode",
+              "evidence",
+              "contractReference"
+            ],
             "properties": {
-              "type": { "const": "exclusion_started" },
+              "type": {
+                "const": "exclusion_started"
+              },
               "reasonCode": {
                 "type": "string",
                 "enum": [
@@ -1069,17 +1998,31 @@
                   "approved_waiting_period"
                 ]
               },
-              "evidence": { "type": "string", "minLength": 1 },
-              "contractReference": { "type": "string", "minLength": 1 }
+              "evidence": {
+                "type": "string",
+                "minLength": 1
+              },
+              "contractReference": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           {
             "type": "object",
             "additionalProperties": false,
-            "required": ["type", "intervalId"],
+            "required": [
+              "type",
+              "intervalId"
+            ],
             "properties": {
-              "type": { "const": "exclusion_ended" },
-              "intervalId": { "type": "string", "minLength": 1 }
+              "type": {
+                "const": "exclusion_ended"
+              },
+              "intervalId": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           }
         ]
@@ -1087,150 +2030,312 @@
       "CreateCommentRequest": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["body", "visibility"],
+        "required": [
+          "body",
+          "visibility"
+        ],
         "properties": {
-          "body": { "type": "string", "minLength": 1 },
-          "visibility": { "type": "string", "enum": ["public", "internal"] }
+          "body": {
+            "type": "string",
+            "minLength": 1
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "public",
+              "internal"
+            ]
+          }
         }
       },
       "ReopenRequestBody": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["reason"],
+        "required": [
+          "reason"
+        ],
         "properties": {
-          "reason": { "type": "string", "minLength": 1 }
+          "reason": {
+            "type": "string",
+            "minLength": 1
+          }
         }
       },
       "Ticket": {
         "type": "object",
-        "required": ["id", "organisationId", "requesterId", "title", "createdAt", "updatedAt"],
+        "required": [
+          "id",
+          "organisationId",
+          "requesterId",
+          "title",
+          "createdAt",
+          "updatedAt"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "organisationId": { "type": "string" },
-          "requesterId": { "type": "string" },
-          "title": { "type": "string" },
+          "id": {
+            "type": "string"
+          },
+          "organisationId": {
+            "type": "string"
+          },
+          "requesterId": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
           "description": {},
-          "product": { "type": ["string", "null"] },
-          "affectedService": { "type": ["string", "null"] },
-          "teamId": { "type": ["string", "null"] },
-          "status": { "type": "string" },
-          "priority": { "type": "string", "enum": ["P1", "P2", "P3", "P4"] },
-          "source": { "$ref": "#/components/schemas/TicketSource" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "updatedAt": { "type": "string", "format": "date-time" }
+          "product": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "affectedService": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "teamId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "P1",
+              "P2",
+              "P3",
+              "P4"
+            ]
+          },
+          "source": {
+            "$ref": "#/components/schemas/TicketSource"
+          },
+          "escalations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TicketEscalation"
+            }
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "TicketDetail": {
         "allOf": [
-          { "$ref": "#/components/schemas/Ticket" },
+          {
+            "$ref": "#/components/schemas/Ticket"
+          },
           {
             "type": "object",
             "properties": {
-              "comments": { "type": "array", "items": { "$ref": "#/components/schemas/TicketComment" } },
-              "attachments": { "type": "array", "items": { "$ref": "#/components/schemas/TicketAttachment" } },
-              "reopenRequests": { "type": "array", "items": { "$ref": "#/components/schemas/ReopenRequest" } }
+              "comments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TicketComment"
+                }
+              },
+              "attachments": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/TicketAttachment"
+                }
+              },
+              "reopenRequests": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/ReopenRequest"
+                }
+              }
             }
           }
         ]
       },
       "TicketSource": {
         "type": "object",
-        "required": ["system", "issueId", "issueKey", "projectKey"],
+        "required": [
+          "system",
+          "issueId",
+          "issueKey",
+          "projectKey"
+        ],
         "properties": {
-          "system": { "const": "jira" },
-          "issueId": { "type": "string" },
-          "issueKey": { "type": "string" },
-          "projectKey": { "type": "string" },
-          "status": { "type": "string" },
-          "priority": { "type": "string" }
+          "system": {
+            "const": "jira"
+          },
+          "issueId": {
+            "type": "string"
+          },
+          "issueKey": {
+            "type": "string"
+          },
+          "projectKey": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string"
+          }
         }
       },
       "TicketComment": {
         "type": "object",
-        "required": ["id", "authorId", "body", "visibility", "createdAt"],
+        "required": [
+          "id",
+          "authorId",
+          "body",
+          "visibility",
+          "createdAt"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "authorId": { "type": "string" },
-          "body": { "type": "string" },
-          "visibility": { "type": "string", "enum": ["internal", "public"] },
-          "createdAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "authorId": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          },
+          "visibility": {
+            "type": "string",
+            "enum": [
+              "internal",
+              "public"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "TicketAttachment": {
         "type": "object",
-        "required": ["id", "fileName", "mimeType", "checksumSha256", "fileSizeBytes", "uploadedBy", "createdAt"],
+        "required": [
+          "id",
+          "fileName",
+          "mimeType",
+          "checksumSha256",
+          "fileSizeBytes",
+          "uploadedBy",
+          "createdAt"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "fileName": { "type": "string" },
-          "mimeType": { "type": "string" },
-          "checksumSha256": { "type": "string" },
-          "fileSizeBytes": { "type": "integer" },
-          "uploadedBy": { "type": "string" },
-          "createdAt": { "type": "string", "format": "date-time" }
+          "id": {
+            "type": "string"
+          },
+          "fileName": {
+            "type": "string"
+          },
+          "mimeType": {
+            "type": "string"
+          },
+          "checksumSha256": {
+            "type": "string"
+          },
+          "fileSizeBytes": {
+            "type": "integer"
+          },
+          "uploadedBy": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
         }
       },
       "TicketHistoryEvent": {
         "type": "object",
-        "required": ["id", "action", "actorId", "createdAt", "changes"],
+        "required": [
+          "id",
+          "action",
+          "actorId",
+          "createdAt",
+          "changes"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "action": { "type": "string" },
-          "actorId": { "type": "string" },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "changes": { "type": "object", "additionalProperties": true }
+          "id": {
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "actorId": {
+            "type": "string"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "changes": {
+            "type": "object",
+            "additionalProperties": true
+          }
         }
       },
       "ReopenRequest": {
         "type": "object",
-        "required": ["id", "requestedBy", "fromStatus", "toStatus", "reason", "status", "createdAt"],
+        "required": [
+          "id",
+          "requestedBy",
+          "fromStatus",
+          "toStatus",
+          "reason",
+          "status",
+          "createdAt"
+        ],
         "properties": {
-          "id": { "type": "string" },
-          "requestedBy": { "type": "string" },
-          "fromStatus": { "type": "string" },
-          "toStatus": { "type": "string" },
-          "reason": { "type": "string" },
-          "status": { "type": "string", "enum": ["pending", "approved"] },
-          "createdAt": { "type": "string", "format": "date-time" },
-          "reviewedBy": { "type": "string" },
-          "reviewedAt": { "type": "string", "format": "date-time" }
-        }
-      },
-      "JiraWebhookRequest": {
-        "type": "object",
-        "required": ["webhookEvent", "issue"],
-        "properties": {
-          "webhookEvent": { "type": "string", "enum": ["jira:issue_created", "jira:issue_updated"] },
-          "issue": {
-            "type": "object",
-            "required": ["id", "key", "fields"],
-            "properties": {
-              "id": { "type": "string" },
-              "key": { "type": "string" },
-              "fields": { "type": "object", "additionalProperties": true }
-            }
+          "id": {
+            "type": "string"
+          },
+          "requestedBy": {
+            "type": "string"
+          },
+          "fromStatus": {
+            "type": "string"
+          },
+          "toStatus": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending",
+              "approved"
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reviewedBy": {
+            "type": "string"
+          },
+          "reviewedAt": {
+            "type": "string",
+            "format": "date-time"
           }
         }
-      },
-      "JiraIngestionEnvelope": {
-        "allOf": [
-          { "$ref": "#/components/schemas/Envelope" },
-          {
-            "type": "object",
-            "properties": {
-              "data": {
-                "type": "object",
-                "required": ["id", "sourceIssueKey", "outcome", "createdAt", "updatedAt"],
-                "properties": {
-                  "id": { "type": "string" },
-                  "sourceIssueKey": { "type": "string" },
-                  "outcome": { "type": "string", "enum": ["created", "updated", "duplicate"] },
-                  "createdAt": { "type": "string", "format": "date-time" },
-                  "updatedAt": { "type": "string", "format": "date-time" }
-                }
-              }
-            }
-          }
-        ]
       }
     }
   }

@@ -2077,7 +2077,7 @@ This guide is derived from the project documents supplied for this task:
 7. `Implementation-Roadmap.md` — repository baseline, architecture approval and ordered implementation gates/phases.
 8. `LLD.md` — TypeScript conventions, folder structure, tenant-scoped repository contract, policy state machine and AI result contracts.
 9. `Policy-and-SLA-Engine.md` — policy lifecycle, structured rules, SLA configuration and evaluation.
-10. `Security-and-Permissions.md` — role templates, authorisation, tenant isolation, file/AI security and audit/privacy.
+10. `Security-Architecture.md` — role templates, authorisation, tenant isolation, file/AI security and audit/privacy.
 11. `Testing-Strategy.md` — test layers and critical scenarios.
 12. `UI-UX-Design.md` — user roles, backend-facing screens, evidence display and role-specific dashboard boundaries.
 13. `API-Specification.md` — draft API catalogue, response/error examples, async triage and policy approval.

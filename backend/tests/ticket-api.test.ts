@@ -7,11 +7,6 @@ import test from 'node:test';
 
 import { createTicketApp } from '../src/modules/tickets/api.js';
 import {
-  ConfigurationError,
-  jiraSettingsFromEnvironment,
-  type JiraSettings,
-} from '../src/modules/tickets/config.js';
-import {
   developmentPrincipalFromEnvironment,
   DevelopmentAuthConfigurationError,
   type DevelopmentPrincipal,
@@ -20,21 +15,9 @@ import { createLocalPrivateStorageAdapter } from '../src/modules/documents/stora
 import { JsonTicketStore } from '../src/modules/tickets/repositories/json-ticket.store.js';
 import { createJsonTenantStore } from '../src/infrastructure/persistence/json/json-store.js';
 import { JsonPolicyRepository } from '../src/modules/policies/repositories/json-policy.repository.js';
+import type { TicketReadService } from '../src/modules/tickets/application/ticket-read.service.js';
 
-const JIRA_SECRET = 'local-test-secret-with-at-least-32-characters';
 const DEV_TOKEN = 'local-development-token-with-at-least-32-characters';
-const jiraPath = `/api/v1/tickets/ingest/jira/${JIRA_SECRET}`;
-
-const settings: JiraSettings = {
-  dataDirectory: '',
-  projectMappings: { SUP: 'org_support' },
-  organisations: {
-    org_support: {
-      webhookSecret: JIRA_SECRET,
-      reporterMappings: { 'jira-account-1': 'user_requester_1' },
-    },
-  },
-};
 
 const staffPrincipal: DevelopmentPrincipal = {
   bearerToken: DEV_TOKEN,
@@ -90,37 +73,12 @@ function principal(
   };
 }
 
-function jiraPayload(
-  webhookEvent = 'jira:issue_created',
-  issueId = '10042',
-  issueKey = 'SUP-42',
-) {
-  return {
-    webhookEvent,
-    issue: {
-      id: issueId,
-      key: issueKey,
-      fields: {
-        project: { key: 'SUP' },
-        summary: 'Jira imported ticket',
-        description: {
-          type: 'doc',
-          content: [{ type: 'paragraph', text: 'Imported from Jira' }],
-        },
-        reporter: { accountId: 'jira-account-1' },
-        status: { name: 'Open' },
-        priority: { name: 'High' },
-      },
-    },
-  };
-}
-
 async function createFixture(options: {
   root?: string;
   principal?: DevelopmentPrincipal | null;
+  ticketReadService?: TicketReadService;
 } = {}) {
   const root = options.root ?? (await mkdtemp(join(tmpdir(), 'ticket-api-')));
-  const fixtureSettings = { ...settings, dataDirectory: root };
   if (options.root === undefined) {
     const timestamp = new Date().toISOString();
     await writeFile(
@@ -142,10 +100,11 @@ async function createFixture(options: {
     );
   }
   const app = createTicketApp({
-    settings: fixtureSettings,
+    dataDirectory: root,
     ticketStore: new JsonTicketStore(root),
     developmentPrincipal:
       options.principal === undefined ? staffPrincipal : options.principal,
+    ...(options.ticketReadService ? { ticketReadService: options.ticketReadService } : {}),
   });
   const defaultToken =
     options.principal === undefined
@@ -197,6 +156,32 @@ async function createFixture(options: {
   };
 }
 
+async function createTicket(
+  fixture: Awaited<ReturnType<typeof createFixture>>,
+  title = 'Synthetic support ticket',
+): Promise<{ id: string }> {
+  const response = await fixture.request('/api/v1/tickets', {
+    method: 'POST',
+    body: JSON.stringify({ title, description: 'Synthetic ticket used by API test.' }),
+  });
+  assert.equal(response.status, 201);
+  return (await response.json()).data as { id: string };
+}
+
+test('removed Jira webhook path is no longer mounted', async () => {
+  const fixture = await createFixture();
+  try {
+    const path = '/api/v1/tickets/ingest/jira/obsolete-secret';
+    const unauthenticated = await fixture.request(path, { method: 'POST', body: '{}' }, null);
+    const authenticated = await fixture.request(path, { method: 'POST', body: '{}' });
+
+    assert.equal(unauthenticated.status, 404);
+    assert.equal(authenticated.status, 404);
+  } finally {
+    await fixture.close();
+  }
+});
+
 test('creates tickets using the authenticated tenant and stores the existing JSON format', async () => {
   const fixture = await createFixture();
   try {
@@ -235,9 +220,15 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
     assert.equal(createdResult.data.requesterId, 'user_requester_1');
     assert.equal(createdResult.data.status, 'new');
     assert.equal(createdResult.data.product, 'Customer Portal');
+    assert.equal(createdResult.data.affectedService, 'Authentication');
     assert.equal(createdResult.data.createdAt, createdResult.data.updatedAt);
+    assert.ok(Number.isFinite(Date.parse(createdResult.data.createdAt)));
     assert.equal(saved.schemaVersion, 1);
     assert.equal(saved.records.length, 1);
+    assert.equal(saved.records[0].requesterId, 'user_requester_1');
+    assert.equal(saved.records[0].product, 'Customer Portal');
+    assert.equal(saved.records[0].affectedService, 'Authentication');
+    assert.equal(saved.records[0].createdAt, createdResult.data.createdAt);
   } finally {
     await fixture.close();
   }
@@ -486,6 +477,13 @@ test('requires pause and resolution evidence on SLA-governed status transitions'
       },
     );
     assert.equal(opened.status, 200);
+    const workflowContext = await agentFixture.request(
+      `/api/v1/tickets/${ticket.id}/workflow-context`,
+    );
+    const workflowContextData = (await workflowContext.json()).data;
+    assert.equal(workflowContext.status, 200);
+    assert.deepEqual(workflowContextData.transitions, ['IN_PROGRESS', 'PENDING', 'RESOLVED']);
+    assert.deepEqual(workflowContextData.resolvedStatuses, ['RESOLVED', 'CLOSED']);
 
     const agentPauseAttempt = await agentFixture.request(
       `/api/v1/tickets/${ticket.id}/status`,
@@ -912,142 +910,6 @@ test('enforces tenant workflow transitions, reopening approval, role limits, and
   }
 });
 
-test('Jira source status remains separate from the tenant workflow status', async () => {
-  const fixture = await createFixture({
-    principal: principal('user_admin', ['organisation_admin']),
-  });
-  try {
-    const workflowResponse = await fixture.request(
-      '/api/v1/ticket-workflows',
-      {
-        method: 'POST',
-        body: JSON.stringify({ config: workflowConfig }),
-      },
-    );
-    const workflow = (await workflowResponse.json()).data;
-    await fixture.request(`/api/v1/ticket-workflows/${workflow.id}/approve`, {
-      method: 'POST',
-    });
-
-    const created = await fixture.request(
-      jiraPath,
-      {
-        method: 'POST',
-        body: JSON.stringify(jiraPayload()),
-      },
-      null,
-    );
-    const ticketId = (await created.json()).data.id as string;
-    const firstRecord = JSON.parse(
-      await readFile(join(fixture.root, 'tickets.json'), 'utf8'),
-    ).records[0];
-    assert.equal(firstRecord.status, 'NEW');
-    assert.equal(firstRecord.source.status, 'Open');
-
-    const internalChange = await fixture.request(
-      `/api/v1/tickets/${ticketId}/status`,
-      {
-        method: 'PATCH',
-        body: JSON.stringify({ status: 'OPEN' }),
-      },
-    );
-    assert.equal(internalChange.status, 200);
-
-    const jiraUpdate = jiraPayload('jira:issue_updated');
-    jiraUpdate.issue.fields.status = { name: 'In Progress' };
-    const updated = await fixture.request(
-      jiraPath,
-      {
-        method: 'POST',
-        body: JSON.stringify(jiraUpdate),
-      },
-      null,
-    );
-    assert.equal(updated.status, 200);
-    const finalRecord = JSON.parse(
-      await readFile(join(fixture.root, 'tickets.json'), 'utf8'),
-    ).records[0];
-    assert.equal(finalRecord.status, 'OPEN');
-    assert.equal(finalRecord.source.status, 'In Progress');
-  } finally {
-    await fixture.close();
-  }
-});
-
-test('Jira ingestion is tenant-mapped, idempotent, and updates the same ticket', async () => {
-  const fixture = await createFixture();
-  try {
-    const created = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(jiraPayload()),
-    }, null);
-    const duplicate = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(jiraPayload()),
-    }, null);
-    const updatePayload = jiraPayload('jira:issue_updated');
-    updatePayload.issue.fields.summary = 'Updated Jira title';
-    updatePayload.issue.fields.status = { name: 'In Progress' };
-    const updated = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(updatePayload),
-    }, null);
-    const createdResult = await created.json();
-    const updatedResult = await updated.json();
-    const records = JSON.parse(
-      await readFile(join(fixture.root, 'tickets.json'), 'utf8'),
-    ).records;
-
-    assert.equal(created.status, 201);
-    assert.equal(createdResult.data.outcome, 'created');
-    assert.equal(createdResult.data.sourceIssueKey, 'SUP-42');
-    assert.equal(duplicate.status, 200);
-    assert.equal((await duplicate.json()).data.outcome, 'duplicate');
-    assert.equal(updated.status, 200);
-    assert.equal(updatedResult.data.outcome, 'updated');
-    assert.equal(updatedResult.data.id, createdResult.data.id);
-    assert.equal(records.length, 1);
-    assert.equal(records[0].organisationId, 'org_support');
-    assert.equal(records[0].requesterId, 'user_requester_1');
-    assert.equal(records[0].source.status, 'In Progress');
-    assert.equal(records[0].source.priority, 'High');
-    assert.equal(records[0].title, 'Updated Jira title');
-  } finally {
-    await fixture.close();
-  }
-});
-
-test('rejects invalid Jira secrets, unmapped reporters, and unsupported events', async () => {
-  const fixture = await createFixture();
-  try {
-    const invalidSecret = await fixture.request(
-      `/api/v1/tickets/ingest/jira/${'x'.repeat(JIRA_SECRET.length)}`,
-      { method: 'POST', body: JSON.stringify(jiraPayload()) },
-      null,
-    );
-    const unmappedPayload = jiraPayload();
-    unmappedPayload.issue.fields.reporter.accountId = 'unknown-account';
-    const unmapped = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(unmappedPayload),
-    }, null);
-    const unsupported = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(jiraPayload('jira:issue_deleted')),
-    }, null);
-
-    assert.equal(invalidSecret.status, 401);
-    assert.equal((await invalidSecret.json()).error.code, 'JIRA_WEBHOOK_UNAUTHORIZED');
-    assert.equal(unmapped.status, 403);
-    assert.equal((await unmapped.json()).error.code, 'JIRA_REPORTER_UNMAPPED');
-    assert.equal(unsupported.status, 400);
-    assert.equal((await unsupported.json()).error.code, 'UNSUPPORTED_JIRA_EVENT');
-    await assert.rejects(readFile(join(fixture.root, 'tickets.json'), 'utf8'));
-  } finally {
-    await fixture.close();
-  }
-});
-
 test('search, role scope, pagination, details, and team assignment stay enforced', async () => {
   const fixture = await createFixture();
   const agent: DevelopmentPrincipal = {
@@ -1059,17 +921,18 @@ test('search, role scope, pagination, details, and team assignment stay enforced
   };
   let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
   try {
-    const imported = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(jiraPayload()),
-    }, null);
-    const ticketId = (await imported.json()).data.id as string;
+    const ticket = await createTicket(fixture);
+    const ticketId = ticket.id;
     agentFixture = await createFixture({ root: fixture.root, principal: agent });
 
     const hidden = await agentFixture.request(`/api/v1/tickets/${ticketId}`);
     const assignment = await fixture.request(`/api/v1/tickets/${ticketId}`, {
       method: 'PATCH',
-      body: JSON.stringify({ teamId: 'team_support' }),
+      body: JSON.stringify({
+        teamId: 'team_support',
+        priority: 'P2',
+        priorityOverride: { reason: 'Test queue filter', businessJustification: 'Synthetic API test.' },
+      }),
     });
     const visible = await agentFixture.request(`/api/v1/tickets?priority=high&limit=1`);
     const detail = await agentFixture.request(`/api/v1/tickets/${ticketId}`);
@@ -1083,7 +946,7 @@ test('search, role scope, pagination, details, and team assignment stay enforced
     assert.equal(page.data[0].id, ticketId);
     assert.equal(detail.status, 200);
     const detailResult = await detail.json();
-    assert.equal(detailResult.data.source.issueKey, 'SUP-42');
+    assert.equal(detailResult.data.title, 'Synthetic support ticket');
     assert.equal('history' in detailResult.data, false);
     assert.equal(missing.status, 404);
   } finally {
@@ -1094,15 +957,130 @@ test('search, role scope, pagination, details, and team assignment stay enforced
   }
 });
 
+test('ticket API uses database pagination with the authenticated role and team scope', async () => {
+  let captured: unknown[] | undefined;
+  const ticketReadService: TicketReadService = {
+    async getTicket() { return null; },
+    async listTickets() { throw new Error('unpaged list should not be called'); },
+    async listTicketsPage(...args) {
+      captured = args;
+      return { data: [{
+        id: 'ticket-page-1', organisationId: 'org_support', requesterId: 'requester-a', teamId: 'team_support',
+        title: 'Paged ticket', status: 'OPEN', priority: 'P2', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      }], total: 37 };
+    },
+  };
+  const agent = principal('user_agent_page', ['support_agent']);
+  const fixture = await createFixture({ principal: agent, ticketReadService });
+  try {
+    const response = await fixture.request('/api/v1/tickets?status=open&priority=high&teamId=team_support&requesterId=requester-a&limit=5&offset=10');
+    const result = await response.json();
+    assert.equal(response.status, 200);
+    assert.equal(result.pagination.total, 37);
+    assert.equal(result.pagination.limit, 5);
+    assert.equal(result.pagination.offset, 10);
+    assert.equal(result.data[0].id, 'ticket-page-1');
+    assert.deepEqual(captured?.[1], {
+      status: 'open', priority: 'high', teamId: 'team_support', requesterId: 'requester-a',
+    });
+    assert.deepEqual(captured?.[2], {
+      readAll: false, includeUnassigned: false, teamIds: ['team_support'],
+    });
+    assert.equal(captured?.[3], 5);
+    assert.equal(captured?.[4], 10);
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('P1 and staff-created escalations appear in the scoped lead queue with audited follow-up', async () => {
+  const leadFixture = await createFixture();
+  let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  let requesterFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
+  try {
+    const ticket = await createTicket(leadFixture);
+    const ticketId = ticket.id;
+    const p1 = await leadFixture.request(`/api/v1/tickets/${ticketId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({
+        teamId: 'team_support',
+        priority: 'P1',
+        priorityOverride: { reason: 'Critical outage', businessJustification: 'Production authentication is unavailable.' },
+      }),
+    });
+    assert.equal(p1.status, 200);
+    agentFixture = await createFixture({ root: leadFixture.root, principal: principal('escalation-agent', ['support_agent']) });
+    const handover = await agentFixture.request(`/api/v1/tickets/${ticketId}/escalations`, {
+      method: 'POST',
+      body: JSON.stringify({ reasonCode: 'P1_CRITICAL', handoverNotes: 'Authentication failed for all customers; rollback attempted and incident manager requested.' }),
+    });
+    assert.equal(handover.status, 201);
+
+    const initialQueue = await leadFixture.request('/api/v1/ticket-escalations');
+    const initialItems = (await initialQueue.json()).data;
+    assert.equal(initialQueue.status, 200);
+    assert.equal(initialItems.length, 1);
+    assert.equal(initialItems[0].escalation.reasonCode, 'P1_CRITICAL');
+    assert.equal(initialItems[0].escalation.automatic, true);
+    assert.match(initialItems[0].escalation.handoverNotes, /all customers/);
+
+    const firstEscalation = initialItems[0].escalation;
+    const closedCritical = await leadFixture.request(
+      `/api/v1/tickets/${ticketId}/escalations/${firstEscalation.id}/resolve`,
+      { method: 'POST', body: JSON.stringify({ resolutionNotes: 'Incident manager engaged and response coordinated.' }) },
+    );
+    assert.equal(closedCritical.status, 200);
+
+    const manual = await agentFixture.request(`/api/v1/tickets/${ticketId}/escalations`, {
+      method: 'POST',
+      body: JSON.stringify({ reasonCode: 'SLA_AT_RISK', handoverNotes: 'Response deadline is approaching; initial assessment and assignment are complete.' }),
+    });
+    const manualResult = await manual.json();
+    assert.equal(manual.status, 201);
+    assert.equal(manualResult.data.reasonCode, 'SLA_AT_RISK');
+
+    const duplicate = await leadFixture.request(`/api/v1/tickets/${ticketId}/escalations`, {
+      method: 'POST',
+      body: JSON.stringify({ reasonCode: 'OTHER', handoverNotes: 'Duplicate active handover.' }),
+    });
+    assert.equal(duplicate.status, 409);
+
+    requesterFixture = await createFixture({
+      root: leadFixture.root,
+      principal: principal('user_requester_1', ['requester']),
+    });
+    assert.equal((await requesterFixture.request('/api/v1/ticket-escalations')).status, 403);
+    const requesterTicket = await requesterFixture.request(`/api/v1/tickets/${ticketId}`);
+    assert.equal(requesterTicket.status, 200);
+    assert.equal('escalations' in (await requesterTicket.json()).data, false);
+    assert.equal((await requesterFixture.request(
+      `/api/v1/tickets/${ticketId}/escalations/${manualResult.data.id}/resolve`,
+      { method: 'POST', body: JSON.stringify({ resolutionNotes: 'Not allowed.' }) },
+    )).status, 403);
+
+    const closedManual = await leadFixture.request(
+      `/api/v1/tickets/${ticketId}/escalations/${manualResult.data.id}/resolve`,
+      { method: 'POST', body: JSON.stringify({ resolutionNotes: 'Lead reviewed the risk and documented the mitigation owner.' }) },
+    );
+    assert.equal(closedManual.status, 200);
+    assert.equal((await (await leadFixture.request('/api/v1/ticket-escalations')).json()).data.length, 0);
+    const audit = await leadFixture.request(`/api/v1/tickets/${ticketId}/audit`);
+    const actions = (await audit.json()).data.map((item: { action: string }) => item.action);
+    assert.ok(actions.includes('ticket.escalated'));
+    assert.ok(actions.includes('ticket.escalation_resolved'));
+  } finally {
+    if (agentFixture) await agentFixture.close(false);
+    if (requesterFixture) await requesterFixture.close(false);
+    await leadFixture.close();
+  }
+});
+
 test('ticket changes are audited and comments honor visibility and role rules', async () => {
   const fixture = await createFixture();
   let requesterFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
   try {
-    const imported = await fixture.request(jiraPath, {
-      method: 'POST',
-      body: JSON.stringify(jiraPayload()),
-    }, null);
-    const ticketId = (await imported.json()).data.id as string;
+    const ticket = await createTicket(fixture);
+    const ticketId = ticket.id;
     const updated = await fixture.request(`/api/v1/tickets/${ticketId}`, {
       method: 'PATCH',
       body: JSON.stringify({ title: 'Updated title' }),
@@ -1174,15 +1152,8 @@ test('uploads private ticket attachments and enforces ticket scope on download',
   let agentFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
   let otherTenantFixture: Awaited<ReturnType<typeof createFixture>> | undefined;
   try {
-    const imported = await fixture.request(
-      jiraPath,
-      {
-        method: 'POST',
-        body: JSON.stringify(jiraPayload()),
-      },
-      null,
-    );
-    const ticketId = (await imported.json()).data.id as string;
+    const ticket = await createTicket(fixture);
+    const ticketId = ticket.id;
     const uploadedContent = Buffer.from('%PDF-1.4\nTicket attachment\n%%EOF');
     const form = new FormData();
     form.append(
@@ -1293,13 +1264,15 @@ test('creates, approves, and activates tenant-configured SLA policy versions wit
     principal: principal('user_admin', ['organisation_admin']),
   });
   const payload = {
-    calendar: {
-      timeZone: 'Africa/Johannesburg',
-      weeklySchedule: {
-        monday: [{ startMinute: 540, endMinute: 1020 }],
-        tuesday: [{ startMinute: 540, endMinute: 1020 }],
+    calendarByPriority: {
+      high: {
+        timeZone: 'Africa/Johannesburg',
+        weeklySchedule: {
+          monday: [{ startMinute: 540, endMinute: 1020 }],
+          tuesday: [{ startMinute: 540, endMinute: 1020 }],
+        },
+        holidays: [],
       },
-      holidays: [],
     },
     targetsByPriority: {
       high: { firstResponseMinutes: 60, resolutionMinutes: 240 },
@@ -1454,15 +1427,8 @@ test('uploads, processes, inspects, and downloads a tenant document', async () =
 test('accepts PNG, JPEG, and WebP ticket images with matching content signatures', async () => {
   const fixture = await createFixture();
   try {
-    const imported = await fixture.request(
-      jiraPath,
-      {
-        method: 'POST',
-        body: JSON.stringify(jiraPayload()),
-      },
-      null,
-    );
-    const ticketId = (await imported.json()).data.id as string;
+    const ticket = await createTicket(fixture);
+    const ticketId = ticket.id;
     const png = Buffer.alloc(24);
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png);
     png.writeUInt32BE(13, 8);
@@ -1543,15 +1509,8 @@ test('accepts PNG, JPEG, and WebP ticket images with matching content signatures
 test('rejects disallowed and oversized ticket attachments without storing them', async () => {
   const fixture = await createFixture();
   try {
-    const imported = await fixture.request(
-      jiraPath,
-      {
-        method: 'POST',
-        body: JSON.stringify(jiraPayload()),
-      },
-      null,
-    );
-    const ticketId = (await imported.json()).data.id as string;
+    const ticket = await createTicket(fixture);
+    const ticketId = ticket.id;
     const unsupportedForm = new FormData();
     unsupportedForm.append(
       'file',
@@ -1603,10 +1562,10 @@ test('authentication fails closed, validates input, and reports corrupt storage'
       join(fixture.root, 'tickets.json'),
       '{"schemaVersion":1,"records":',
     );
-    const storageError = await fixture.request(jiraPath, {
+    const storageError = await fixture.request('/api/v1/tickets', {
       method: 'POST',
-      body: JSON.stringify(jiraPayload()),
-    }, null);
+      body: JSON.stringify({ title: 'Synthetic support ticket', description: 'Storage failure check.' }),
+    });
 
     assert.equal(unavailable.status, 503);
     assert.equal((await unavailable.json()).error.code, 'AUTHENTICATION_NOT_CONFIGURED');
@@ -1624,36 +1583,6 @@ test('authentication fails closed, validates input, and reports corrupt storage'
     await noAuth.close();
     await fixture.close();
   }
-});
-
-test('environment configuration rejects invalid Jira and non-development principals', () => {
-  assert.throws(
-    () => jiraSettingsFromEnvironment({}),
-    ConfigurationError,
-  );
-  assert.throws(
-    () =>
-      jiraSettingsFromEnvironment({
-        JIRA_TENANT_CONFIG: JSON.stringify({
-          projectMappings: { SUP: 'org_unknown' },
-          organisations: {},
-        }),
-      }),
-    ConfigurationError,
-  );
-  assert.throws(
-    () =>
-      developmentPrincipalFromEnvironment({
-        APP_ENV: 'production',
-        TICKET_DEV_PRINCIPAL: JSON.stringify({
-          bearerToken: DEV_TOKEN,
-          organisationId: 'org_support',
-          userId: 'user_requester_1',
-          roles: ['requester'],
-        }),
-      }),
-    DevelopmentAuthConfigurationError,
-  );
 });
 
 test('candidate-rule review routes enforce organisation-admin scope and immutable decisions', async () => {

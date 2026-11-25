@@ -1,7 +1,7 @@
 import { AppError } from "../../shared/errors/app-error.ts";
 import { randomUUID } from "node:crypto";
 import type { TenantContext } from "../../shared/auth/authentication.ts";
-import { JsonFileStore } from "../../infrastructure/persistence/json/json-file-store.ts";
+import { insertRecord, mutateRecordById, updateTenantRecords, type JsonFileStorePort } from "../../infrastructure/persistence/json/json-file-store.ts";
 import { isEnvelope, isMembership, isUser, type OrganisationMembership } from "../identity/model.ts";
 import { isOrganisation, type Organisation, type OrganisationStatus } from "./model.ts";
 
@@ -14,19 +14,19 @@ export interface OrganisationRepository {
 }
 
 export class JsonOrganisationRepository implements OrganisationRepository {
-  private readonly store: JsonFileStore;
-  constructor(store: JsonFileStore) { this.store = store; }
+  private readonly store: JsonFileStorePort;
+  constructor(store: JsonFileStorePort) { this.store = store; }
 
   async findById(tenant: TenantContext, organisationId: string): Promise<Organisation | null> {
     if (tenant.organisationId !== organisationId) return null;
-    return (await this.store.read("organisations.json", isEnvelope(isOrganisation))).records.find((item) => item.id === organisationId) ?? null;
+    return (await this.store.findRecords("organisations.json", isOrganisation, { id: organisationId }))[0] ?? null;
   }
 
   async listForUser(userId: string): Promise<Organisation[]> {
-    const memberships = (await this.store.read("memberships.json", isEnvelope(isMembership))).records
-      .filter((item) => item.userId === userId && item.status === "active");
-    const ids = new Set(memberships.map((item) => item.organisationId));
-    return (await this.store.read("organisations.json", isEnvelope(isOrganisation))).records.filter((item) => ids.has(item.id) && item.status === "active");
+    const memberships = await this.store.findRecords("memberships.json", isMembership, { userId, status: "active" });
+    const ids = memberships.map((item) => item.organisationId);
+    if (!ids.length) return [];
+    return this.store.findRecords("organisations.json", isOrganisation, { id: { $in: ids }, status: "active" });
   }
 
   async listAll(): Promise<Organisation[]> {
@@ -34,8 +34,7 @@ export class JsonOrganisationRepository implements OrganisationRepository {
   }
 
   async create(input: { name: string; settings?: Record<string, unknown> }, administrator: { userId: string; role: "organisation_admin" }): Promise<Organisation> {
-    const user = (await this.store.read("users.json", isEnvelope(isUser))).records
-      .find((record) => record.id === administrator.userId);
+    const user = (await this.store.findRecords("users.json", isUser, { id: administrator.userId }))[0];
     if (!user || user.status !== "active") {
       throw new AppError(403, "ACCOUNT_INACTIVE", "An active application user is required to create an organisation.");
     }
@@ -59,11 +58,15 @@ export class JsonOrganisationRepository implements OrganisationRepository {
       updatedAt: timestamp,
     };
 
-    await this.store.update("memberships.json", isEnvelope(isMembership), (envelope) => {
-      envelope.records.push(membership);
+    await updateTenantRecords<OrganisationMembership, void>(this.store, "memberships.json", record.id, isMembership, memberships => {
+      memberships.push(membership);
     });
 
     try {
+      if (this.store.insertRecord) {
+        await insertRecord(this.store, "organisations.json", isOrganisation, record);
+        return record;
+      }
       return await this.store.update("organisations.json", isEnvelope(isOrganisation), (envelope) => {
         if (envelope.records.some((item) => item.name.toLowerCase() === input.name.toLowerCase())) {
           throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
@@ -73,8 +76,9 @@ export class JsonOrganisationRepository implements OrganisationRepository {
       });
     } catch (error) {
       try {
-        await this.store.update("memberships.json", isEnvelope(isMembership), (envelope) => {
-          envelope.records = envelope.records.filter((item) => item.id !== membership.id);
+        await updateTenantRecords<OrganisationMembership, void>(this.store, "memberships.json", record.id, isMembership, memberships => {
+          const remaining = memberships.filter(item => item.id !== membership.id);
+          memberships.splice(0, memberships.length, ...remaining);
         });
       } catch (rollbackError) {
         throw new AggregateError(
@@ -82,26 +86,58 @@ export class JsonOrganisationRepository implements OrganisationRepository {
           "Organisation creation failed and the provisional administrator membership could not be removed.",
         );
       }
+      if (isDuplicateKeyError(error)) throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
       throw error;
     }
   }
 
   async update(tenant: TenantContext, changes: { name?: string; settings?: Record<string, unknown>; status?: OrganisationStatus }): Promise<Organisation> {
-    return this.store.update("organisations.json", isEnvelope(isOrganisation), (envelope) => {
-      const index = envelope.records.findIndex((item) => item.id === tenant.organisationId);
-      if (index < 0) throw new AppError(404, "NOT_FOUND", "The organisation was not found.");
-      const current = envelope.records[index]!;
-      if (changes.name !== undefined && envelope.records.some((item) => item.id !== current.id && item.name.toLowerCase() === changes.name!.toLowerCase())) {
-        throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
+    try {
+      if (this.store.mutateRecord) {
+        const updated = await mutateRecordById(this.store, 'organisations.json', tenant.organisationId, isOrganisation, current => {
+          if (!current) throw new AppError(404, "NOT_FOUND", "The organisation was not found.");
+          const organisation = {
+            ...current,
+            ...(changes.name !== undefined ? { name: changes.name } : {}),
+            ...(changes.settings !== undefined ? { settings: changes.settings } : {}),
+            ...(changes.status !== undefined ? { status: changes.status } : {}),
+            updatedAt: new Date().toISOString(),
+          };
+          return { record: organisation, result: organisation };
+        });
+        if (!updated) throw new AppError(404, "NOT_FOUND", "The organisation was not found.");
+        return updated;
       }
-      envelope.records[index] = {
-        ...current,
-        ...(changes.name !== undefined ? { name: changes.name } : {}),
-        ...(changes.settings !== undefined ? { settings: changes.settings } : {}),
-        ...(changes.status !== undefined ? { status: changes.status } : {}),
-        updatedAt: new Date().toISOString(),
-      };
-      return envelope.records[index]!;
-    });
+      return await this.store.update("organisations.json", isEnvelope(isOrganisation), (envelope) => {
+        const index = envelope.records.findIndex((item) => item.id === tenant.organisationId);
+        if (index < 0) throw new AppError(404, "NOT_FOUND", "The organisation was not found.");
+        const current = envelope.records[index]!;
+        if (changes.name !== undefined && envelope.records.some((item) => item.id !== current.id && item.name.toLowerCase() === changes.name!.toLowerCase())) {
+          throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
+        }
+        envelope.records[index] = {
+          ...current,
+          ...(changes.name !== undefined ? { name: changes.name } : {}),
+          ...(changes.settings !== undefined ? { settings: changes.settings } : {}),
+          ...(changes.status !== undefined ? { status: changes.status } : {}),
+          updatedAt: new Date().toISOString(),
+        };
+        return envelope.records[index]!;
+      });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) throw new AppError(409, "DUPLICATE_ORGANISATION", "An organisation with this name already exists.");
+      throw error;
+    }
   }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  let current: unknown = error;
+  const visited = new Set<unknown>();
+  while (current && typeof current === 'object' && !visited.has(current)) {
+    visited.add(current);
+    if ((current as { code?: unknown }).code === 11000) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }

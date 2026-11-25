@@ -23,7 +23,7 @@ export class JsonSlaEvaluationRepository implements SlaEvaluationRepository {
     if (evaluation.organisationId !== tenant.organisationId) {
       throw new Error('SLA evaluation organisation does not match tenant.');
     }
-    await this.store.updateCollection<SlaEvaluationRecord, void>('slaEvaluations', (records) => {
+    await this.store.updateTenantCollection<SlaEvaluationRecord, void>('slaEvaluations', tenant.organisationId, (records) => {
       if (records.some((record) => record.id === evaluation.id)) {
         throw new Error(`SLA evaluation ${evaluation.id} already exists.`);
       }
@@ -35,12 +35,9 @@ export class JsonSlaEvaluationRepository implements SlaEvaluationRepository {
     tenant: TenantContext,
     ticketId?: string,
   ): Promise<SlaEvaluationRecord[]> {
-    const records =
-      await this.store.readCollection<SlaEvaluationRecord>('slaEvaluations');
-    return records.filter(
-      (record) =>
-        record.organisationId === tenant.organisationId &&
-        (ticketId === undefined || record.ticketId === ticketId),
-    );
+    return this.store.queryCollection<SlaEvaluationRecord>('slaEvaluations', {
+      organisationId: tenant.organisationId,
+      ...(ticketId === undefined ? {} : { ticketId }),
+    });
   }
 }

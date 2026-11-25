@@ -4,7 +4,7 @@ import type { Environment } from "./config/env.ts";
 import { createLogger } from "./config/logger.ts";
 import type { AuthenticationProvider, IdentityProvisioningProvider, TenantResolver, TenantContext } from "./shared/auth/authentication.ts";
 import { applicationAuthorization, describeRoleCapabilities, requirePermission, ROLE_IDS, type RolePermissionPolicy } from "./shared/auth/authorization.ts";
-import { JsonFileStore, JsonStorageError } from "./infrastructure/persistence/json/json-file-store.ts";
+import { JsonFileStore, JsonStorageError, type JsonFileStorePort } from "./infrastructure/persistence/json/json-file-store.ts";
 import { createJsonTenantStore } from "./infrastructure/persistence/json/json-store.ts";
 import { JsonIdentityRepository } from "./modules/identity/repositories.ts";
 import { IdentityService } from "./modules/identity/service.ts";
@@ -16,7 +16,6 @@ import { createRequestContext } from "./shared/middleware/request-context.ts";
 import { requireAuthenticatedPrincipal, requireTenantContext } from "./shared/middleware/authentication.ts";
 import { rejectUnknownFields, requireNonEmptyString } from "./shared/validation/index.ts";
 import { createTicketApp } from "./modules/tickets/api.js";
-import { jiraSettingsFromEnvironment } from "./modules/tickets/config.js";
 
 export type AppDependencies = {
   moduleHandler?: RequestListener;
@@ -24,20 +23,21 @@ export type AppDependencies = {
   userProvisioner?: IdentityProvisioningProvider;
   tenantResolver?: TenantResolver;
   authorization?: RolePermissionPolicy;
+  fileStore?: JsonFileStorePort;
 };
 
 export function createApp(environment: Environment, dependencies: AppDependencies = {}) {
+  if (!dependencies.fileStore && environment.databaseProvider !== "json") {
+    throw new Error("The MongoDB-backed configured server must provide its persistence adapter.");
+  }
   const logger = createLogger(environment.logLevel);
-  const store = new JsonFileStore(environment.dataDirectory, environment.jsonWriteLockTimeoutMs);
+  const store = dependencies.fileStore ?? new JsonFileStore(environment.dataDirectory, environment.jsonWriteLockTimeoutMs);
   const identity = new IdentityService(new JsonIdentityRepository(store), dependencies.userProvisioner);
   const organisation = new OrganisationService(new JsonOrganisationRepository(store));
   const teams = new TeamService(new JsonTeamRepository(store));
   const permissionPolicy = dependencies.authorization ?? applicationAuthorization;
-  const ticketSettings = process.env.JIRA_TENANT_CONFIG
-    ? { ...jiraSettingsFromEnvironment(), dataDirectory: environment.dataDirectory }
-    : { dataDirectory: environment.dataDirectory, projectMappings: {}, organisations: {} };
   const ticketApp = dependencies.moduleHandler ?? createTicketApp({
-    settings: ticketSettings,
+    dataDirectory: environment.dataDirectory,
     tenantStore: createJsonTenantStore(store),
     ...(dependencies.authenticator ? { authenticator: dependencies.authenticator } : {}),
     tenantResolver: dependencies.tenantResolver ?? identity,
@@ -68,17 +68,20 @@ export function createApp(environment: Environment, dependencies: AppDependencie
   }
 
   async function handle(request: IncomingMessage, response: ServerResponse) {
+    response.setHeader("x-content-type-options", "nosniff");
+    response.setHeader("x-frame-options", "DENY");
+    response.setHeader("referrer-policy", "strict-origin-when-cross-origin");
+    response.setHeader("permissions-policy", "camera=(), microphone=(), geolocation=()");
     const { requestId } = createRequestContext(request);
     response.setHeader("x-request-id", requestId);
     const method = request.method ?? "GET";
     const path = new URL(request.url ?? "/", "http://localhost").pathname;
-    const logPath = path.startsWith('/api/v1/tickets/ingest/jira/') ? '/api/v1/tickets/ingest/jira/[redacted]' : path;
     if (isTicketModulePath(path)) {
       const startedAt = Date.now();
       response.once("finish", () => logger.info("HTTP request", {
         requestId,
         method,
-        path: logPath,
+        path,
         statusCode: response.statusCode,
         durationMs: Date.now() - startedAt,
       }));
@@ -106,7 +109,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
         : error instanceof JsonStorageError
           ? new AppError(503, error.code, "The data store is temporarily unavailable.")
           : new AppError(500, "INTERNAL_ERROR", "An unexpected error occurred.");
-      if (!(error instanceof AppError)) logger.error("Request failed", { requestId, error: error instanceof Error ? error.message : "unknown" });
+      if (!(error instanceof AppError)) logger.error("Request failed", { requestId, errorType: error instanceof Error ? error.name : "unknown" });
       sendJson(response, appError.statusCode, {
         error: {
           code: appError.code,
@@ -116,7 +119,7 @@ export function createApp(environment: Environment, dependencies: AppDependencie
         },
       });
     } finally {
-      logger.info("HTTP request", { requestId, method, path: logPath, statusCode: response.statusCode, durationMs: Date.now() - startedAt });
+      logger.info("HTTP request", { requestId, method, path, statusCode: response.statusCode, durationMs: Date.now() - startedAt });
     }
   }
 
@@ -422,7 +425,11 @@ export function createApp(environment: Environment, dependencies: AppDependencie
 
 function isTicketModulePath(path: string): boolean {
   return [
+    "/api/v1/openapi.json",
+    "/api/v1/audit-logs",
     "/api/v1/ai",
+    "/api/v1/configuration/categories",
+    "/api/v1/configuration/priority-rules",
     "/api/v1/tickets",
     "/api/v1/documents",
     "/api/v1/extracted-rules",

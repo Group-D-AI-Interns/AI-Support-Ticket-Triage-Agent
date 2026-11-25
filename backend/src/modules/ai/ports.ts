@@ -25,6 +25,7 @@ export type AiExecutionLogEvent = {
   model: string | null;
   attempts: number;
   durationMs: number;
+  usage?: { promptTokens?: number; completionTokens?: number; totalTokens?: number };
   errorCode?: string;
 };
 

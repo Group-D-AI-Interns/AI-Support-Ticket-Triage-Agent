@@ -64,6 +64,47 @@ test('parses an approved SLA payload without supplying default targets', () => {
   );
 });
 
+test('uses the sample agreement calendar separately for each priority without hardcoding it as tenant policy', () => {
+  const weekdays = {
+    monday: [{ startMinute: 420, endMinute: 1080 }],
+    tuesday: [{ startMinute: 420, endMinute: 1080 }],
+    wednesday: [{ startMinute: 420, endMinute: 1080 }],
+    thursday: [{ startMinute: 420, endMinute: 1080 }],
+    friday: [{ startMinute: 420, endMinute: 1080 }],
+  };
+  const businessCalendar = { timeZone: 'Africa/Johannesburg', weeklySchedule: weekdays, holidays: [] };
+  const allWeekCalendar = { timeZone: 'Africa/Johannesburg', weeklySchedule: {
+    sunday: [{ startMinute: 0, endMinute: 1440 }], monday: [{ startMinute: 0, endMinute: 1440 }],
+    tuesday: [{ startMinute: 0, endMinute: 1440 }], wednesday: [{ startMinute: 0, endMinute: 1440 }],
+    thursday: [{ startMinute: 0, endMinute: 1440 }], friday: [{ startMinute: 0, endMinute: 1440 }],
+    saturday: [{ startMinute: 0, endMinute: 1440 }],
+  }, holidays: [] };
+  const sampleSource = { ...source, effectiveFrom: '2026-12-01T00:00:00.000+02:00' };
+  const policy = parseSlaPolicy({
+    calendarByPriority: { P1: allWeekCalendar, P2: businessCalendar,
+      P3: { ...businessCalendar, weeklySchedule: Object.fromEntries(Object.entries(weekdays).map(([day]) => [day, [{ startMinute: 480, endMinute: 1020 }]])) },
+      P4: { ...businessCalendar, weeklySchedule: Object.fromEntries(Object.entries(weekdays).map(([day]) => [day, [{ startMinute: 480, endMinute: 1020 }]])) } },
+    targetsByPriority: { P1: { firstResponseMinutes: 15, resolutionMinutes: 240 },
+      P2: { firstResponseMinutes: 30, resolutionMinutes: 480 }, P3: { firstResponseMinutes: 240, resolutionMinutes: 1620 },
+      P4: { firstResponseMinutes: 540, resolutionMinutes: 2700 } },
+    pausedStatuses: ['PENDING'], resolvedStatuses: ['RESOLVED'], riskAtPercent: 75,
+  }, sampleSource);
+
+  const p1 = evaluateTicketSla(policy, { ticketId: 'sample-p1', organisationId: sampleSource.organisationId, priority: 'P1',
+    createdAt: '2026-12-05T08:00:00.000Z', now: '2026-12-05T08:00:00.000Z' });
+  assert.equal(p1.metrics.resolution.deadlineAt, '2026-12-05T12:00:00.000Z');
+  const p2 = evaluateTicketSla(policy, { ticketId: 'sample-p2', organisationId: sampleSource.organisationId, priority: 'P2',
+    createdAt: '2026-12-04T15:30:00.000Z', now: '2026-12-04T15:30:00.000Z' });
+  assert.equal(p2.metrics.resolution.deadlineAt, '2026-12-07T12:30:00.000Z');
+  const p3 = evaluateTicketSla(policy, { ticketId: 'sample-p3', organisationId: sampleSource.organisationId, priority: 'P3',
+    createdAt: '2026-12-04T15:30:00.000Z', now: '2026-12-04T15:30:00.000Z' });
+  assert.equal(p3.metrics.firstResponse.deadlineAt, '2026-12-07T10:00:00.000Z');
+  assert.throws(() => parseSlaPolicy({
+    calendarByPriority: { P1: allWeekCalendar }, targetsByPriority: { P1: { firstResponseMinutes: 15, resolutionMinutes: 240 }, P2: { firstResponseMinutes: 30, resolutionMinutes: 480 } },
+    pausedStatuses: ['PENDING'], resolvedStatuses: ['RESOLVED'], riskAtPercent: 75,
+  }, sampleSource), SlaPolicyValidationError);
+});
+
 test('adds only configured working minutes and skips configured holidays', () => {
   const policy = parseSlaPolicy(payload, source);
   assert.equal(

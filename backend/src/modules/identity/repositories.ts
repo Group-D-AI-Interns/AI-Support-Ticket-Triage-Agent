@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { AppError } from "../../shared/errors/app-error.ts";
-import { JsonFileStore } from "../../infrastructure/persistence/json/json-file-store.ts";
+import { insertRecord, mutateRecordById, updateTenantRecords, type JsonFileStorePort } from "../../infrastructure/persistence/json/json-file-store.ts";
 import { isEnvelope, isMembership, isUser, type OrganisationMembership, type User } from "./model.ts";
 import type { TenantContext } from "../../shared/auth/authentication.ts";
 import { isOrganisation, type OrganisationStatus } from "../organisations/model.ts";
@@ -21,44 +21,55 @@ export interface IdentityRepository {
 }
 
 export class JsonIdentityRepository implements IdentityRepository {
-  private readonly store: JsonFileStore;
-  constructor(store: JsonFileStore) { this.store = store; }
+  private readonly store: JsonFileStorePort;
+  constructor(store: JsonFileStorePort) { this.store = store; }
 
   async findUserById(userId: string): Promise<User | null> {
-    return (await this.store.read("users.json", isEnvelope(isUser))).records.find((user) => user.id === userId) ?? null;
+    return (await this.store.findRecords("users.json", isUser, { id: userId }))[0] ?? null;
   }
 
   async findOrganisationStatus(organisationId: string): Promise<OrganisationStatus | null> {
-    const organisations = (await this.store.read("organisations.json", isEnvelope(isOrganisation))).records;
-    return organisations.find((organisation) => organisation.id === organisationId)?.status ?? null;
+    const organisation = (await this.store.findRecords("organisations.json", isOrganisation, { id: organisationId }))[0];
+    return organisation?.status ?? null;
   }
 
   async listUsersForTenant(tenant: TenantContext): Promise<User[]> {
-    const memberships = (await this.store.read("memberships.json", isEnvelope(isMembership))).records
-      .filter((membership) => membership.organisationId === tenant.organisationId && membership.status === "active");
-    const ids = new Set(memberships.map((membership) => membership.userId));
-    return (await this.store.read("users.json", isEnvelope(isUser))).records
-      .filter((user) => ids.has(user.id) && user.status === "active");
+    const memberships = await this.store.findRecords("memberships.json", isMembership, {
+      organisationId: tenant.organisationId,
+      status: "active",
+    });
+    const ids = memberships.map((membership) => membership.userId);
+    if (!ids.length) return [];
+    return this.store.findRecords("users.json", isUser, { id: { $in: ids }, status: "active" });
   }
 
   async listMembershipsForTenant(tenant: TenantContext): Promise<OrganisationMembership[]> {
-    return (await this.store.read("memberships.json", isEnvelope(isMembership))).records
-      .filter((membership) => membership.organisationId === tenant.organisationId && membership.status === "active");
+    return this.store.findRecords("memberships.json", isMembership, {
+      organisationId: tenant.organisationId,
+      status: "active",
+    });
   }
 
   async listMemberships(userId: string): Promise<OrganisationMembership[]> {
-    return (await this.store.read("memberships.json", isEnvelope(isMembership))).records
-      .filter((membership) => membership.userId === userId && membership.status === "active");
+    return this.store.findRecords("memberships.json", isMembership, { userId, status: "active" });
   }
 
   async findMembership(organisationId: string, userId: string): Promise<OrganisationMembership | null> {
-    const memberships = (await this.store.read("memberships.json", isEnvelope(isMembership))).records;
-    const matches = memberships.filter((item) => item.organisationId === organisationId && item.userId === userId);
+    const matches = await this.store.findRecords("memberships.json", isMembership, { organisationId, userId });
     if (matches.length > 1) throw new AppError(500, "DATA_INTEGRITY_ERROR", "Organisation membership data is inconsistent.");
     return matches[0] ?? null;
   }
 
   async updateUser(userId: string, changes: { displayName?: string; status?: User["status"] }): Promise<User> {
+    if (this.store.mutateRecord) {
+      const updated = await mutateRecordById(this.store, 'users.json', userId, isUser, current => {
+        if (!current) throw new AppError(404, "NOT_FOUND", "The user was not found.");
+        const user = { ...current, ...changes, updatedAt: new Date().toISOString() };
+        return { record: user, result: user };
+      });
+      if (!updated) throw new AppError(404, "NOT_FOUND", "The user was not found.");
+      return updated;
+    }
     return this.store.update("users.json", isEnvelope(isUser), (envelope) => {
       const index = envelope.records.findIndex((user) => user.id === userId);
       if (index < 0) throw new AppError(404, "NOT_FOUND", "The user was not found.");
@@ -69,19 +80,18 @@ export class JsonIdentityRepository implements IdentityRepository {
   }
 
   async setMembership(tenant: TenantContext, userId: string, status: OrganisationMembership["status"], roles: OrganisationMembership["roles"]): Promise<OrganisationMembership> {
-    const users = (await this.store.read("users.json", isEnvelope(isUser))).records;
-    const user = users.find((candidate) => candidate.id === userId);
+    const user = (await this.store.findRecords("users.json", isUser, { id: userId }))[0];
     if (!user) throw new AppError(404, "USER_NOT_FOUND", "The user was not found.");
     if (status === "active" && user.status !== "active") throw new AppError(400, "ACCOUNT_INACTIVE", "An inactive account cannot be activated as an organisation member.");
-    return this.store.update("memberships.json", isEnvelope(isMembership), (envelope) => {
-      const matches = envelope.records.filter((membership) => membership.organisationId === tenant.organisationId && membership.userId === userId);
+    return updateTenantRecords<OrganisationMembership, OrganisationMembership>(this.store, "memberships.json", tenant.organisationId, isMembership, memberships => {
+      const matches = memberships.filter((membership) => membership.userId === userId);
       if (matches.length > 1) throw new AppError(500, "DATA_INTEGRITY_ERROR", "Organisation membership data is inconsistent.");
       const timestamp = new Date().toISOString();
       const existing = matches[0];
       if (existing) {
-        const index = envelope.records.indexOf(existing);
-        envelope.records[index] = { ...existing, status, roles: [...roles], updatedAt: timestamp };
-        return envelope.records[index]!;
+        const index = memberships.indexOf(existing);
+        memberships[index] = { ...existing, status, roles: [...roles], updatedAt: timestamp };
+        return memberships[index]!;
       }
       const membership: OrganisationMembership = {
         id: `membership_${randomUUID()}`,
@@ -92,7 +102,7 @@ export class JsonIdentityRepository implements IdentityRepository {
         createdAt: timestamp,
         updatedAt: timestamp,
       };
-      envelope.records.push(membership);
+      memberships.push(membership);
       return membership;
     });
   }
@@ -105,26 +115,53 @@ export class JsonIdentityRepository implements IdentityRepository {
   }
 
   async createProvisionedUser(userId: string, email: string, displayName: string): Promise<User> {
-    return this.store.update("users.json", isEnvelope(isUser), (envelope) => {
-      if (envelope.records.some((user) => user.id === userId || user.email.toLowerCase() === email.toLowerCase())) {
-        throw new AppError(409, "USER_ALREADY_EXISTS", "A user with this identity or email already exists.");
+    try {
+      if (this.store.insertRecord) {
+        const timestamp = new Date().toISOString();
+        const user: User = { id: userId, email, displayName, status: "active", createdAt: timestamp, updatedAt: timestamp };
+        await insertRecord(this.store, "users.json", isUser, user);
+        return user;
       }
-      const timestamp = new Date().toISOString();
-      const user: User = { id: userId, email, displayName, status: "active", createdAt: timestamp, updatedAt: timestamp };
-      envelope.records.push(user);
-      return user;
-    });
+      return await this.store.update("users.json", isEnvelope(isUser), (envelope) => {
+        if (envelope.records.some((user) => user.id === userId || user.email.toLowerCase() === email.toLowerCase())) {
+          throw new AppError(409, "USER_ALREADY_EXISTS", "A user with this identity or email already exists.");
+        }
+        const timestamp = new Date().toISOString();
+        const user: User = { id: userId, email, displayName, status: "active", createdAt: timestamp, updatedAt: timestamp };
+        envelope.records.push(user);
+        return user;
+      });
+    } catch (error) {
+      if (isDuplicateKeyError(error)) throw new AppError(409, "USER_ALREADY_EXISTS", "A user with this identity or email already exists.");
+      throw error;
+    }
   }
 
   async removeProvisionedUser(userId: string): Promise<void> {
+    if (this.store.mutateRecord) {
+      await mutateRecordById(this.store, 'users.json', userId, isUser, () => ({ record: null, result: undefined }));
+      return;
+    }
     await this.store.update("users.json", isEnvelope(isUser), (envelope) => {
       envelope.records = envelope.records.filter((user) => user.id !== userId);
     });
   }
 
   async removeMembership(organisationId: string, userId: string): Promise<void> {
-    await this.store.update("memberships.json", isEnvelope(isMembership), (envelope) => {
-      envelope.records = envelope.records.filter((membership) => membership.organisationId !== organisationId || membership.userId !== userId);
+    await updateTenantRecords<OrganisationMembership, void>(this.store, "memberships.json", organisationId, isMembership, memberships => {
+      const remaining = memberships.filter(membership => membership.userId !== userId);
+      memberships.splice(0, memberships.length, ...remaining);
     });
   }
+}
+
+function isDuplicateKeyError(error: unknown): boolean {
+  let current: unknown = error;
+  const visited = new Set<unknown>();
+  while (current && typeof current === 'object' && !visited.has(current)) {
+    visited.add(current);
+    if ((current as { code?: unknown }).code === 11000) return true;
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
 }

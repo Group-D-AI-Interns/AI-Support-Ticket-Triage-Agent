@@ -2,17 +2,19 @@
 
 ## 1. Database decision and status
 
-The source materials contain two directions: the capstone specification proposes MongoDB collections, while the universal-platform brief explicitly asks for a scalable relational data model and ERD. The final primary database is therefore **an approval decision**, not assumed here. This design presents a relational logical model because that is explicitly requested for Phase 2. Validate it against the existing repository and coach decision before implementation.
+**Decision (23 November 2026):** the project owner selected managed MongoDB Atlas as the application database. Normal application startup requires MongoDB in development and production; JSON persistence is restricted to isolated tests and the offline synthetic demo. The configured Atlas URI passed a read-only ping and index initialization. The approved import loaded 80 validated records across 18 collections into the empty target, verified by per-collection counts; source JSON remains unchanged. Backup/restore and production-scale query behavior remain unverified. This document's proposed relational ERD is historical input and must not be treated as the implemented MongoDB schema.
 
 ## 2. Design principles
 
-- Every tenant-owned table includes `organisation_id`.
-- Use primary keys, foreign keys, unique constraints and indexes.
-- Store source provenance for measurements and AI recommendations.
-- Keep uploaded file bytes in private object storage; persist metadata and object keys in the database.
-- Store timestamps in UTC and retain relevant business timezone/calendar configuration.
+- Every tenant-owned MongoDB document carries `organisationId`; repository methods scope reads and writes to the authenticated tenant where applicable.
+- Existing application identifiers are stored as string MongoDB `_id` values. Unique and compound indexes enforce only invariants already represented by the application.
+- Preserve source provenance and evidence for policy extraction, AI recommendations, SLA evaluation, and human review.
+- MongoDB stores application records and file metadata. Document and ticket-attachment bytes currently remain in local private storage, not Atlas or production object storage.
+- Store timestamps in UTC and use configured business calendars/time zones for calculations; tenant-approved values are required before SLA activation.
 
-## 3. Proposed logical entities
+## 3. Historical conceptual entity list (not the physical schema)
+
+The following illustrative relational-style list came from the earlier design proposal. It is not a set of deployed SQL tables, and several concepts (notably performance/coaching entities) do not have implemented backend modules. Do not use it to infer that performance metrics or coaching records are collected or calculated.
 
 | Entity | Key fields (illustrative) | Relationships |
 |---|---|---|
@@ -49,7 +51,7 @@ The source materials contain two directions: the capstone specification proposes
 | audit_logs | id, organisation_id, actor_id, action, before, after, created_at | Audit history |
 | agent_executions | id, organisation_id, workflow, status, model, duration | AI/job traceability |
 
-## 4. Entity relationship diagram
+## 4. Historical conceptual relationship diagram
 
 ```mermaid
 erDiagram
@@ -71,18 +73,15 @@ erDiagram
   TICKETS ||--o{ SLA_EVALUATIONS : evaluated_by
 ```
 
-## 5. Index and constraint recommendations
+## 5. Current MongoDB indexes and persistence behavior
 
-- Unique organisation membership: `(organisation_id, user_id)`.
-- Ticket queue: `(organisation_id, status, priority, created_at)`.
-- Ticket requester: `(organisation_id, requester_id, created_at)`.
-- Team queue: `(organisation_id, team_id, status, priority)`.
-- Policy lookup: `(organisation_id, policy_type, status, effective_from)`.
-- Version uniqueness: `(parent_id, version)`.
-- Audit lookup: `(organisation_id, target_type, target_id, created_at)`.
-- AI execution lookup: `(organisation_id, execution_id)`.
+MongoDB uses string `_id` values aligned with the existing application IDs during the first migration. Every tenant-owned document includes `organisationId`; repositories must scope reads and writes by that value. Add unique compound indexes for membership, version and external-source identities where the service already enforces those invariants. Multi-record work uses the Node driver's `withTransaction` helper so the driver can retry labeled transient transaction failures; nested repository calls reuse the active session. Production and integration transaction testing therefore require a replica set. Atlas is the selected production target.
 
-Use foreign keys and tenant-consistency constraints where supported. A child row's organisation must match its parent organisation; enforce this through composite constraints or service-level invariant checks.
+The implemented collection namespace is `app_` plus the logical collection name. It includes `app_organisations`, `app_users`, `app_memberships`, `app_departments`, `app_teams`, `app_team-memberships`, `app_documents`, `app_documentVersions`, `app_policies`, `app_policyVersions`, `app_extractedRules`, `app_policyApprovals`, `app_auditLogs`, `app_extractionJobs`, `app_documentExtractions`, `app_slaEvaluations`, `app_ai-analyses`, `app_ai-workflow-runs`, `app_ai-operations`, `app_ticket-workflows`, and `app_tickets`. The configured database has 21 application collections after index initialization; 18 of them received migrated records. The master prompt's 18 names are conceptual entities, not a requirement for 18 separate physical collections. The detailed entity-to-collection/embedded-record mapping is in the [Phase 7 persistence audit](../assessment/phase-7-database-persistence-audit.md). In particular, comments and attachment metadata are embedded in tickets; classifications and summaries share analysis records; historical tickets remain in the ticket collection; and approvals/audit events are distributed among domain records. Published knowledge uses approved policy/version records rather than a separate knowledge-base collection.
+
+Indexes currently cover tenant lookup; case-insensitive unique user email and organisation name; organisation/user and team/user memberships; document/policy versions; document and extraction history; policy approval and extracted-rule lookup; SLA and AI history; AI job polling; audit history; ticket queues, requester/team scope, open escalations; and one active workflow per tenant. `MongoFileStore.initialize()` completed against the configured Atlas database, executing the current index definitions. Legacy external source fields remain readable on old ticket records, but the Jira webhook and its source-identity index creation were removed. Exact compound keys are in `backend/src/infrastructure/persistence/mongodb/mongo-file-store.ts` and `mongo-ticket-stores.ts`.
+
+The current adapter provisions tenant, user-membership, version, extraction job/history, policy approval, extracted-rule, SLA-history, AI-history, AI-job polling, ticket queue, open escalation, active-workflow, case-insensitive unique user-email and unique organisation-name indexes. Identity, organisation, team, document, policy/version-backed approved knowledge, SLA history, AI history, AI job polling, ticket detail, and open escalation reads use structured MongoDB filters with tenant scope where applicable. Team, membership, document, policy, extraction job/history, SLA-history, AI-operation, and AI-history mutations use tenant-scoped MongoDB reads and record-level writes. User and organisation creation use direct inserts; updates/deletes use MongoDB `_id` point operations. Ticket status, priority, team and requester filters plus pagination are executed in MongoDB when free-text search is absent; free-text ticket matching remains application-side. Ticket/workflow mutations pass tenant scope into MongoDB transactions; compatibility whole-collection operations remain for some legacy/global data and some broad list paths need bounded query work before production-sized use. Workflow-run documents map their domain `runId` to MongoDB `_id` while preserving existing JSON/API fields. Atlas connectivity, index initialization, and the approved 80-record import are verified; backup/restore and production query sizing are not.
 
 ## 6. Retention and deletion
 
@@ -90,4 +89,4 @@ Define organisation-configurable retention policies, legal holds and deletion wo
 
 ## 7. Outstanding decisions
 
-Primary database engine, identifier strategy, partitioning strategy, object storage, vector index, encryption/key management, backup/restore and data residency remain to be approved.
+The configured Atlas project, cluster and database user passed connectivity and index initialization. Production least-privilege/network controls, backup/restore evidence, data residency, object storage, vector index, encryption/key management and application hosting remain to be verified or approved. Retention periods remain unspecified and require approval.

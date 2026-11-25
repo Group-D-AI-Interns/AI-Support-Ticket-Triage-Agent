@@ -9,6 +9,7 @@ import { createIntegratedApp } from '../src/integrated-app.js';
 import { loadEnvironment } from '../src/config/env.js';
 import { KeycloakAuthenticationProvider } from '../src/infrastructure/auth/keycloak-authentication.js';
 import { JsonFileStore } from '../src/infrastructure/persistence/json/json-file-store.js';
+import { AiOperationsStore } from '../src/modules/ai/operations-store.js';
 import { JsonTicketStore } from '../src/modules/tickets/repositories/json-ticket.store.js';
 import { createJsonTenantStore } from '../src/infrastructure/persistence/json/json-store.js';
 import { JsonDocumentRepository } from '../src/modules/documents/repositories/json-document.repository.js';
@@ -21,6 +22,16 @@ import type { AuthorizedKnowledgeSource } from '../src/modules/knowledge/retriev
 import type { TicketAppOptions } from '../src/modules/tickets/api.js';
 import { ProviderDocumentExtractionAdapter } from '../src/modules/ai/provider-document-extraction.adapter.js';
 import { documentExtractionSchemas } from '../src/modules/ai/document-extraction-schemas.js';
+
+test('integrated app refuses to fall back to JSON persistence outside tests', () => {
+  const environment = loadEnvironment({
+    NODE_ENV: 'development',
+    MONGODB_URI: 'mongodb://127.0.0.1:27017',
+    MONGODB_DATABASE: 'ai_support',
+  });
+  assert.equal(environment.databaseProvider, 'mongodb');
+  assert.throws(() => createIntegratedApp(environment), /MongoDB persistence must be provided/);
+});
 
 function documentAiAdapters(invalidFirst = false) {
   let calls = 0;
@@ -77,12 +88,10 @@ async function fixture(priorityPreview: PriorityPreviewConfiguration | null = nu
   }
   let server = createServer();
   function createServer() {
-    return createIntegratedApp(loadEnvironment({ DATA_DIRECTORY: root, LOG_LEVEL: 'error', PORT: '0' }), { authenticator }, {
+    return createIntegratedApp(loadEnvironment({ NODE_ENV: 'test', DATA_DIRECTORY: root, LOG_LEVEL: 'error', PORT: '0' }), { authenticator }, {
       priorityPreview,
       ...resolution,
-      settings: { dataDirectory: root, projectMappings: { SUP: 'org-a' }, organisations: {
-        'org-a': { webhookSecret: 'integration-webhook-secret-at-least-32-characters', reporterMappings: { 'jira-requester': 'requester' } },
-      } },
+      dataDirectory: root,
       ticketAiDemo: { categories: [{ id: 'ACCESS', name: 'Account access' }] }, ticketAiLive: null,
     });
   }
@@ -250,17 +259,14 @@ test('parallel document requests process their own jobs and retain both human re
   } finally { await f.close(); }
 });
 
-test('existing Jira intake can feed full AI triage without changing the imported ticket or logging its webhook secret', async () => {
+test('authenticated ticket intake can feed full AI triage without changing the ticket', async () => {
   const f = await fixture();
-  const messages: string[] = [];
-  const originalLog = console.log;
-  console.log = (...values: unknown[]) => messages.push(values.map(String).join(' '));
   try {
-    const imported = await f.request('/api/v1/tickets/ingest/jira/integration-webhook-secret-at-least-32-characters', 'admin', { method: 'POST', body: JSON.stringify({
-      webhookEvent: 'jira:issue_created', issue: { id: 'jira-triage-1', key: 'SUP-42', fields: { project: { key: 'SUP' }, summary: 'Account access locked', description: { type: 'doc', content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Account locked after reset.' }] }] }, reporter: { accountId: 'jira-requester' }, status: { name: 'Open' } } },
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({
+      title: 'Account access locked', description: 'Account locked after reset.',
     }) });
-    assert.equal(imported.status, 201);
-    const id = (await imported.json()).data.id;
+    assert.equal(created.status, 201);
+    const id = (await created.json()).data.id;
     const before = await readFile(join(f.root, 'tickets.json'), 'utf8');
     const triaged = await f.request(`/api/v1/tickets/${id}/triage`, 'admin', { method: 'POST', body: '{}' });
     assert.equal(triaged.status, 200);
@@ -269,8 +275,7 @@ test('existing Jira intake can feed full AI triage without changing the imported
     assert.equal(result.core.orchestration.engine, 'langgraph');
     assert.equal(result.resolution.data.status, 'insufficient_evidence');
     assert.equal(await readFile(join(f.root, 'tickets.json'), 'utf8'), before);
-    assert.equal(messages.join('\n').includes('integration-webhook-secret-at-least-32-characters'), false);
-  } finally { console.log = originalLog; await f.close(); }
+  } finally { await f.close(); }
 });
 
 test('one signed-token API joins foundation, tickets, AI, memberships and persistent history', async () => {
@@ -469,17 +474,10 @@ test('document processing, human SLA approval, evaluation and reporting work on 
     assert.equal((await f.request(`${path}/activate`, 'admin', { method: 'POST', body: '{}' })).status, 409);
     assert.equal((await f.request(`${path}/approve`, 'admin', { method: 'POST', body: '{"reason":"Verified source"}' })).status, 200);
     assert.equal((await f.request(`${path}/activate`, 'admin', { method: 'POST', body: '{}' })).status, 200);
-    // Jira's separately authenticated input supplies priority; AI does not mutate it.
-    const imported = await f.request('/api/v1/tickets/ingest/jira/integration-webhook-secret-at-least-32-characters', 'other', {
-      method: 'POST', body: JSON.stringify({ webhookEvent: 'jira:issue_created', organisationId: 'org-b', issue: {
-        id: '1001', key: 'SUP-1', fields: { project: { key: 'SUP' }, summary: 'Account access', description: 'Account locked', reporter: { accountId: 'jira-requester' }, priority: { name: 'high' }, status: { name: 'Open' } },
-      } }),
-    });
-    assert.equal(imported.status, 201);
-    const ticket = (await imported.json()).data;
-    // Source priority is retained as evidence; a permitted human sets internal priority explicitly.
-    const jiraPriorityFilter = await f.request('/api/v1/tickets?priority=high', 'admin');
-    assert.ok((await jiraPriorityFilter.json()).data.some((item: { id: string }) => item.id === ticket.id));
+    // A permitted human sets internal priority explicitly; AI does not mutate it.
+    const ticketCreated = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account access', description: 'Account locked' }) });
+    assert.equal(ticketCreated.status, 201);
+    const ticket = (await ticketCreated.json()).data;
     assert.equal((await f.request(`/api/v1/tickets/${ticket.id}`, 'requester', { method: 'PATCH', body: '{"priority":"high","priorityOverride":{"reason":"classify","businessJustification":"business impact"}}' })).status, 403);
     const missingOverrideEvidence = await f.request(`/api/v1/tickets/${ticket.id}`, 'admin', { method: 'PATCH', body: '{"priority":"high"}' });
     assert.equal(missingOverrideEvidence.status, 400);
@@ -506,7 +504,8 @@ test('document processing, human SLA approval, evaluation and reporting work on 
     assert.equal(prioritised.status, 200);
     const prioritisedTicket = (await prioritised.json()).data;
     assert.equal(prioritisedTicket.priority, 'P2');
-    assert.equal(prioritisedTicket.source.priority, 'high');
+    const priorityFilter = await f.request('/api/v1/tickets?priority=high', 'admin');
+    assert.ok((await priorityFilter.json()).data.some((item: { id: string }) => item.id === ticket.id));
     const beforeTriage = await readFile(join(f.root, 'tickets.json'), 'utf8');
     const triaged = await f.request(`/api/v1/tickets/${ticket.id}/triage`, 'admin', { method: 'POST', body: '{}' });
     assert.equal(triaged.status, 200);
@@ -653,6 +652,56 @@ test('approved routing, durable triage history and immutable quality reviews use
   } finally { await f.close(); }
 });
 
+test('configuration routing reads survive a stored pre-affected-functionality triage report', async () => {
+  const f = await fixture();
+  try {
+    const ticket = await new JsonTicketStore(f.root).createTicket({
+      organisationId: 'org-a', requesterId: 'requester', title: 'Account access', description: 'Account locked.',
+    }, { organisationId: 'org-a', userId: 'requester', roles: ['requester'] });
+    const triage = await f.request(`/api/v1/tickets/${ticket.id}/triage`, 'admin', { method: 'POST', body: '{}' });
+    assert.equal(triage.status, 200);
+
+    const path = join(f.root, 'ai-operations.json');
+    const stored = JSON.parse(await readFile(path, 'utf8')) as { records: Array<{ kind: string; data: { result: { core: { summary: Record<string, unknown> } } } }> };
+    const report = stored.records.find(record => record.kind === 'report');
+    assert.ok(report);
+    delete report.data.result.core.summary.affectedFunctionality;
+    await writeFile(path, JSON.stringify(stored));
+
+    const routing = await f.request('/api/v1/ai/routing-rules', 'admin');
+    assert.equal(routing.status, 200, JSON.stringify(await routing.clone().json()));
+    const history = await f.request(`/api/v1/tickets/${ticket.id}/triages`, 'admin');
+    assert.equal(history.status, 200);
+    assert.equal((await history.json()).data[0].data.result.core.summary.affectedFunctionality, null);
+    const unchanged = JSON.parse(await readFile(path, 'utf8')) as typeof stored;
+    const unchangedReport = unchanged.records.find(record => record.kind === 'report');
+    assert.ok(unchangedReport);
+    assert.equal(Object.hasOwn(unchangedReport.data.result.core.summary, 'affectedFunctionality'), false);
+  } finally { await f.close(); }
+});
+
+test('category API requires tenant configuration permission and isolates category sets', async () => {
+  const f=await fixture();
+  try {
+    const fallbackResponse=await f.request('/api/v1/configuration/categories','admin');
+    const fallbackBody=await fallbackResponse.json();
+    assert.equal(fallbackResponse.status,200,JSON.stringify(fallbackBody));
+    const fallback=fallbackBody.data;
+    assert.equal(fallback[0].id,'ACCESS');
+    assert.equal((await f.request('/api/v1/configuration/categories','agent')).status,403);
+    const post=(body:unknown)=>({method:'POST',body:JSON.stringify(body)});
+    const created=await f.request('/api/v1/configuration/categories','admin',post({id:'billing',name:'Billing',description:'Payments and invoices'}));
+    assert.equal(created.status,201);
+    assert.deepEqual((await (await f.request('/api/v1/configuration/categories','admin')).json()).data.map((item:{id:string})=>item.id),['billing']);
+    assert.deepEqual((await (await f.request('/api/v1/configuration/categories','other')).json()).data.map((item:{id:string})=>item.id),['ACCESS']);
+    assert.equal((await f.request('/api/v1/configuration/categories','admin',post({id:'billing',name:'Duplicate'}))).status,409);
+    const disabled=await f.request('/api/v1/configuration/categories/billing/disable','admin',post({reason:'Synthetic test disable'}));
+    assert.equal(disabled.status,200);
+    assert.equal((await (await f.request('/api/v1/configuration/categories','admin')).json()).data[0].status,'disabled');
+    assert.equal((await f.request('/api/v1/configuration/categories/billing/enable','admin',post({reason:'Synthetic test enable'}))).status,200);
+  } finally { await f.close(); }
+});
+
 test('queued triage is durable, rejects actor injection and checks current membership', async () => {
   const f = await fixture();
   try {
@@ -698,15 +747,94 @@ test('evaluation APIs expose measured fixture outcomes and Swagger serves local 
     assert.equal(report.data.metrics.categoryAccuracy,1); assert.equal(report.data.metrics.requiredFactCoverage,1);
     assert.equal(report.data.metrics.semanticGroundedness,'requires_human_review');
     assert.equal((await (await f.request('/api/v1/ai/evaluations')).json()).data.length,1);
-    for (const path of ['/api/v1/ai/docs','/api/v1/ai/docs/swagger-ui.css','/api/v1/ai/docs/swagger-ui-bundle.js','/api/v1/ai/openapi.json']) {
+    for (const path of ['/api/v1/ai/docs','/api/v1/ai/docs/swagger-ui.css','/api/v1/ai/docs/swagger-ui-bundle.js','/api/v1/ai/openapi.json','/api/v1/openapi.json']) {
       const response = await f.request(path,'admin',{headers:{}});
       assert.equal(response.status,200,path);
       const publicResponse = await fetch(response.url);
       assert.equal(publicResponse.status,200,'Documentation must work without a token');
+      if (path === '/api/v1/openapi.json') {
+        const spec = await publicResponse.json() as { paths: Record<string, Record<string, unknown>> };
+        for (const [route, method] of ([
+          ['/organisations', 'get'], ['/users/{userId}/memberships', 'put'], ['/documents/{documentId}/extract-rules', 'post'],
+          ['/sla-policies/{policyId}/versions/{versionId}/approve', 'post'], ['/sla/evaluations/run', 'post'],
+          ['/reports', 'get'], ['/tickets/{ticketId}/recommend-priority', 'post'], ['/extracted-rules/{ruleId}/approve', 'post'],
+        ] as Array<[string, string]>)) assert.ok(spec.paths[route]?.[method], "Integrated OpenAPI missing " + method.toUpperCase() + " " + route);
+      }
     }
     const protectedResponse = await f.request('/api/v1/ai/routing-rules');
     assert.equal((await fetch(protectedResponse.url)).status,401);
   } finally { await f.close(); }
+});
+
+test('organisation audit logs aggregate existing records and remain administrator-only and tenant-scoped', async () => {
+  const f = await fixture();
+  try {
+    const now = new Date().toISOString();
+    await f.store.write('auditLogs.json', { schemaVersion: 1, records: [
+      { id: 'policy-audit-a', organisationId: 'org-a', actorId: 'admin', action: 'policy.created', targetType: 'policy', targetId: 'policy-a', createdAt: now },
+      { id: 'policy-audit-b', organisationId: 'org-b', actorId: 'other', action: 'policy.created', targetType: 'policy', targetId: 'policy-b', createdAt: now },
+    ] });
+    const deniedAgent = await f.request('/api/v1/audit-logs', 'agent');
+    const deniedLead = await f.request('/api/v1/audit-logs', 'lead');
+    assert.equal(deniedAgent.status, 403);
+    assert.equal(deniedLead.status, 403);
+
+    const response = await f.request('/api/v1/audit-logs?page=1&pageSize=10', 'admin');
+    assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+    const result = await response.json() as { data: Array<{ id: string; source: string }>; pagination: { total: number } };
+    assert.equal(result.pagination.total, 1);
+    assert.deepEqual(result.data.map(record => [record.id, record.source]), [['policy-audit-a', 'policy']]);
+
+    const otherTenant = await f.request('/api/v1/audit-logs', 'other');
+    assert.equal(otherTenant.status, 200);
+    const otherResult = await otherTenant.json() as { data: Array<{ id: string }>; pagination: { total: number } };
+    assert.equal(otherResult.pagination.total, 1);
+    assert.deepEqual(otherResult.data.map(record => record.id), ['policy-audit-b']);
+    const invalidPage = await f.request('/api/v1/audit-logs?page=0', 'admin');
+    assert.equal(invalidPage.status, 400);
+  } finally { await f.close(); }
+});
+
+test('integrated OpenAPI documents every literal ticket and AI Express route', async () => {
+  const spec = JSON.parse(await readFile(new URL('../../docs/api/integrated-openapi.json', import.meta.url), 'utf8')) as {
+    paths: Record<string, Record<string, unknown>>;
+  };
+  assert.equal(spec.paths['/tickets/ingest/jira/{webhookSecret}'], undefined);
+  const operationIds = new Set<string>();
+  for (const [path, pathItem] of Object.entries(spec.paths)) {
+    for (const [method, operation] of Object.entries(pathItem)) {
+      if (!['get', 'post', 'put', 'patch', 'delete'].includes(method)) continue;
+      const operationId = (operation as { operationId?: unknown }).operationId;
+      assert.equal(typeof operationId, 'string', `Missing operationId for ${method.toUpperCase()} ${path}`);
+      assert.ok(!operationIds.has(operationId as string), `Duplicate operationId ${String(operationId)}`);
+      operationIds.add(operationId as string);
+    }
+  }
+  const sources = await Promise.all([
+    readFile(new URL('../src/modules/tickets/api.ts', import.meta.url), 'utf8'),
+    readFile(new URL('../src/modules/ai/operations-api.ts', import.meta.url), 'utf8'),
+  ]);
+  const routes = [
+    ...[...sources[0]!.matchAll(/\bapp\.(get|post|put|patch|delete)\(\s*['"]\/api\/v1([^'"]*)['"]/g)]
+      .map(([, method, path]) => [method!, path!.replace(/:([A-Za-z0-9_]+)/g, '{$1}')] as [string, string]),
+    ...[...sources[1]!.matchAll(/\brouter\.(get|post|put|patch|delete)\(\s*['"]([^'"]*)['"]/g)]
+      .map(([, method, path]) => [method!, path!.replace(/:([A-Za-z0-9_]+)/g, '{$1}')] as [string, string]),
+  ];
+  for (const [method, path] of routes) {
+    assert.ok(spec.paths[path]?.[method], `Integrated OpenAPI missing ${method!.toUpperCase()} ${path}`);
+  }
+  const phaseSixContracts: Array<[string, string]> = [
+    ['post', '/tickets'], ['get', '/tickets'],
+    ['get', '/tickets/{ticketId}'], ['post', '/tickets/{ticketId}/analyze'], ['post', '/tickets/{ticketId}/recommend-priority'],
+    ['get', '/tickets/{ticketId}/similar'], ['post', '/tickets/{ticketId}/recommend-resolution'],
+    ['post', '/tickets/{ticketId}/triage'], ['post', '/tickets/{ticketId}/triages/{id}/reviews'], ['get', '/tickets/{ticketId}/audit'],
+    ['get', '/teams'], ['post', '/configuration/categories'], ['post', '/ai/routing-rules'],
+    ['post', '/ai/routing-rules/{id}/approve'], ['post', '/configuration/priority-rules'],
+    ['post', '/configuration/priority-rules/{id}/approve'], ['post', '/configuration/priority-rules/{id}/activate'],
+    ['post', '/sla-policies'], ['post', '/sla-policies/{policyId}/versions/{versionId}/approve'],
+    ['post', '/sla-policies/{policyId}/versions/{versionId}/activate'],
+  ];
+  for (const [method, path] of phaseSixContracts) assert.ok(spec.paths[path]?.[method], `Phase 6 API contract missing from integrated OpenAPI: ${method.toUpperCase()} ${path}`);
 });
 
 
@@ -821,7 +949,9 @@ test('requester intake, reviewed history, approved routing, SLA, triage reviews 
     assert.equal(triage.sla.data.status,'available');assert.equal(triage.sla.data.evaluation.policyVersionId,policy.version.id);
     assert.equal(triage.resolution.data.status,'recommendation');assert.ok(triage.resolution.data.steps[0].citations.length);
     assert.ok((await api(path+'/similar')).some((row:{sourceId:string})=>row.sourceId===historical.id));
-    const review=await api(`${path}/triages/${triage.triageId}/reviews`,'POST',{decision:'accepted',reason:'Synthetic reviewer verified the fixture evidence'},'admin',201);
+    const editedResolution={summary:triage.resolution.data.summary,steps:triage.resolution.data.steps.map((step:{instruction:string;citations:Array<{passageId:string;excerpt:string}>},index:number)=>({...step,instruction:`Reviewer checked step ${index+1}: ${step.instruction}`})),missingInformation:triage.resolution.data.missingInformation,warnings:triage.resolution.data.warnings};
+    const review=await api(`${path}/triages/${triage.triageId}/reviews`,'POST',{decision:'accepted',reason:'Synthetic reviewer verified the fixture evidence',editedResolution},'admin',201);
+    assert.equal(review.data.resolutionRevision.after.steps[0].instruction,editedResolution.steps[0].instruction);
     const job=await api(path+'/triage-jobs','POST',{},'admin',202);
     const completed=await api(`/ai/triage-jobs/${job.id}/process`,'POST',{});assert.equal(completed.data.status,'completed');
     const repeated=await api(`/ai/triage-jobs/${job.id}/process`,'POST',{});assert.equal(repeated.data.reportId,completed.data.reportId);
@@ -830,8 +960,34 @@ test('requester intake, reviewed history, approved routing, SLA, triage reviews 
     assert.ok(history.find((row:{id:string})=>row.id===triage.triageId).reviews.some((row:{id:string})=>row.id===review.id));
     const queued=history.find((row:{id:string})=>row.id===completed.data.reportId);
     assert.equal(queued.data.result.sla.data.status,'available');assert.equal(queued.data.result.routing.data.teamId,team.id);
+    assert.equal(history.find((row:{id:string})=>row.id===triage.triageId).reviews[0].data.resolutionRevision.after.summary,editedResolution.summary);
     assert.deepEqual(await api(path),before);
     assert.deepEqual(await api('/sla/evaluations','GET',undefined,'other'),[]);
     assert.deepEqual(workerErrors,[],'The real SLA worker must not log hidden evaluation or persistence failures.');
   }finally{await f.close();}
+});
+
+test('priority configuration API enforces source tenant, explicit approval, activation, and audit', async () => {
+  const f = await fixture();
+  try {
+    const post=(body:unknown)=>({method:'POST',body:JSON.stringify(body)});
+    const source=await uploadKnowledge(f);
+    const processed=await f.request(`/api/v1/documents/${source.document.id}/process`,'admin',post({}));
+    assert.equal(processed.status,200,JSON.stringify(await processed.clone().json()));
+    const body={sourceDocumentId:source.document.id,sourceDocumentVersionId:source.version.id,reason:'Synthetic policy matrix reviewed against tenant source',matrix:{
+      high:{high:'P1',medium:'P1',low:'P2'},medium:{high:'P2',medium:'P3',low:'P3'},low:{high:'P3',medium:'P4',low:'P4'},
+    }};
+    assert.equal((await f.request('/api/v1/configuration/priority-rules','agent')).status,403);
+    const created=await f.request('/api/v1/configuration/priority-rules','admin',post(body));
+    assert.equal(created.status,201,JSON.stringify(await created.clone().json()));
+    const draft=(await created.json()).data;assert.equal(draft.data.status,'draft');assert.equal(draft.data.version,1);
+    assert.equal((await f.request(`/api/v1/configuration/priority-rules/${draft.id}/activate`,'admin',post({reason:'Cannot skip approval'}))).status,409);
+    assert.equal((await f.request('/api/v1/configuration/priority-rules','other')).status,200);
+    assert.deepEqual((await (await f.request('/api/v1/configuration/priority-rules','other')).json()).data,[]);
+    assert.equal((await f.request(`/api/v1/configuration/priority-rules/${draft.id}/approve`,'admin',post({reason:'Synthetic approver checked source'}))).status,200);
+    assert.equal((await f.request(`/api/v1/configuration/priority-rules/${draft.id}/activate`,'admin',post({reason:'Synthetic activation decision'}))).status,200);
+    const versions=(await (await f.request('/api/v1/configuration/priority-rules','admin')).json()).data;
+    assert.equal(versions[0].data.status,'active');assert.equal(versions[0].data.sourceChecksumSha256,source.version.checksumSha256);
+    assert.ok((await new AiOperationsStore(f.store).list('org-a','audit')).some(row=>row.data.action==='priority_policy.activate'));
+  } finally { await f.close(); }
 });

@@ -6,7 +6,6 @@ import type { AddressInfo } from 'node:net';
 import test from 'node:test';
 
 import { createTicketApp } from '../src/modules/tickets/api.js';
-import type { JiraSettings } from '../src/modules/tickets/config.js';
 import type { DevelopmentPrincipal } from '../src/modules/tickets/development-auth.js';
 import { JsonTicketStore } from '../src/modules/tickets/repositories/json-ticket.store.js';
 import { ticketAiDemoConfigurationFromEnvironment } from '../src/modules/ai/local-demo-runtime.js';
@@ -23,17 +22,6 @@ const categories = [
     description: 'Invoices and payment issues.',
   },
 ];
-
-const settings: JiraSettings = {
-  dataDirectory: '',
-  projectMappings: { SUP: 'org_support' },
-  organisations: {
-    org_support: {
-      webhookSecret: 'local-test-secret-with-at-least-32-characters',
-      reporterMappings: { 'jira-account-1': 'user-requester' },
-    },
-  },
-};
 
 function makePrincipal(
   organisationId: string,
@@ -56,7 +44,7 @@ async function createFixture(
 ) {
   const dataDirectory = root ?? (await mkdtemp(join(tmpdir(), 'ticket-ai-api-')));
   const app = createTicketApp({
-    settings: { ...settings, dataDirectory },
+    dataDirectory,
     ticketStore: new JsonTicketStore(dataDirectory),
     developmentPrincipal: principal,
     ...(enableAi ? { ticketAiDemo: { categories } } : {}),
@@ -125,7 +113,8 @@ test('analyzes an authorized ticket end-to-end and keeps the ticket unchanged', 
     assert.equal(analysisResponse.status, 200);
     assert.equal(analysisEnvelope.data.ticketId, created.data.id);
     assert.equal(analysisEnvelope.data.organisationId, 'org_support');
-    assert.equal(analysisEnvelope.data.classification.category, 'ACCOUNT_ACCESS');
+    assert.ok(analysisEnvelope.data.classification.categories.includes('ACCOUNT_ACCESS'));
+    assert.ok(analysisEnvelope.data.classification.evidence.length > 0);
     assert.equal(analysisEnvelope.data.classification.confidence, null);
     assert.equal(analysisEnvelope.data.classification.requiresHumanReview, true);
     assert.ok(
@@ -134,6 +123,7 @@ test('analyzes an authorized ticket end-to-end and keeps the ticket unchanged', 
       ),
     );
     assert.match(analysisEnvelope.data.summary.summary, /account is locked/i);
+    assert.equal(analysisEnvelope.data.summary.affectedFunctionality, null);
     assert.equal(analysisEnvelope.data.executions.length, 2);
     assert.ok(
       analysisEnvelope.data.executions.every(

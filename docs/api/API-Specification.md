@@ -1,16 +1,52 @@
-## Draft priority recommendation preview
+# API Specification and examples
+
+**Current generated contract:** [`integrated-openapi.json`](integrated-openapi.json),
+rebuildable from `backend/` with `npm run openapi:build`. It describes the current
+implemented HTTP surface; `/api/v1` serves the JSON contract and local Swagger UI at
+`/api/v1/ai/docs`. The endpoint catalogue below includes current implemented behavior and
+examples alongside clearly marked historical draft material. When a draft statement
+conflicts with the generated contract or current implementation notes, use the generated
+contract and the dated integration verification as the current references.
+
+## Tenant-configured priority policy lifecycle
+
+Tenant priority scoring is configured through the administrator-only version lifecycle:
+`GET` and `POST /api/v1/configuration/priority-rules`, followed by
+`POST /api/v1/configuration/priority-rules/{id}/approve` and
+`POST /api/v1/configuration/priority-rules/{id}/activate`. Draft creation requires a complete
+3×3 impact/urgency matrix, a processed same-organisation document/version, and a reason.
+Approval and activation require separate reasons; activation rechecks the source checksum
+and archives the prior active version. Only an active, source-verified tenant policy is used
+for recommendations. The environment reference remains a development-only draft fallback.
+The deployment must explicitly set `TICKET_PRIORITY_MIN_CONFIDENCE` between 0 and 1; no
+default confidence cutoff is assumed. Recommendations remain human-review-only and do not
+change a ticket.
+
+### Priority recommendation endpoint
 
 `POST /api/v1/tickets/:ticketId/recommend-priority`
 
 - Auth: bearer access token, verified tenant membership selected by `X-Organisation-ID`.
 - Permission: `tickets.ai.review`, plus existing ticket/team/ownership visibility. Requesters have no AI-review grant. Inaccessible/cross-tenant ticket IDs return 404.
 - Body: `{}` only. Client-supplied impact, urgency, priority, policy, confidence settings, roles and other unknown fields return 400.
-- Success: 200 `{ data: PriorityRecommendation, requestId }`; data includes draft policy provenance, validated factor citations, execution metadata, warnings, missing information and mandatory human review. Priority is P1-P4 or null when information/confidence is insufficient.
-- Errors: 401 unauthenticated; 403 permission/membership; 404 inaccessible ticket; 400 invalid body; 503 `PRIORITY_PREVIEW_DISABLED`; 502 `AI_ANALYSIS_FAILED` for provider timeout/failure/invalid evidence. Normal shared storage/identity errors also apply.
-- Synchronous, preview-only, not persisted. Does not activate policy or change tickets/assignment/closure. No idempotency key is needed for a preview, but repeated requests may incur provider calls.
+- Success: 200 `{ data: PriorityRecommendation, requestId }`; data includes active tenant policy provenance (or explicit development draft fallback), validated factor citations, execution metadata, warnings, missing information and mandatory human review. Priority is P1-P4 or null when information/confidence is insufficient.
+- Errors: 401 unauthenticated; 403 permission/membership; 404 inaccessible ticket; 400 invalid body; 503 `PRIORITY_POLICY_NOT_ACTIVE` when no approved active policy exists; 502 `AI_ANALYSIS_FAILED` for provider timeout/failure/invalid evidence. Normal shared storage/identity errors also apply.
+- Synchronous and recommendation-only: the response itself is not persisted by this endpoint and does not change tickets/assignment/closure. Full triage reports and human review decisions have their own persistence routes. Repeated requests may incur provider calls.
 - Explicit development opt-in: `APP_ENV=development`, `TICKET_PRIORITY_PREVIEW_ENABLED=true`, `TICKET_PRIORITY_MIN_CONFIDENCE=<reviewed number 0..1>`, and either the existing demo or live runtime. No default confidence threshold is imposed.
-- Server loads the checked-in draft and verifies its source checksum. The request cannot select a policy/path. This is not active tenant policy resolution.
+- In production, the server resolves only the active tenant version and revalidates its processed source checksum. The request cannot select a policy/path; recommendations report `policyStatus: active`. When the explicit development fallback is enabled, the response reports `draft`.
 - Live preview reuses the classification task provider/model with its existing timeout/fallback settings. Offline demo returns null factors/priority, `insufficient_information`, and a `DEMO_ONLY` warning.
+
+### Immutable AI review and resolution edits
+
+`POST /api/v1/tickets/{ticketId}/triages/{reportId}/reviews` accepts the required `decision`
+(`accepted`, `rejected`, or `needs_information`) and reviewer `reason`. A reviewer may also
+submit `editedResolution` with a summary, ordered steps, citations, missing information, and
+warnings. The backend checks each citation against the same evidence passages in the report.
+It stores an immutable `resolutionRevision.before` and `.after`, alongside reviewer identity,
+timestamp, decision, and comment, and writes the before/after values to the audit ledger.
+Invalid or fabricated citations are rejected. This records a recommendation review; it does
+not change ticket priority, assignment, status, or send a customer message. Re-review changes
+to the same report by the same reviewer are rejected as immutable.
 
 Example response fields (abbreviated):
 
@@ -32,7 +68,7 @@ Example response fields (abbreviated):
 Internal ticket priority uses the canonical values `P1` (Critical), `P2` (High),
 `P3` (Medium), and `P4` (Low), with the impact/urgency matrix in ITSM-POL-001.
 Existing internal `high`, `medium`, and `low` values normalize to `P2`, `P3`, and
-`P4`; Jira `source.priority` remains verbatim and is never mapped automatically.
+`P4`; Legacy external source metadata remains read-only; ticket priority is set through the authenticated ticket workflow.
 
 `PATCH /api/v1/tickets/:ticketId` accepts a priority update with
 `priorityOverride.reason` and `priorityOverride.businessJustification`, both required
@@ -50,10 +86,13 @@ action.
 
 > **Current integrated application (2026-11-19):** All default startup commands now serve foundation and domain routes together. Protected routes use verified foundation identity plus active server-side memberships, selected with `X-Organisation-ID` or `organisationId`. The static ticket development principal applies only to isolated legacy tests. AI history persists through the shared JSON store. See [Integration-Verification.md](Integration-Verification.md) and the root README; older standalone startup/auth examples below are historical.
 
-# API Specification — Draft
+## Historical draft conventions (superseded where inconsistent)
 
 **Base path:** `/api/v1`  
-**Status:** Draft contract for review. Authentication provider, exact database and final role/permission codes remain subject to approval.
+**Status:** The original requirements draft is retained for traceability. Its proposed
+authentication, role, idempotency, public-intake and response rules are not evidence of
+implemented behavior. Consult the generated integrated contract and current implementation
+notes above for supported routes and behavior.
 
 ## 1. API conventions
 
@@ -121,7 +160,6 @@ action.
 | GET | `/ticket-workflows/active` | Read the active tenant ticket workflow |
 | POST | `/ticket-workflows/:workflowId/approve` | Approve and activate a draft ticket workflow |
 | POST | `/tickets` | Create ticket |
-| POST | `/tickets/ingest/jira/{webhookSecret}` | Ingest Jira Cloud issue-created/issue-updated webhooks |
 | GET | `/tickets` | Search/filter/paginate tickets |
 | GET | `/tickets/:id` | Ticket details |
 | PATCH | `/tickets/:id` | Update permitted ticket fields |
@@ -143,7 +181,7 @@ action.
 | GET | `/audit-logs` | Search permitted audit records |
 | GET | `/jobs/:jobId` | Check asynchronous job status |
 
-Ticket, document, SLA, reporting and workflow endpoints use the shared Keycloak access-token verifier. Send the selected tenant as `X-Organisation-ID`; this header selects the organisation to check and does not grant access. The API verifies the caller's active user record, organisation status and active membership, then loads roles and active team memberships from server-side records. The Jira webhook endpoint uses its configured per-organisation secret instead of a user access token.
+Ticket, document, SLA, reporting and workflow endpoints use the shared Keycloak access-token verifier. Send the selected tenant as `X-Organisation-ID`; this header selects the organisation to check and does not grant access. The API verifies the caller's active user record, organisation status and active membership, then loads roles and active team memberships from server-side records.
 
 ## 2.1 User roles and capabilities
 
@@ -197,108 +235,11 @@ Content-Type: application/json
 
 The server derives both organisation and requester from the authenticated context; client-supplied tenant/requester identifiers are rejected.
 
-## 4. Jira Cloud webhook ingestion
-
-The Jira Cloud webhook endpoint is `POST /api/v1/tickets/ingest/jira/{webhookSecret}`. For this initial implementation, configure a Jira issue-created and issue-updated webhook and use a high-entropy per-organisation secret in the HTTPS URL path. Jira's standard admin webhook does not send a configurable custom header. Redact the secret path from gateway and application access logs and rotate it if exposed.
-
-The endpoint resolves the organisation using the configured Jira project-key mapping, then verifies the URL secret and resolves the reporter using the configured Jira `accountId` mapping. It ignores any organisation ID supplied in the webhook body. Until admin configuration APIs are available, configure these mappings through `JIRA_TENANT_CONFIG`. The mapped requester ID is trusted configuration.
-
-```json
-{
-  "projectMappings": {
-    "SUP": "org_support"
-  },
-  "organisations": {
-    "org_support": {
-      "webhookSecret": "replace-with-a-random-secret-at-least-32-characters",
-      "reporterMappings": {
-        "jira-account-abc": "user_123"
-      }
-    }
-  }
-}
-```
-
-For a local Postman run from PowerShell at the repository root, set the configuration and start the Node.js API:
-
-```powershell
-$env:JIRA_TENANT_CONFIG = '{"projectMappings":{"SUP":"org_support"},"organisations":{"org_support":{"webhookSecret":"replace-with-a-random-secret-at-least-32-characters","reporterMappings":{"jira-account-abc":"user_123"}}}}'
-$env:DATA_DIRECTORY = ".local-data"
-Set-Location (Join-Path (git rev-parse --show-toplevel) "backend")
-npm install
-```
-
-Replace the example secret and reporter account mapping with values from the Jira tenant. Keep the secret out of source control and redact it from all request-path logs.
-From this `backend` directory, run `npm start` to test Jira ingestion. To use the authenticated ticket endpoints below, stop the server with `Ctrl+C`, configure the development principal, then restart it.
-
-### Postman request
-
-```http
-POST http://localhost:3000/api/v1/tickets/ingest/jira/<webhookSecret>
-Content-Type: application/json
-```
-
-```json
-{
-  "webhookEvent": "jira:issue_created",
-  "issue": {
-    "id": "10042",
-    "key": "SUP-42",
-    "fields": {
-      "project": {
-        "key": "SUP"
-      },
-      "summary": "Unable to access billing portal",
-      "description": {
-        "type": "doc",
-        "content": [
-          {
-            "type": "paragraph",
-            "content": [
-              {
-                "type": "text",
-                "text": "The portal returns an access denied message."
-              }
-            ]
-          }
-        ]
-      },
-      "reporter": {
-        "accountId": "jira-account-abc"
-      },
-      "status": {
-        "name": "Open"
-      },
-      "priority": {
-        "name": "High"
-      }
-    }
-  }
-}
-```
-
-### Expected response — 201 Created
-
-```json
-{
-  "data": {
-    "id": "ticket_<generated-id>",
-    "sourceIssueKey": "SUP-42",
-    "outcome": "created",
-    "createdAt": "2026-11-17T08:30:00.000Z",
-    "updatedAt": "2026-11-17T08:30:00.000Z"
-  },
-  "requestId": "req_<generated-id>"
-}
-```
-
-Jira status and priority are retained verbatim in source metadata; they are not converted to internal workflow values. The reporter must have a configured mapping. Repeated delivery of an already stored issue is idempotent (`200 OK`, outcome `duplicate`); a later issue-updated event updates that same ticket (`200 OK`, outcome `updated`). Unsupported Jira event types, unknown projects, invalid secrets, or unmapped reporters are rejected. Jira Cloud requires a publicly reachable HTTPS URL with a valid certificate; the HTTP URL above is for local Postman testing only.
-
 ## 5. Ticket API authentication and permissions
 
 The unified backend uses the shared Keycloak bearer-token verifier and resolves the caller's active local user and organisation membership. Set `AUTH_MODE=keycloak`, `AUTH_ISSUER`, and `AUTH_AUDIENCE` in `backend/.env`; the checked-in local realm uses `support-api` as its audience. `npm run dev` and `npm start` load this file. No password login endpoint is provided by the API.
 
-Every ticket, document, SLA, reporting, and workflow request must include `Authorization: Bearer <access-token>` and `X-Organisation-ID: <organisation-id>`. The organisation header only selects a tenant; backend membership records supply the roles and active team memberships. A user without active membership is denied. The Jira webhook remains authenticated with its per-organisation URL secret.
+Every ticket, document, SLA, reporting, and workflow request must include `Authorization: Bearer <access-token>` and `X-Organisation-ID: <organisation-id>`. The organisation header only selects a tenant; backend membership records supply the roles and active team memberships. A user without active membership is denied.
 
 Use `tickets.create.own` to create tickets. Ticket reads apply tenant, requester, and team scope. `tickets.audit.read` controls audit access; `tickets.approve` is required for reopen approvals. Reports require `reports.read.all` for organisation-wide aggregates or `reports.read.team` for aggregates limited to the caller's active teams. Ticket workflow administration requires `configuration.manage`. Team assignment requires `tickets.routing.manage`; organisation administrators may assign to any existing team in their tenant, while other callers must belong to the target team.
 
@@ -346,7 +287,7 @@ Expected response — `201 Created`:
 }
 ```
 
-The API assigns tenant and requester from the configured principal. Without an active tenant workflow, the existing draft behavior starts tickets at `new`; after workflow approval, new manual and Jira-ingested tickets start at the configured initial status.
+The API assigns tenant and requester from the configured principal. Without an active tenant workflow, the existing draft behavior starts tickets at `new`; after workflow approval, new tickets start at the configured initial status.
 
 ### Search and paginate
 
@@ -379,7 +320,7 @@ Content-Type: application/json
 }
 ```
 
-Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured team scope. Priority changes require `tickets.priority.manage` and the override evidence above. Status changes use the tenant's approved ticket workflow; Jira status/priority remain source metadata and are not overwritten by internal workflow changes.
+Support agents/leads may update title, description, product, or affected service for tickets in their scope. Only support leads may set `teamId`, and it must be in their configured team scope. Priority changes require `tickets.priority.manage` and the override evidence above. Status changes use the tenant's approved ticket workflow.
 
 ### Configure and approve a tenant ticket workflow
 
@@ -583,7 +524,7 @@ Authorization: Bearer {{supervisorToken}}
 
 Approval returns `200 OK`, updates the ticket to `REOPENED`, and atomically records the decision and reason in ticket history. Reopening from `CLOSED` is restricted to supervisors and administrators and always requires a reason. Administrators may override role restrictions, but never perform a transition absent from the approved transition map.
 
-This workflow API accepts structured configuration; it does not extract workflow rules from uploaded files. The separate document API can store tenant documents and process UTF-8 plain-text files for candidate evidence. That document flow is not required for SLA configuration and does not create or activate SLA policies.
+This workflow API accepts structured configuration; it does not extract workflow rules from uploaded files. The separate document API can store tenant documents and process UTF-8 TXT, Markdown, PDF, and DOCX files for candidate evidence. That document flow is not required for SLA configuration and does not create or activate SLA policies.
 
 #### Upload and process a tenant document
 
@@ -595,7 +536,7 @@ Authorization: Bearer <token>
 Content-Type: multipart/form-data
 ```
 
-After upload, process UTF-8 `.txt` files with:
+After upload, process supported source formats with:
 
 ```http
 POST /api/v1/documents/{documentId}/process
@@ -609,7 +550,7 @@ The response contains the document's completed processing status and a version-b
 
 ### Configure tenant-specific SLA policies
 
-Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar, statuses, and optional team scope through the API; no policy document upload is required. When an SLA is derived from a processed document, the request may also include both `sourceDocumentId` and `sourceDocumentVersionId`. The server verifies that the document and version belong to the authenticated tenant and retains that provenance on the policy version; the fields must be provided together. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
+Only an organisation administrator may manage SLA policies, evaluations, or reports. An administrator submits that tenant's targets, calendar(s), statuses, and optional team scope through the API; no policy document upload is required. A policy may provide one shared `calendar` for all priorities or `calendarByPriority` with exactly one calendar for every key in `targetsByPriority`. Each priority-specific calendar controls both its response and resolution clock. Existing policies with a shared calendar remain valid. When an SLA is derived from a processed document, the request may also include both `sourceDocumentId` and `sourceDocumentVersionId`. The server verifies that the document and version belong to the authenticated tenant and retains that provenance on the policy version; the fields must be provided together. The server derives tenant ownership from the authenticated principal, validates the configuration, and does not apply default targets. New policy versions are pending approval and are not used in calculations until explicitly activated.
 
 The reference SLA candidate remains draft: this event contract does not verify client
 entitlement, contractual targets, or calendars, and is not approval to activate those
@@ -892,7 +833,7 @@ The calculation must use approved formula and weighting versions and verified me
 The ticket and ticket/SLA-evidence paths have a machine-readable OpenAPI contract at
 [ticket-openapi.json](./ticket-openapi.json). It covers ticket CRUD/search, workflow
 configuration and status changes, comments, audit, attachments, reopen requests, SLA
-evidence and Jira ingestion. It is a ticket-domain contract, not yet a complete OpenAPI
+evidence. It is a ticket-domain contract, not yet a complete OpenAPI
 description of identity, documents, policies, AI, SLA administration or reporting.
 
 ```yaml
@@ -1081,40 +1022,6 @@ paths:
                 $ref: "#/components/schemas/TicketListResponse"
         "401":
           description: Unauthenticated
-  /tickets/ingest/jira/{webhookSecret}:
-    post:
-      summary: Ingest a Jira Cloud issue-created or issue-updated webhook
-      description: Jira project and reporter mappings are resolved from server configuration. The secret is supplied in the URL path.
-      parameters:
-        - in: path
-          name: webhookSecret
-          required: true
-          schema:
-            type: string
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required: [webhookEvent, issue]
-              properties:
-                webhookEvent:
-                  type: string
-                  enum: [jira:issue_created, jira:issue_updated]
-                issue:
-                  type: object
-      responses:
-        "200":
-          description: Jira issue updated or duplicate delivery ignored
-        "201":
-          description: Jira issue ingested
-        "400":
-          description: Invalid or unsupported Jira webhook
-        "401":
-          description: Jira webhook authentication failed
-        "403":
-          description: Jira reporter has no configured internal user mapping
   /tickets/{ticketId}:
     parameters:
       - in: path
@@ -1460,7 +1367,7 @@ components:
         title:
           type: string
         description:
-          description: The original Jira rich-text value or a manually entered string.
+          description: A manually entered string or structured JSON description.
         product:
           type: string
           nullable: true

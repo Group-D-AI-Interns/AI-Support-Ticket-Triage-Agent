@@ -5,17 +5,17 @@ import type { SlaEvaluationRecord } from '../sla/domain/sla-evaluation.js';
 
 export type RoutingRecommendation = { status: 'recommendation' | 'insufficient_information' | 'unavailable'; teamId: string | null;
   evidence: Array<{ ruleId: string; version: string }>; warnings: string[]; requiresHumanReview: true };
-export async function recommendRouting(tenant: TenantContext, ticket: TicketAiView, category: string | null, source?: AuthorizedRoutingSource): Promise<RoutingRecommendation> {
+export async function recommendRouting(tenant: TenantContext, ticket: TicketAiView, categories: string[], source?: AuthorizedRoutingSource): Promise<RoutingRecommendation> {
   const base = { teamId: null, evidence: [], requiresHumanReview: true as const };
   if (!source) return { ...base, status: 'unavailable', warnings: ['ROUTING_SOURCE_NOT_CONNECTED'] };
-  if (!category) return { ...base, status: 'insufficient_information', warnings: ['CLASSIFICATION_REQUIRED'] };
+  if (!categories.length) return { ...base, status: 'insufficient_information', warnings: ['CLASSIFICATION_REQUIRED'] };
   const context = await source.getAuthorizedRoutingContext(tenant, structuredClone(ticket));
   if (!context) return { ...base, status: 'unavailable', warnings: ['NO_PERMITTED_ROUTING_CONTEXT'] };
   if (context.organisationId !== tenant.organisationId || ticket.organisationId !== tenant.organisationId) throw new Error('Routing source tenant mismatch.');
   const eligible = new Set(context.eligibleTeams.filter(team => team.organisationId === tenant.organisationId && team.id.trim() && team.name.trim()).map(team => team.id));
   const now = Date.now();
   const rules = context.rules.filter(rule => rule.organisationId === tenant.organisationId && rule.approved === true &&
-    rule.id.trim() && rule.version.trim() && eligible.has(rule.teamId) && rule.categoryIds.includes(category) &&
+    rule.id.trim() && rule.version.trim() && eligible.has(rule.teamId) && rule.categoryIds.some(category => categories.includes(category)) &&
     Number.isFinite(Date.parse(rule.effectiveFrom)) && Date.parse(rule.effectiveFrom) <= now &&
     (rule.effectiveTo === null || (Number.isFinite(Date.parse(rule.effectiveTo)) && Date.parse(rule.effectiveTo) > now)));
   if (new Set(rules.map(rule => rule.teamId)).size !== 1) return { ...base, status: 'insufficient_information', warnings: ['NO_UNAMBIGUOUS_APPROVED_ROUTING_RULE'] };

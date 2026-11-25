@@ -76,27 +76,26 @@ export class DocumentProcessingService {
       throw new DocumentProcessingError('DOCUMENT_NOT_READY', 'Document processing is already in progress.');
     }
 
-    const versions = await this.store.readCollection<{
+    const versions = await this.store.queryCollection<{
       id: string;
       documentId: string;
       organisationId: string;
       version: number;
-    }>('documentVersions');
-    const version = versions.find(
-      (item) =>
-        item.documentId === document.id &&
-        item.organisationId === tenant.organisationId &&
-        item.version === document.version,
-    );
+    }>('documentVersions', {
+      organisationId: tenant.organisationId,
+      documentId: document.id,
+      version: document.version,
+    });
+    const version = versions[0];
     if (!version) {
       throw new DocumentProcessingError('DOCUMENT_NOT_READY', 'The current document version is unavailable.');
     }
 
-    if (!['txt', 'pdf', 'docx'].includes(document.fileName.split('.').pop()?.toLowerCase() ?? '')) {
+    if (!['txt', 'md', 'pdf', 'docx'].includes(document.fileName.split('.').pop()?.toLowerCase() ?? '')) {
       await this.lifecycle.updateProcessingStatus(tenant, document.id, 'failed', 'failed');
       throw new DocumentProcessingError(
         'UNSUPPORTED_EXTRACTION_FORMAT',
-        'Only TXT, PDF and DOCX source documents are supported. Legacy DOC conversion remains deferred.',
+        'Only TXT, Markdown, PDF and DOCX source documents are supported. Legacy DOC conversion remains deferred.',
       );
     }
 
@@ -168,7 +167,7 @@ export class DocumentProcessingService {
         createdAt: new Date().toISOString(),
         result,
       };
-      await this.store.updateCollection<DocumentExtractionRecord, void>('documentExtractions', (extractions) => {
+      await this.store.updateTenantCollection<DocumentExtractionRecord, void>('documentExtractions', tenant.organisationId, (extractions) => {
         extractions.push(extraction);
       });
 
@@ -192,13 +191,11 @@ export class DocumentProcessingService {
     tenant: TenantContext,
     documentId: string,
   ): Promise<DocumentExtractionRecord | null> {
-    const extractions = await this.store.readCollection<DocumentExtractionRecord>('documentExtractions');
+    const extractions = await this.store.queryCollection<DocumentExtractionRecord>('documentExtractions', {
+      organisationId: tenant.organisationId,
+      documentId,
+    });
     return extractions
-      .filter(
-        (item) =>
-          item.organisationId === tenant.organisationId &&
-          item.documentId === documentId,
-      )
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0] ?? null;
   }
 }

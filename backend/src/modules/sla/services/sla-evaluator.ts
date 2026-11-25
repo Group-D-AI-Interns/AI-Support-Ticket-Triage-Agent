@@ -91,6 +91,7 @@ export function evaluateTicketSla(
       `No SLA targets are configured for priority ${input.priority}.`,
     );
   }
+  const calendar = policy.calendarByPriority?.[input.priority] ?? policy.calendar;
   const pauses = (input.pauses ?? []).map((pause) => ({
     start: parseTimestamp(pause.startedAt, 'pause.startedAt'),
     end: parseTimestamp(pause.endedAt, 'pause.endedAt'),
@@ -181,6 +182,7 @@ export function evaluateTicketSla(
     now: input.now,
     targetMinutes: targets.firstResponseMinutes,
     policy,
+    calendar,
     pauses: effectivePauses,
     isPaused,
   });
@@ -190,6 +192,7 @@ export function evaluateTicketSla(
     now: input.now,
     targetMinutes: targets.resolutionMinutes,
     policy,
+    calendar,
     pauses: effectiveResolutionPauses,
     isPaused:
       isPaused || activeResolutionPauseStartedAt !== undefined,
@@ -212,6 +215,7 @@ function evaluateMetric(input: {
   now: string;
   targetMinutes: number;
   policy: SlaPolicy;
+  calendar: SlaPolicy['calendar'];
   pauses: Array<{ start: number; end: number }>;
   isPaused: boolean;
 }): SlaMetricResult {
@@ -222,7 +226,7 @@ function evaluateMetric(input: {
   const elapsedMinutes = businessMinutesBetween(
     input.startAt,
     endAt,
-    input.policy.calendar,
+    input.calendar,
     input.pauses,
   );
   const remainingMinutes = Math.max(0, input.targetMinutes - elapsedMinutes);
@@ -251,7 +255,7 @@ function evaluateMetric(input: {
     deadlineAt = addBusinessMinutes(
       input.startAt,
       input.targetMinutes,
-      input.policy.calendar,
+      input.calendar,
       input.pauses,
     );
     explanation =
