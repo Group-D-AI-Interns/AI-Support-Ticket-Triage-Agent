@@ -7,6 +7,11 @@ export type TicketAiView = {
   organisationId: string;
   title: string;
   description: string;
+  product?: string | null | undefined;
+  affectedService?: string | null | undefined;
+  affectedUsers?: { scope: 'one_user' | 'small_group' | 'multiple_users_one_department' | 'multiple_departments' | 'organisation_wide'; count?: number | undefined } | undefined;
+  businessImpact?: 'critical' | 'high' | 'medium' | 'low' | undefined;
+  urgency?: 'immediate' | 'high' | 'medium' | 'low' | undefined;
 };
 
 export type TicketClassificationCategory = {

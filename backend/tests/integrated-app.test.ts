@@ -23,6 +23,8 @@ import type { TicketAppOptions } from '../src/modules/tickets/api.js';
 import { ProviderDocumentExtractionAdapter } from '../src/modules/ai/provider-document-extraction.adapter.js';
 import { documentExtractionSchemas } from '../src/modules/ai/document-extraction-schemas.js';
 
+const genericTicketIntake = { affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' };
+
 test('integrated app refuses to fall back to JSON persistence outside tests', () => {
   const environment = loadEnvironment({
     NODE_ENV: 'development',
@@ -264,6 +266,7 @@ test('authenticated ticket intake can feed full AI triage without changing the t
   try {
     const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({
       title: 'Account access locked', description: 'Account locked after reset.',
+      ...genericTicketIntake,
     }) });
     assert.equal(created.status, 201);
     const id = (await created.json()).data.id;
@@ -284,7 +287,7 @@ test('one signed-token API joins foundation, tickets, AI, memberships and persis
     assert.equal((await f.request('/health/ready')).status, 200);
     assert.equal((await f.request('/api/v1/me')).status, 200);
     assert.equal((await f.request('/api/v1/teams')).status, 200);
-    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account access locked', description: 'Account locked after password reset.' }) });
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account access locked', description: 'Account locked after password reset.', ...genericTicketIntake }) });
     assert.equal(created.status, 201);
     const ticket = (await created.json()).data;
     const analysis = await f.request(`/api/v1/tickets/${ticket.id}/analyze`, 'admin', { method: 'POST', body: '{}' });
@@ -311,10 +314,10 @@ async function priorityConfiguration(malformed = false, timeout = false) {
   let calls = 0;
   const fake = new DeterministicFakeProvider({ ticket_priority_factors(input) {
     calls++;
-    const ticket = (input as { ticket: { id: string; title: string } }).ticket;
-    const assessment = { value: 'high', reason: 'Synthetic factor fixture for API verification.', confidence: 0.9,
-      evidence: [{ ticketId: ticket.id, field: 'title', start: 0, end: ticket.title.length, excerpt: malformed ? 'Fabricated citation' : ticket.title }] };
-    return { impact: assessment, urgency: assessment, missingInformation: [], warnings: [] };
+    const ticket = (input as { ticket: { id: string; title: string; businessImpact?: string; urgency?: string } }).ticket;
+    const assessment = (value: string | undefined) => ({ value: value ?? 'high', reason: 'Synthetic factor fixture for API verification.', confidence: 0.9,
+      evidence: [{ ticketId: ticket.id, field: 'title', start: 0, end: ticket.title.length, excerpt: malformed ? 'Fabricated citation' : ticket.title }] });
+    return { impact: assessment(ticket.businessImpact), urgency: assessment(ticket.urgency), missingInformation: [], warnings: [] };
   } });
   const provider: StructuredGenerationProvider = timeout ? { generateStructured: () => { calls++; return new Promise(() => {}); } } : fake;
   const runner = new AiExecutionRunner(provider, { async record() {} }, { model: 'test-priority-model', timeoutMs: 20, maxRetries: 0 });
@@ -325,7 +328,7 @@ test('priority API returns evidence-backed draft preview without changing ticket
   const priority = await priorityConfiguration();
   const f = await fixture(priority.config);
   try {
-    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: '{"title":"All departments unavailable","description":"Production stopped"}' });
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'All departments unavailable', description: 'Production stopped', affectedUsers: { scope: 'multiple_departments', count: 150 }, businessImpact: 'high', urgency: 'high' }) });
     const ticket = (await created.json()).data;
     const before = await readFile(join(f.root, 'tickets.json'), 'utf8');
     const response = await f.request(`/api/v1/tickets/${ticket.id}/recommend-priority`, 'admin', { method: 'POST', body: '{}' });
@@ -353,7 +356,7 @@ test('priority API handles invalid evidence and provider timeouts as safe depend
     const priority = await priorityConfiguration(malformed, timeout);
     const f = await fixture(priority.config);
     try {
-      const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: '{"title":"Outage","description":"System unavailable"}' });
+      const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Outage', description: 'System unavailable', ...genericTicketIntake }) });
       const ticket = (await created.json()).data;
       const response = await f.request(`/api/v1/tickets/${ticket.id}/recommend-priority`, 'admin', { method: 'POST', body: '{}' });
       assert.equal(response.status, 502);
@@ -375,7 +378,7 @@ test('local demo priority API returns honest insufficient information with manda
   const { config } = await priorityConfiguration();
   const f = await fixture({ candidate: config.candidate, minimumConfidence: config.minimumConfidence });
   try {
-    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: '{"title":"Account locked","description":"Cannot sign in"}' });
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account locked', description: 'Cannot sign in', ...genericTicketIntake }) });
     const ticket = (await created.json()).data;
     const response = await f.request(`/api/v1/tickets/${ticket.id}/recommend-priority`, 'admin', { method: 'POST', body: '{}' });
     assert.equal(response.status, 200);
@@ -411,7 +414,7 @@ test('resolution API retrieves authorised evidence, validates citations and neve
     },
   } });
   try {
-    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: '{"title":"Account lockout","description":"Account locked after reset"}' });
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account lockout', description: 'Account locked after reset', ...genericTicketIntake }) });
     const ticket = (await created.json()).data;
     const before = await readFile(join(f.root, 'tickets.json'), 'utf8');
     const retrieved = await f.request(`/api/v1/tickets/${ticket.id}/evidence`);
@@ -423,20 +426,36 @@ test('resolution API retrieves authorised evidence, validates citations and neve
     assert.equal(result.status, 'recommendation');
     assert.equal(result.requiresHumanReview, true);
     assert.equal(result.steps[0].citations[0].passageId, result.evidence[0].passageId);
+    assert.equal(result.cacheHit, false);
+    const reopened = await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'admin', { method: 'POST', body: '{}' });
+    assert.equal(reopened.status, 200);
+    const reused = (await reopened.json()).data;
+    assert.equal(reused.cacheHit, true);
+    assert.equal(reused.execution.executionId, result.execution.executionId);
+    const regenerated = await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'admin', { method: 'POST', body: JSON.stringify({ regenerate: true, reason: 'Lead requested a refreshed recommendation.' }) });
+    assert.equal(regenerated.status, 200);
+    const fresh = (await regenerated.json()).data;
+    assert.equal(fresh.cacheHit, false);
+    assert.equal(fresh.recommendationVersion, 2);
+    assert.equal((await new AiOperationsStore(f.store).list('org-a', 'resolution_recommendation')).filter(row => row.data.ticketId === ticket.id).length, 2);
+    await f.restart();
+    const afterRestart = await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'admin', { method: 'POST', body: '{}' });
+    assert.equal(afterRestart.status, 200);
+    assert.equal((await afterRestart.json()).data.cacheHit, true);
     assert.equal(await readFile(join(f.root, 'tickets.json'), 'utf8'), before);
     assert.equal((await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'requester', { method: 'POST', body: '{}' })).status, 403);
     assert.equal((await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'other', { method: 'POST', body: '{}' })).status, 404);
     assert.equal((await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'admin', { method: 'POST', body: '{"evidence":[],"roles":["organisation_admin"]}' })).status, 400);
     const similar = await f.request(`/api/v1/tickets/${ticket.id}/similar`);
     assert.deepEqual((await similar.json()).data, []);
-    assert.equal(calls, 1);
+    assert.equal(calls, 2);
   } finally { await f.close(); }
 });
 
 test('default resolution API returns insufficient evidence instead of using unapproved references', async () => {
   const f = await fixture();
   try {
-    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: '{"title":"Account lockout","description":"Cannot sign in"}' });
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account lockout', description: 'Cannot sign in', ...genericTicketIntake }) });
     const ticket = (await created.json()).data;
     const response = await f.request(`/api/v1/tickets/${ticket.id}/recommend-resolution`, 'admin', { method: 'POST', body: '{}' });
     assert.equal(response.status, 200);
@@ -475,7 +494,7 @@ test('document processing, human SLA approval, evaluation and reporting work on 
     assert.equal((await f.request(`${path}/approve`, 'admin', { method: 'POST', body: '{"reason":"Verified source"}' })).status, 200);
     assert.equal((await f.request(`${path}/activate`, 'admin', { method: 'POST', body: '{}' })).status, 200);
     // A permitted human sets internal priority explicitly; AI does not mutate it.
-    const ticketCreated = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account access', description: 'Account locked' }) });
+    const ticketCreated = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Account access', description: 'Account locked', ...genericTicketIntake }) });
     assert.equal(ticketCreated.status, 201);
     const ticket = (await ticketCreated.json()).data;
     assert.equal((await f.request(`/api/v1/tickets/${ticket.id}`, 'requester', { method: 'PATCH', body: '{"priority":"high","priorityOverride":{"reason":"classify","businessJustification":"business impact"}}' })).status, 403);
@@ -554,7 +573,7 @@ test('approved workflows, attachments, status and audit use the shared authentic
     assert.equal(drafted.status, 201);
     const workflow = (await drafted.json()).data;
     assert.equal((await f.request(`/api/v1/ticket-workflows/${workflow.id}/approve`, 'admin', { method: 'POST', body: '{}' })).status, 200);
-    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: '{"title":"Access issue","description":"Locked"}' });
+    const created = await f.request('/api/v1/tickets', 'requester', { method: 'POST', body: JSON.stringify({ title: 'Access issue', description: 'Locked', ...genericTicketIntake }) });
     const ticket = (await created.json()).data;
     assert.equal(ticket.status, 'NEW');
     const form = new FormData();
@@ -706,7 +725,7 @@ test('queued triage is durable, rejects actor injection and checks current membe
   const f = await fixture();
   try {
     const post = (body: unknown) => ({method:'POST',body:JSON.stringify(body)});
-    const ticket = (await (await f.request('/api/v1/tickets','requester',post({title:'Account access',description:'Cannot log in.'}))).json()).data;
+    const ticket = (await (await f.request('/api/v1/tickets','requester',post({title:'Account access',description:'Cannot log in.', ...genericTicketIntake}))).json()).data;
     const path = `/api/v1/tickets/${ticket.id}`;
     assert.equal((await f.request(`${path}/triage-jobs`,'admin',post({actorId:'requester'}))).status,400);
     const queued = await f.request(`${path}/triage-jobs`,'admin',post({}));
@@ -882,7 +901,7 @@ test('historical retrieval requires verified resolution evidence and stops after
 test('automatic intake is opt-in and idempotent without ticket mutations', async () => {
   const f = await fixture(null,{aiAutomation:{enabled:true,actors:{'org-a':'admin'},intervalMs:60000,createdAfter:'2026-01-01T00:00:00.000Z'}});
   try {
-    const created = await f.request('/api/v1/tickets','requester',{method:'POST',body:JSON.stringify({title:'Account access',description:'Account locked.'})});
+    const created = await f.request('/api/v1/tickets','requester',{method:'POST',body:JSON.stringify({title:'Account access',description:'Account locked.', ...genericTicketIntake})});
     assert.equal(created.status,201); const ticket = (await created.json()).data;
     const {AiOperationsStore} = await import('../src/modules/ai/operations-store.js');
     const ledger = new AiOperationsStore(f.store);
@@ -919,7 +938,7 @@ test('requester intake, reviewed history, approved routing, SLA, triage reviews 
     const rule=await api('/ai/routing-rules','POST',{categoryIds:['ACCESS'],teamId:team.id,effectiveFrom:'2020-01-01T00:00:00.000Z'},'admin',201);
     await api(`/ai/routing-rules/${rule.id}/approve`,'POST',{reason:'Fixture human approval of synthetic routing'});
     async function createTicket(title:string){
-      const ticket=await api('/tickets','POST',{title,description:'Account locked after password reset.'},'requester',201);
+      const ticket=await api('/tickets','POST',{title,description:'Account locked after password reset.',affectedUsers:{scope:'one_user'},businessImpact:'medium',urgency:'medium'},'requester',201);
       await api(`/tickets/${ticket.id}`,'PATCH',{teamId:team.id,priority:'P2',priorityOverride:{reason:'Fixture human assessment',businessJustification:'Only this account is blocked'}});
       return ticket;
     }
@@ -975,7 +994,7 @@ test('priority configuration API enforces source tenant, explicit approval, acti
     const processed=await f.request(`/api/v1/documents/${source.document.id}/process`,'admin',post({}));
     assert.equal(processed.status,200,JSON.stringify(await processed.clone().json()));
     const body={sourceDocumentId:source.document.id,sourceDocumentVersionId:source.version.id,reason:'Synthetic policy matrix reviewed against tenant source',matrix:{
-      high:{high:'P1',medium:'P1',low:'P2'},medium:{high:'P2',medium:'P3',low:'P3'},low:{high:'P3',medium:'P4',low:'P4'},
+      critical:{immediate:'P1',high:'P1',medium:'P1',low:'P2'},high:{immediate:'P1',high:'P2',medium:'P2',low:'P3'},medium:{immediate:'P2',high:'P2',medium:'P3',low:'P4'},low:{immediate:'P3',high:'P3',medium:'P4',low:'P4'},
     }};
     assert.equal((await f.request('/api/v1/configuration/priority-rules','agent')).status,403);
     const created=await f.request('/api/v1/configuration/priority-rules','admin',post(body));

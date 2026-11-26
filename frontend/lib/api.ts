@@ -56,7 +56,7 @@ async function download(path: string): Promise<{ blob: Blob; fileName: string }>
 
 export const api = {
   tickets: (query: { q?: string; status?: string; priority?: string; teamId?: string; limit?: number; offset?: number } = {}) => { const params = new URLSearchParams(); params.set("limit", String(query.limit ?? 25)); params.set("offset", String(query.offset ?? 0)); for (const key of ["q", "status", "priority", "teamId"] as const) if (query[key]) params.set(key, query[key]!); return request<{ data: SupportTicket[]; pagination: { limit: number; offset: number; total: number }; requestId: string }>(`/api/v1/tickets?${params}`); },
-  createTicket: (body: { title: string; description: string; product?: string; affectedService?: string }) => request<ApiEnvelope<SupportTicket>>("/api/v1/tickets", { method: "POST", body: JSON.stringify(body) }),
+  createTicket: (body: { title: string; description: string; product?: string; affectedService?: string; affectedUsers: AffectedUsers; businessImpact: BusinessImpact; urgency: TicketUrgency }) => request<ApiEnvelope<SupportTicket>>("/api/v1/tickets", { method: "POST", body: JSON.stringify(body) }),
   uploadAttachment: (id: string, file: File) => { const body = new FormData(); body.append("file", file); return request<ApiEnvelope<{ id: string; fileName: string; mimeType: string; fileSizeBytes: number }>>(`/api/v1/tickets/${encodeURIComponent(id)}/attachments`, { method: "POST", body }); },
   downloadAttachment: (ticketId: string, attachmentId: string) => download(`/api/v1/tickets/${encodeURIComponent(ticketId)}/attachments/${encodeURIComponent(attachmentId)}`),
   ticket: (id: string) => request<ApiEnvelope<SupportTicket & { comments?: SupportComment[] }>>(`/api/v1/tickets/${encodeURIComponent(id)}`),
@@ -75,7 +75,7 @@ export const api = {
   analyze: (id: string) => request<ApiEnvelope<TicketAnalysis>>(`/api/v1/tickets/${encodeURIComponent(id)}/analyze`, { method: "POST", body: "{}" }),
   triages: (id: string) => request<ApiEnvelope<TriageReport[]>>(`/api/v1/tickets/${encodeURIComponent(id)}/triages`),
   reviewTriage: (ticketId: string, reportId: string, body: { decision: TriageReview["data"]["decision"]; reason: string; editedResolution?: ReviewedResolution }) => request<ApiEnvelope<TriageReview>>(`/api/v1/tickets/${encodeURIComponent(ticketId)}/triages/${encodeURIComponent(reportId)}/reviews`, { method: "POST", body: JSON.stringify(body) }),
-  recommendResolution: (id: string) => request<ApiEnvelope<Record<string, unknown>>>(`/api/v1/tickets/${encodeURIComponent(id)}/recommend-resolution`, { method: "POST", body: "{}" }),
+  recommendResolution: (id: string, options: { regenerate?: boolean; reason?: string } = {}) => request<ApiEnvelope<Record<string, unknown>>>(`/api/v1/tickets/${encodeURIComponent(id)}/recommend-resolution`, { method: "POST", body: JSON.stringify(options) }),
   similar: (id: string) => request<ApiEnvelope<unknown>>(`/api/v1/tickets/${encodeURIComponent(id)}/similar`),
   operationalReport: (from: string, to: string) => request<ApiEnvelope<OperationalReport>>(`/api/v1/reports?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`),
   slaPolicies: () => request<ApiEnvelope<unknown[]>>("/api/v1/sla-policies"),
@@ -123,7 +123,11 @@ export const api = {
 import type { MembershipStatus } from "@/types/foundation";
 
 export type TicketEscalation = { id: string; status: "open" | "resolved"; reasonCode: "P1_CRITICAL" | "P2_HIGH" | "SLA_AT_RISK" | "BEYOND_AGENT_AUTHORITY" | "RECURRING_BREACH" | "OTHER"; handoverNotes: string; escalatedBy: string; escalatedAt: string; resolvedBy?: string; resolvedAt?: string; resolutionNotes?: string; automatic?: boolean };
-export type SupportTicket = { id: string; title: string; description?: unknown; product?: string | null; affectedService?: string | null; status?: string; priority?: string; teamId?: string | null; requesterId: string; createdAt: string; updatedAt: string; comments?: SupportComment[]; attachments?: { id: string; fileName: string; mimeType: string; fileSizeBytes: number; createdAt: string }[]; escalations?: TicketEscalation[] };
+export type AffectedUserScope = "one_user" | "small_group" | "multiple_users_one_department" | "multiple_departments" | "organisation_wide";
+export type AffectedUsers = { scope: AffectedUserScope; count?: number };
+export type BusinessImpact = "critical" | "high" | "medium" | "low";
+export type TicketUrgency = "immediate" | "high" | "medium" | "low";
+export type SupportTicket = { id: string; title: string; description?: unknown; product?: string | null; affectedService?: string | null; affectedUsers?: AffectedUsers; businessImpact?: BusinessImpact; urgency?: TicketUrgency; status?: string; priority?: string; teamId?: string | null; requesterId: string; createdAt: string; updatedAt: string; comments?: SupportComment[]; attachments?: { id: string; fileName: string; mimeType: string; fileSizeBytes: number; createdAt: string }[]; escalations?: TicketEscalation[] };
 export type TicketWorkflowContext = { workflowId: string; currentStatus: string | null; transitions: string[]; resolvedStatuses: string[] };
 export type EscalationQueueItem = { ticket: SupportTicket; escalation: TicketEscalation };
 export type TenantDocument = { id: string; organisationId: string; title: string; fileName: string; mimeType: string; version: number; status: string; processingStatus: string; createdAt: string };
@@ -136,8 +140,9 @@ export type TicketHistory = { id: string; action: string; actorId: string; creat
 export type AuditLogEntry = { id: string; actorId: string; action: string; targetType: string; targetId: string; createdAt: string; source: string; details: Record<string, unknown> };
 export type CategoryConfiguration = { id: string; name: string; description?: string; status: "active" | "disabled"; source: "organisation" | "environment_default" };
 export type RoutingRuleConfiguration = { id: string; data: { categoryIds: string[]; teamId: string; effectiveFrom: string; effectiveTo?: string | null; status: "draft" | "approved" | "disabled"; reason?: string }; createdAt: string; updatedAt: string };
-export type PriorityMatrix = Record<"high" | "medium" | "low", Record<"high" | "medium" | "low", "P1" | "P2" | "P3" | "P4">>;
-export type PriorityPolicyConfiguration = { id: string; data: { version: number; status: "draft" | "approved" | "active" | "archived"; matrix: PriorityMatrix; sourceDocumentId: string; sourceDocumentVersionId: string; sourceChecksumSha256: string; reason: string; approvalReason?: string; activationReason?: string } };
+export type PriorityMatrix = Record<"critical" | "high" | "medium" | "low", Record<"immediate" | "high" | "medium" | "low", "P1" | "P2" | "P3" | "P4">>;
+export type LegacyPriorityMatrix = Record<"high" | "medium" | "low", Record<"high" | "medium" | "low", "P1" | "P2" | "P3" | "P4">>;
+export type PriorityPolicyConfiguration = { id: string; data: { version: number; status: "draft" | "approved" | "active" | "archived"; matrix: PriorityMatrix | LegacyPriorityMatrix; sourceDocumentId: string; sourceDocumentVersionId: string; sourceChecksumSha256: string; reason: string; approvalReason?: string; activationReason?: string } };
 export type TicketAnalysis = { id: string; ticketId: string; classification: { category: string | null; reason: string; confidence: number | null; requiresHumanReview: boolean; warnings: string[] }; summary: { summary: string; symptoms: string[]; attemptedActions: string[]; affectedFunctionality?: string | null; businessImpact: string | null; missingInformation: string[]; warnings: string[] }; createdAt: string };
 export type OperationalReport = { period: { from: string; to: string }; ticketVolume: number; ticketsByStatus: Record<string, number>; ticketsByPriority: Record<string, number>; slaByState: Record<string, number>; ticketsWithoutEvaluation: number };
 export type ReviewedResolution = { summary: string; steps: { instruction: string; citations: { passageId: string; excerpt: string }[] }[]; missingInformation: string[]; warnings: string[] };

@@ -41,8 +41,10 @@ function isWorkflowRunRecord(value: unknown): value is AiWorkflowRun {
 }
 type PersistedWorkflowRun = AiWorkflowRun & { id: string };
 function isPersistedWorkflowRun(value: unknown): value is PersistedWorkflowRun {
-  return isWorkflowRunRecord(value) && typeof (value as unknown as { id?: unknown }).id === 'string' &&
-    (value as unknown as { id: string }).id === value.runId;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const persisted = value as Record<string, unknown>;
+  const { id, ...run } = persisted;
+  return typeof id === 'string' && id.trim().length > 0 && isWorkflowRunRecord(run) && id === (run as AiWorkflowRun).runId;
 }
 
 export class JsonAiAnalysisRepository implements AiAnalysisRepository {
@@ -65,7 +67,7 @@ export class JsonAiAnalysisRepository implements AiAnalysisRepository {
     });
   }
   async listWorkflowRuns(tenant: TenantContext, ticketId: string): Promise<AiWorkflowRun[]> {
-    const records = await this.store.findRecords('ai-workflow-runs.json', isWorkflowRunRecord, {
+    const records = await this.store.findRecords('ai-workflow-runs.json', isStoredWorkflowRun, {
       organisationId: tenant.organisationId,
       ticketId,
     });
@@ -94,4 +96,8 @@ export class JsonAiAnalysisRepository implements AiAnalysisRepository {
     });
     return records.map(record => ({ ...record, classification: normalizeStoredTicketClassification(record.classification), summary: normalizeStoredTicketSummary(record.summary) }));
   }
+}
+
+function isStoredWorkflowRun(value: unknown): value is AiWorkflowRun | PersistedWorkflowRun {
+  return isWorkflowRunRecord(value) || isPersistedWorkflowRun(value);
 }

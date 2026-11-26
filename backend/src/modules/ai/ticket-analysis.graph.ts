@@ -27,7 +27,10 @@ const State = new StateSchema({
   status: z.enum(['completed', 'insufficient_information', 'invalid_analysis', 'failed']), failure: z.custom<GraphFailure>().nullable(),
 });
 export function ticketSnapshotHash(ticket: TicketAiView): string {
-  return createHash('sha256').update(JSON.stringify({ id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: ticket.description })).digest('hex');
+  return createHash('sha256').update(JSON.stringify({ id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: ticket.description,
+    ...(ticket.product === undefined ? {} : { product: ticket.product }), ...(ticket.affectedService === undefined ? {} : { affectedService: ticket.affectedService }),
+    ...(ticket.affectedUsers === undefined ? {} : { affectedUsers: ticket.affectedUsers }), ...(ticket.businessImpact === undefined ? {} : { businessImpact: ticket.businessImpact }),
+    ...(ticket.urgency === undefined ? {} : { urgency: ticket.urgency }) })).digest('hex');
 }
 
 /** Only orchestrates already-authorized data. No identity, permission, mutation or persistence node. */
@@ -70,7 +73,10 @@ export class TicketAnalysisGraph {
     const categories = structuredClone(input.categories);
     const informationToCollect = input.informationToCollect === undefined ? [] : structuredClone(input.informationToCollect);
     if (!Array.isArray(informationToCollect) || informationToCollect.some(item => typeof item !== 'string' || !item.trim())) throw new Error('informationToCollect must contain non-empty strings.');
-    const ticket = { id: input.ticket.id, organisationId: input.ticket.organisationId, title: input.ticket.title, description: input.ticket.description };
+    const ticket: TicketAiView = { id: input.ticket.id, organisationId: input.ticket.organisationId, title: input.ticket.title, description: input.ticket.description,
+      ...(input.ticket.product === undefined ? {} : { product: input.ticket.product }), ...(input.ticket.affectedService === undefined ? {} : { affectedService: input.ticket.affectedService }),
+      ...(input.ticket.affectedUsers === undefined ? {} : { affectedUsers: structuredClone(input.ticket.affectedUsers) }),
+      ...(input.ticket.businessImpact === undefined ? {} : { businessImpact: input.ticket.businessImpact }), ...(input.ticket.urgency === undefined ? {} : { urgency: input.ticket.urgency }) };
     if (![ticket.id, ticket.organisationId, ticket.title].every(value => typeof value === 'string' && value.trim()) || typeof ticket.description !== 'string') throw new Error('Invalid authorized ticket snapshot.');
     const startedAt = new Date().toISOString();
     const promptVersions = { classification: CLASSIFICATION_PROMPT_VERSION, summarization: SUMMARIZATION_PROMPT_VERSION };

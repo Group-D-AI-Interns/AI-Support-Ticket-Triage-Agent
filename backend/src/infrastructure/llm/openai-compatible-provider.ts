@@ -36,6 +36,11 @@ export class OpenAiCompatibleProvider implements StructuredGenerationProvider {
     this.fetcher = options.fetcher ?? fetch;
   }
 
+  cacheIdentity(): string {
+    const endpoint = new URL(this.options.baseUrl);
+    return `${this.options.name}:${endpoint.origin}${endpoint.pathname}`;
+  }
+
   async generateStructured(
     request: StructuredGenerationRequest,
   ): Promise<StructuredGenerationResponse> {

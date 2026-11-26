@@ -12,10 +12,11 @@ import { TicketAiAnalysisService } from './ticket-ai-analysis.service.js';
 import { ResolutionRecommendationService } from './resolution-recommendation.service.js';
 import { recommendRouting, verifiedSlaInsight } from './team-recommendations.js';
 import type { AuthorizedRoutingSource, VerifiedSlaInsightSource } from './team-capability-ports.js';
+import type { AiOperationsStore } from './operations-store.js';
 
 export type CapabilityResult<T> = { status: 'completed'; data: T } | { status: 'unavailable' | 'failed'; code: string; data: null };
 export type AiTriageCapabilities = { priority?: PriorityRecommender; knowledge?: AuthorizedKnowledgeSource;
-  resolutionRunner?: AiExecutionRunner; routing?: AuthorizedRoutingSource; sla?: VerifiedSlaInsightSource };
+  resolutionRunner?: AiExecutionRunner; resolutionOperations?: AiOperationsStore; routing?: AuthorizedRoutingSource; sla?: VerifiedSlaInsightSource };
 
 /** AI-owned composition entry point for future ticket/job adapters. No user impersonation or writes. */
 export class TicketAiTriageService {
@@ -40,7 +41,7 @@ export class TicketAiTriageService {
     const retrieval = documents ? new KnowledgeRetriever({ async listAuthorizedDocuments() { return structuredClone(documents); } }) : null;
     const evidence = knowledge.status === 'failed' ? knowledge : await optional(retrieval ? () => retrieval.retrieve(input.tenant, `${ticket.title}\n${ticket.description}`, { excludeTicketId: ticket.id }) : undefined, 'RETRIEVAL');
     const resolution = knowledge.status === 'failed' ? knowledge : await optional(retrieval && this.capabilities.resolutionRunner
-      ? () => new ResolutionRecommendationService(source, retrieval, this.capabilities.resolutionRunner!).recommend(input.tenant, ticket.id) : undefined, 'RESOLUTION');
+      ? () => new ResolutionRecommendationService(source, retrieval, this.capabilities.resolutionRunner!, this.capabilities.resolutionOperations).recommend(input.tenant, ticket.id) : undefined, 'RESOLUTION');
     const routing = await optional(() => recommendRouting(input.tenant, ticket, core.classification.categories, this.capabilities.routing), 'ROUTING');
     const sla = await optional(() => verifiedSlaInsight(input.tenant, ticket, this.capabilities.sla), 'SLA');
     return { ticketId: ticket.id, organisationId: ticket.organisationId, requiresHumanReview: true as const, core,

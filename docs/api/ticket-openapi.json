@@ -546,8 +546,8 @@
         "tags": [
           "Tickets"
         ],
-        "summary": "List open escalations visible to support staff",
-        "description": "Returns only open escalations on tickets already visible to the caller's team/ticket permissions. No external notification is sent.",
+        "summary": "List open escalations visible to support leads",
+        "description": "Requires tickets.escalations.read (support lead or organisation administrator). Returns only open escalations on tickets already visible to the caller's tenant/team scope. No external notification is sent.",
         "responses": {
           "200": {
             "description": "Visible open escalations",
@@ -639,7 +639,7 @@
           "Tickets"
         ],
         "summary": "Escalate a visible ticket to the support lead queue",
-        "description": "Support staff only. Requires a reason and handover notes; one open escalation is allowed per ticket. Setting an internal priority to P1 also opens an escalation automatically.",
+        "description": "Requires tickets.escalate and access to the ticket (support agent). Requires a reason and handover notes; one open escalation is allowed per ticket. Setting an internal priority to P1 also opens an escalation automatically.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1676,7 +1676,10 @@
         "additionalProperties": false,
         "required": [
           "title",
-          "description"
+          "description",
+          "affectedUsers",
+          "businessImpact",
+          "urgency"
         ],
         "properties": {
           "title": {
@@ -1698,7 +1701,18 @@
               "string",
               "null"
             ]
-          }
+          },
+          "affectedUsers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scope"],
+            "properties": {
+              "scope": { "type": "string", "enum": ["one_user", "small_group", "multiple_users_one_department", "multiple_departments", "organisation_wide"] },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "businessImpact": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "urgency": { "type": "string", "enum": ["immediate", "high", "medium", "low"] }
         }
       },
       "UpdateTicketRequest": {

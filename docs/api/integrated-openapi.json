@@ -562,8 +562,8 @@
         "tags": [
           "Tickets"
         ],
-        "summary": "List open escalations visible to support staff",
-        "description": "Returns only open escalations on tickets already visible to the caller's team/ticket permissions. No external notification is sent.",
+        "summary": "List open escalations visible to support leads",
+        "description": "Requires tickets.escalations.read (support lead or organisation administrator). Returns only open escalations on tickets already visible to the caller's tenant/team scope. No external notification is sent.",
         "responses": {
           "200": {
             "description": "Visible open escalations",
@@ -647,7 +647,7 @@
           "Tickets"
         ],
         "summary": "Escalate a visible ticket to the support lead queue",
-        "description": "Support staff only. Requires a reason and handover notes; one open escalation is allowed per ticket. Setting an internal priority to P1 also opens an escalation automatically.",
+        "description": "Requires tickets.escalate and access to the ticket (support agent). Requires a reason and handover notes; one open escalation is allowed per ticket. Setting an internal priority to P1 also opens an escalation automatically.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1268,7 +1268,7 @@
           "AI triage"
         ],
         "summary": "Run full LangGraph triage and persist combined recommendations",
-        "description": "Requires an active tenant membership and current ticket/source access. No ticket lifecycle changes.",
+        "description": "Requires tickets.resolution.review and current ticket/source access. Reuses a valid tenant-scoped saved recommendation by default. Set regenerate=true to explicitly create a new immutable history version. A concurrent generation returns 409 AI_EXECUTION_IN_PROGRESS. No ticket lifecycle changes.",
         "security": [
           {
             "AiBearer": []
@@ -1310,7 +1310,7 @@
             "description": "Resource inaccessible or not found"
           },
           "409": {
-            "description": "Missing verified evidence, changed ticket or immutable decision"
+            "description": "Missing verified evidence, changed ticket, immutable decision or recommendation generation already in progress"
           },
           "503": {
             "description": "AI or storage is unavailable"
@@ -1323,10 +1323,23 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {},
+                "properties": {
+                  "regenerate": {
+                    "type": "boolean",
+                    "default": false
+                  },
+                  "reason": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "Optional audit reason for explicit regeneration."
+                  }
+                },
                 "required": []
               },
-              "example": {}
+              "example": {
+                "regenerate": true,
+                "reason": "Reviewer requested a fresh recommendation."
+              }
             }
           }
         },
@@ -3263,7 +3276,7 @@
                   },
                   "matrix": {
                     "type": "object",
-                    "description": "Complete 3×3 impact/urgency matrix; each cell is P1, P2, P3 or P4."
+                    "description": "Complete 4x4 impact/urgency matrix including critical impact and immediate urgency; every cell is P1, P2, P3 or P4."
                   }
                 },
                 "required": [
@@ -6379,7 +6392,10 @@
         "additionalProperties": false,
         "required": [
           "title",
-          "description"
+          "description",
+          "affectedUsers",
+          "businessImpact",
+          "urgency"
         ],
         "properties": {
           "title": {
@@ -6400,6 +6416,47 @@
             "type": [
               "string",
               "null"
+            ]
+          },
+          "affectedUsers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "scope"
+            ],
+            "properties": {
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "one_user",
+                  "small_group",
+                  "multiple_users_one_department",
+                  "multiple_departments",
+                  "organisation_wide"
+                ]
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 1
+              }
+            }
+          },
+          "businessImpact": {
+            "type": "string",
+            "enum": [
+              "critical",
+              "high",
+              "medium",
+              "low"
+            ]
+          },
+          "urgency": {
+            "type": "string",
+            "enum": [
+              "immediate",
+              "high",
+              "medium",
+              "low"
             ]
           }
         }

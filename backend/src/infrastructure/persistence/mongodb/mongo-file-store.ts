@@ -111,6 +111,11 @@ export class MongoFileStore implements JsonFileStorePort {
       { kind: 1, 'data.status': 1, 'data.availableAt': 1 },
       { name: 'ai_job_polling' },
     );
+    await this.database.db.collection(mongoCollectionName('ai-operations')).createIndex(
+      { organisationId: 1, 'data.ticketId': 1, 'data.cacheKey': 1 },
+      { name: 'tenant_resolution_recommendation_generation_lease', unique: true,
+        partialFilterExpression: { kind: 'resolution_recommendation', 'data.status': 'generating' } },
+    );
     await new MongoTicketStore(this.database).initialize();
   }
 

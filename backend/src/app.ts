@@ -431,6 +431,7 @@ function isTicketModulePath(path: string): boolean {
     "/api/v1/configuration/categories",
     "/api/v1/configuration/priority-rules",
     "/api/v1/tickets",
+    "/api/v1/ticket-escalations",
     "/api/v1/documents",
     "/api/v1/extracted-rules",
     "/api/v1/sla-policies",

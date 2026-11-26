@@ -17,6 +17,16 @@ export type TicketSource = {
   priority?: string;
 };
 
+export type AffectedUserScope =
+  | 'one_user'
+  | 'small_group'
+  | 'multiple_users_one_department'
+  | 'multiple_departments'
+  | 'organisation_wide';
+export type BusinessImpact = 'critical' | 'high' | 'medium' | 'low';
+export type TicketUrgency = 'immediate' | 'high' | 'medium' | 'low';
+export type AffectedUsers = { scope: AffectedUserScope; count?: number };
+
 export type TicketComment = {
   id: string;
   authorId: string;
@@ -66,6 +76,10 @@ export type TicketRecord = {
   description?: JsonValue;
   product?: string | null;
   affectedService?: string | null;
+  /** Optional on stored records for backwards compatibility with tickets created before these fields existed. */
+  affectedUsers?: AffectedUsers;
+  businessImpact?: BusinessImpact;
+  urgency?: TicketUrgency;
   teamId?: string | null;
   status?: string;
   priority?: string;

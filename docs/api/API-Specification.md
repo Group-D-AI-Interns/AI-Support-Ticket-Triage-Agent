@@ -14,7 +14,7 @@ Tenant priority scoring is configured through the administrator-only version lif
 `GET` and `POST /api/v1/configuration/priority-rules`, followed by
 `POST /api/v1/configuration/priority-rules/{id}/approve` and
 `POST /api/v1/configuration/priority-rules/{id}/activate`. Draft creation requires a complete
-3×3 impact/urgency matrix, a processed same-organisation document/version, and a reason.
+4x4 impact/urgency matrix including critical impact and immediate urgency, a processed same-organisation document/version, and a reason.
 Approval and activation require separate reasons; activation rechecks the source checksum
 and archives the prior active version. Only an active, source-verified tenant policy is used
 for recommendations. The environment reference remains a development-only draft fallback.
@@ -185,7 +185,7 @@ Ticket, document, SLA, reporting and workflow endpoints use the shared Keycloak 
 
 ## 2.1 User roles and capabilities
 
-`GET /api/v1/roles` requires an authenticated user with `users.manage` and an active `X-Organisation-ID` membership. It returns the four canonical role templates (`organisation_admin`, `support_lead`, `support_agent`, `requester`), their display names and the effective permission identifiers/descriptions from the shared backend policy. The administrator aliases “System Administrator” and “Organisation Administrator” both refer to `organisation_admin`.
+`GET /api/v1/roles` requires an authenticated user with `users.manage` and an active `X-Organisation-ID` membership. It returns the four canonical role templates (`organisation_admin`, `support_lead`, `support_agent`, `requester`), their display names and the effective permission identifiers/descriptions from the shared backend policy. The administrator aliases â€œSystem Administratorâ€ and â€œOrganisation Administratorâ€ both refer to `organisation_admin`.
 
 `POST /api/v1/users` requires `users.manage`. Its body accepts `email`, `displayName`, and a non-empty array of canonical role IDs. The API creates the identity through the configured Keycloak service account, then creates an active organisation membership with those roles. Passwords are never accepted or stored by this API. The response includes the membership and its effective permission IDs. `GET /api/v1/users` and `GET /api/v1/users/:id` include the target user's tenant membership roles and effective permissions. `PUT /api/v1/users/:id/memberships` updates that tenant membership and returns the resulting permission IDs.
 
@@ -209,11 +209,14 @@ Content-Type: application/json
   "title": "Unable to access billing portal",
   "description": "The portal returns an access denied message.",
   "product": "Billing Portal",
-  "affectedService": "Customer Billing"
+  "affectedService": "Customer Billing",
+  "affectedUsers": { "scope": "multiple_departments", "count": 150 },
+  "businessImpact": "critical",
+  "urgency": "immediate"
 }
 ```
 
-### Response — 201 Created
+### Response â€” 201 Created
 
 ```json
 {
@@ -225,6 +228,9 @@ Content-Type: application/json
     "description": "The portal returns an access denied message.",
     "product": "Billing Portal",
     "affectedService": "Customer Billing",
+    "affectedUsers": { "scope": "multiple_departments", "count": 150 },
+    "businessImpact": "critical",
+    "urgency": "immediate",
     "status": "new",
     "createdAt": "2026-11-12T08:30:00.000Z",
     "updatedAt": "2026-11-12T08:30:00.000Z"
@@ -233,7 +239,7 @@ Content-Type: application/json
 }
 ```
 
-The server derives both organisation and requester from the authenticated context; client-supplied tenant/requester identifiers are rejected.
+`affectedUsers.scope` is one of `one_user`, `small_group`, `multiple_users_one_department`, `multiple_departments`, or `organisation_wide`; `count` is optional and, when supplied, must be a positive integer. `businessImpact` is one of `critical`, `high`, `medium`, or `low`; `urgency` is one of `immediate`, `high`, `medium`, or `low`. These requester-provided values remain explicit for human review. New tickets require these fields; older ticket records without them remain readable. Priority recommendations use the active tenant policy matrix and return insufficient information if its version does not define an input combination; the system does not silently downgrade immediate urgency. The server derives both organisation and requester from authenticated context; client-supplied tenant/requester identifiers are rejected.
 
 ## 5. Ticket API authentication and permissions
 
@@ -263,11 +269,14 @@ Content-Type: application/json
   "title": "Unable to sign in",
   "description": "The sign-in page returns an error.",
   "product": "Customer Portal",
-  "affectedService": "Authentication"
+  "affectedService": "Authentication",
+  "affectedUsers": { "scope": "one_user" },
+  "businessImpact": "medium",
+  "urgency": "medium"
 }
 ```
 
-Expected response — `201 Created`:
+Expected response â€” `201 Created`:
 
 ```json
 {
@@ -279,6 +288,9 @@ Expected response — `201 Created`:
     "description": "The sign-in page returns an error.",
     "product": "Customer Portal",
     "affectedService": "Authentication",
+    "affectedUsers": { "scope": "one_user" },
+    "businessImpact": "medium",
+    "urgency": "medium",
     "status": "new",
     "createdAt": "<UTC timestamp>",
     "updatedAt": "<UTC timestamp>"
@@ -371,7 +383,7 @@ Content-Type: application/json
 }
 ```
 
-Expected response — `201 Created` (the draft is not active):
+Expected response â€” `201 Created` (the draft is not active):
 
 ```json
 {
@@ -416,7 +428,7 @@ POST http://localhost:3000/api/v1/ticket-workflows/{{workflowId}}/approve
 Authorization: Bearer {{adminToken}}
 ```
 
-Expected response — `200 OK`, with `"status": "active"`, `approvedBy`, and `approvedAt`. Reapproval of a non-draft workflow returns `409 WORKFLOW_CONFLICT`. Only one workflow is active per tenant; activating a replacement archives the previous version. `GET /api/v1/ticket-workflows/active` returns the active tenant workflow to authenticated tenant users.
+Expected response â€” `200 OK`, with `"status": "active"`, `approvedBy`, and `approvedAt`. Reapproval of a non-draft workflow returns `409 WORKFLOW_CONFLICT`. Only one workflow is active per tenant; activating a replacement archives the previous version. `GET /api/v1/ticket-workflows/active` returns the active tenant workflow to authenticated tenant users.
 
 Tickets created after activation start at the configured initial status. Existing `new` tickets can use the active workflow if their current value matches a configured status case-insensitively. Status is changed separately from the general ticket `PATCH` route.
 
@@ -436,7 +448,7 @@ Content-Type: application/json
 }
 ```
 
-Expected response — `200 OK`:
+Expected response â€” `200 OK`:
 
 ```json
 {
@@ -515,7 +527,7 @@ Content-Type: application/json
 }
 ```
 
-Expected response — `201 Created`, with a pending request and generated `id`. The ticket remains `RESOLVED` until a supervisor or administrator approves it:
+Expected response â€” `201 Created`, with a pending request and generated `id`. The ticket remains `RESOLVED` until a supervisor or administrator approves it:
 
 ```http
 POST http://localhost:3000/api/v1/tickets/{{ticketId}}/reopen-requests/{{requestId}}/approve
@@ -660,9 +672,9 @@ X-Organisation-ID: {{organisationId}}
 Content-Type: multipart/form-data
 ```
 
-In Postman, choose **Body → form-data**, add a key named `file`, change its type to **File**, and select the attachment. Postman supplies the multipart boundary.
+In Postman, choose **Body â†’ form-data**, add a key named `file`, change its type to **File**, and select the attachment. Postman supplies the multipart boundary.
 
-Expected response — `201 Created`:
+Expected response â€” `201 Created`:
 
 ```json
 {
@@ -704,7 +716,7 @@ Content-Type: application/json
 {}
 ```
 
-### Response — 200 OK
+### Response â€” 200 OK
 
 ```json
 {
@@ -804,7 +816,7 @@ Content-Type: application/json
 }
 ```
 
-### Response — 202 Accepted
+### Response â€” 202 Accepted
 
 ```json
 {
@@ -1465,10 +1477,14 @@ This excerpt is intentionally a draft; expand every endpoint, schema, response, 
 
 Authenticated ticket reviewers can call `GET /api/v1/tickets/:ticketId/evidence`,
 `GET /api/v1/tickets/:ticketId/similar` and
-`POST /api/v1/tickets/:ticketId/recommend-resolution` with JSON `{}`.
-These enforce `tickets.resolution.review` and existing ticket access. Resolution
-guidance requires human review and never changes tickets. The default evidence source
-exposes effective, approved, active policy payloads only to organisation administrators;
+`POST /api/v1/tickets/:ticketId/recommend-resolution` with `{}` to reuse a valid saved
+recommendation or generate one when necessary. Explicit regeneration uses
+`{"regenerate":true,"reason":"..."}`; the reason is optional and each version remains in
+the tenant-scoped `ai-operations` ledger. Concurrent generation returns HTTP 409
+`AI_EXECUTION_IN_PROGRESS`. Recommendations are invalidated by ticket projection changes,
+authorized evidence changes, prompt version changes, or provider/model identity changes.
+Resolution guidance requires human review and never changes tickets. The default evidence
+source exposes effective, approved, active policy payloads only to organisation administrators;
 historical sources are not connected yet. See
 [the resolution contract](../../backend/src/modules/ai/resolution-recommendations.md)
 for response fields, unavailable/evidence-empty behavior and integration requirements.

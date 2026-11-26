@@ -6,8 +6,13 @@ const text = z.string().trim().min(1);
 const stamp = z.iso.datetime({ offset: true });
 const base = { id: text, organisationId: text, actorId: text, createdAt: stamp, updatedAt: stamp };
 const incidentPriority = z.enum(['P1', 'P2', 'P3', 'P4']);
+const legacyPriorityMatrix = z.strictObject({ high: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }), medium: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }), low: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }) });
+const currentPriorityMatrix = z.strictObject({ critical: z.strictObject({ immediate: incidentPriority, high: incidentPriority, medium: incidentPriority, low: incidentPriority }), high: z.strictObject({ immediate: incidentPriority, high: incidentPriority, medium: incidentPriority, low: incidentPriority }), medium: z.strictObject({ immediate: incidentPriority, high: incidentPriority, medium: incidentPriority, low: incidentPriority }), low: z.strictObject({ immediate: incidentPriority, high: incidentPriority, medium: incidentPriority, low: incidentPriority }) });
+const storedPriorityMatrix = z.union([legacyPriorityMatrix, currentPriorityMatrix]);
+const affectedUsersSchema = z.strictObject({ scope: z.enum(['one_user', 'small_group', 'multiple_users_one_department', 'multiple_departments', 'organisation_wide']), count: z.number().int().positive().safe().optional() });
+const ticketSnapshotSchema = z.strictObject({ id: text, organisationId: text, title: text, description: z.string(), product: z.string().nullable().optional(), affectedService: z.string().nullable().optional(), affectedUsers: affectedUsersSchema.optional(), businessImpact: z.enum(['critical', 'high', 'medium', 'low']).optional(), urgency: z.enum(['immediate', 'high', 'medium', 'low']).optional() });
 export const priorityPolicyInput = z.strictObject({
-  matrix: z.strictObject({ high: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }), medium: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }), low: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }) }),
+  matrix: currentPriorityMatrix,
   sourceDocumentId: text, sourceDocumentVersionId: text, reason: text.max(2000),
 });
 export const routingInput = z.strictObject({ categoryIds: z.array(text).min(1).max(30), teamId: text, effectiveFrom: stamp, effectiveTo: stamp.nullable().optional() });
@@ -18,9 +23,18 @@ export const reviewInput = z.strictObject({ decision: z.enum(['accepted', 'rejec
 const schemas = [
   z.strictObject({ ...base, kind: z.literal('category'), data: z.strictObject({ categoryId: text, name: text.max(120), description: z.string().trim().max(500).optional(), status: z.enum(['active', 'disabled']) }) }),
   z.strictObject({ ...base, kind: z.literal('routing'), data: routingInput.extend({ status: z.enum(['draft', 'approved', 'disabled']), approvedBy: text.optional(), reason: text.optional() }) }),
-  z.strictObject({ ...base, kind: z.literal('priority_policy'), data: z.strictObject({ version: z.number().int().positive(), status: z.enum(['draft', 'approved', 'active', 'archived']), matrix: z.strictObject({ high: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }), medium: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }), low: z.strictObject({ high: incidentPriority, medium: incidentPriority, low: incidentPriority }) }), sourceDocumentId: text, sourceDocumentVersionId: text, sourceChecksumSha256: z.string().regex(/^[a-f0-9]{64}$/), reason: text.max(2000), approvedBy: text.optional(), approvalReason: text.optional(), activatedBy: text.optional(), activationReason: text.optional() }) }),
+  z.strictObject({ ...base, kind: z.literal('priority_policy'), data: z.strictObject({ version: z.number().int().positive(), status: z.enum(['draft', 'approved', 'active', 'archived']), matrix: storedPriorityMatrix, sourceDocumentId: text, sourceDocumentVersionId: text, sourceChecksumSha256: z.string().regex(/^[a-f0-9]{64}$/), reason: text.max(2000), approvedBy: text.optional(), approvalReason: text.optional(), activatedBy: text.optional(), activationReason: text.optional() }) }),
   z.strictObject({ ...base, kind: z.literal('resolution'), data: resolutionInput.extend({ ticketId: text, ticketRevision: text, active: z.boolean() }) }),
-  z.strictObject({ ...base, kind: z.literal('report'), data: z.strictObject({ ticketId: text, snapshot: z.strictObject({ id: text, organisationId: text, title: text, description: z.string() }), result: z.json() }) }),
+  z.strictObject({ ...base, kind: z.literal('resolution_recommendation'), data: z.strictObject({
+    ticketId: text, cacheKey: z.string().regex(/^[a-f0-9]{64}$/), generationId: text, version: z.number().int().positive(),
+    status: z.enum(['generating', 'completed', 'failed']), leaseUntil: stamp.nullable(),
+    executionId: text.nullable(), regenerationReason: z.string().trim().max(2000).optional(), result: z.json().nullable(),
+  }).superRefine((data, ctx) => {
+    if ((data.status === 'completed') !== (data.result !== null) || (data.status !== 'generating' && data.leaseUntil !== null)) {
+      ctx.addIssue({ code: 'custom', message: 'Inconsistent resolution recommendation state.' });
+    }
+  }) }),
+  z.strictObject({ ...base, kind: z.literal('report'), data: z.strictObject({ ticketId: text, snapshot: ticketSnapshotSchema, result: z.json() }) }),
   z.strictObject({ ...base, kind: z.literal('review'), data: z.strictObject({ decision: reviewInput.shape.decision, reason: reviewInput.shape.reason,
     quality: reviewInput.shape.quality, reportId: text, resolutionRevision: z.strictObject({ before: reviewedResolutionSchema, after: reviewedResolutionSchema }).optional() }) }),
   z.strictObject({ ...base, kind: z.literal('job'), data: z.strictObject({ ticketId: text, snapshotHash: text, status: z.enum(['queued', 'running', 'completed', 'failed']),

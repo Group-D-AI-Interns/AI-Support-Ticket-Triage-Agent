@@ -92,6 +92,9 @@ test('analyzes an authorized ticket end-to-end and keeps the ticket unchanged', 
       body: JSON.stringify({
         title: 'Unable to access my account',
         description: 'The account is locked after I reset my password twice.',
+        affectedUsers: { scope: 'one_user' },
+        businessImpact: 'medium',
+        urgency: 'medium',
       }),
     });
     const created = await createResponse.json();
@@ -164,6 +167,9 @@ test('does not expose ticket analysis to another requester or tenant', async () 
       body: JSON.stringify({
         title: 'Private account issue',
         description: 'The account cannot be accessed.',
+        affectedUsers: { scope: 'one_user' },
+        businessImpact: 'medium',
+        urgency: 'medium',
       }),
     });
     const created = await createResponse.json();

@@ -20,9 +20,9 @@ This matrix translates the approved Capstone Project 05 role responsibilities in
 
 ## Complete role grants
 
-- **Organisation Administrator:** `organisation.read`, `organisation.update`, `organisations.create`, `users.read`, `users.manage`, `teams.read`, `teams.manage`, `teams.members.read`, `documents.read`, `documents.manage`, `policies.read`, `policies.manage`, `policies.candidates.review`, `policies.approve`, `policies.activate`, `configuration.manage`, `queues.read.all`, `queues.manage`, `tickets.read.all`, `tickets.ai.review`, `tickets.priority.manage`, `tickets.routing.manage`, `tickets.approve`, `tickets.resolution.review`, `tickets.audit.read`, `reports.read.all`.
-- **Support Lead:** `organisation.read`, `teams.read`, `teams.members.read`, `queues.read.all`, `queues.manage`, `tickets.read.team`, `tickets.ai.review`, `tickets.priority.manage`, `tickets.routing.manage`, `tickets.approve`, `tickets.resolution.review`, `tickets.audit.read`, `reports.read.team`.
-- **Support Agent:** `organisation.read`, `teams.read`, `queues.read.assigned`, `tickets.read.assigned`, `tickets.ai.review`, `tickets.resolution.review`.
+- **Organisation Administrator:** `organisation.read`, `organisation.update`, `organisations.create`, `users.read`, `users.manage`, `teams.read`, `teams.manage`, `teams.members.read`, `documents.read`, `documents.manage`, `policies.read`, `policies.manage`, `policies.candidates.review`, `policies.approve`, `policies.activate`, `configuration.manage`, `queues.read.all`, `queues.manage`, `tickets.read.all`, `tickets.ai.review`, `tickets.priority.manage`, `tickets.routing.manage`, `tickets.escalations.read`, `tickets.approve`, `tickets.resolution.review`, `tickets.audit.read`, `reports.read.all`.
+- **Support Lead:** `organisation.read`, `teams.read`, `teams.members.read`, `queues.read.all`, `queues.manage`, `tickets.read.team`, `tickets.ai.review`, `tickets.priority.manage`, `tickets.routing.manage`, `tickets.escalations.read`, `tickets.approve`, `tickets.resolution.review`, `tickets.audit.read`, `reports.read.team`.
+- **Support Agent:** `organisation.read`, `teams.read`, `queues.read.assigned`, `tickets.read.assigned`, `tickets.ai.review`, `tickets.resolution.review`, `tickets.escalate`.
 - **Requester:** `tickets.create.own`, `tickets.read.own`.
 
 These are the complete grants from `ROLE_PERMISSIONS`; no role receives a permission merely because the frontend exposes an action.
@@ -39,6 +39,8 @@ These are the complete grants from `ROLE_PERMISSIONS`; no role receives a permis
 | Review extracted policy candidates | `policies.candidates.review` | Current approve, reject and request-changes routes require an active organisation administrator. |
 | Assign/reroute ticket | `tickets.routing.manage` | Target team must belong to the active organisation; non-administrators must also belong to that team. |
 | Set/override ticket priority | `tickets.priority.manage` | Granted to `support_lead` and `organisation_admin`; a changed priority requires reason and business justification. The server audits actor, timestamp, and before/after values. |
+| Submit escalation | `tickets.escalate` | Granted to support agents; ticket must be in the caller's accessible tenant/team scope. Reason and handover notes are persisted and audited. |
+| Read/resolve escalation queue | `tickets.escalations.read` | Granted to support leads and administrators; records are filtered to the caller's ticket scope, and resolution requires follow-up notes. |
 | Approve a reopen request | `tickets.approve` and approved workflow role rules | Ticket and request must belong to the verified tenant. |
 | Read ticket audit | `tickets.audit.read` | Ticket must be accessible in the verified tenant. |
 | Read operational report | `reports.read.all` or `reports.read.team` | Administrators receive tenant-wide aggregates; support leads receive only tickets assigned to their active teams. |

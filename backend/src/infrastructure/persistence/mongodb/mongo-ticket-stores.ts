@@ -69,7 +69,8 @@ export class MongoTicketStore extends JsonTicketStore {
         ...(session ? { session } : {}),
         projection: {
           _id: 1, id: 1, organisationId: 1, requesterId: 1, teamId: 1, title: 1,
-          description: 1, product: 1, affectedService: 1, status: 1, priority: 1,
+          description: 1, product: 1, affectedService: 1, affectedUsers: 1,
+          businessImpact: 1, urgency: 1, status: 1, priority: 1,
           source: 1, createdAt: 1, updatedAt: 1,
         },
         sort: { createdAt: -1, _id: -1 },
