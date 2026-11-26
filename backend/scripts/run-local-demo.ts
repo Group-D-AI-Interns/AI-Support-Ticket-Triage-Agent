@@ -51,7 +51,7 @@ try {
   await request('/api/v1/teams', 'POST', { name: 'Support Desk' });
   const ticket = await request('/api/v1/tickets', 'POST', { title: 'Unable to access my account', description: 'My account is locked. I reset my password twice but still cannot log in.' });
   const analysis = await request(`/api/v1/tickets/${ticket.id}/analyze`, 'POST', {});
-  console.log(`Classification: ${analysis.classification.category}; review required: ${analysis.classification.requiresHumanReview}`);
+  console.log(`Classification: ${analysis.classification.categories.join(', ')}; review required: ${analysis.classification.requiresHumanReview}`);
   console.log(`Summary: ${analysis.summary.summary}`);
   const priorityPreview = await request(`/api/v1/tickets/${ticket.id}/recommend-priority`, 'POST', {});
   console.log(`Draft priority preview: ${priorityPreview.status}; priority: ${priorityPreview.priority}. Demo does not infer factors.`);
