@@ -6,6 +6,9 @@ node_modules/
 /dist/
 /coverage/
 *.log
+__pycache__/
+*.py[cod]
+.pytest_cache/
 
 # Local environment configuration and secrets
 .env

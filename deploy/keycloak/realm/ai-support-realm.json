@@ -1,0 +1,113 @@
+{
+  "realm": "ai-support",
+  "enabled": true,
+  "registrationAllowed": false,
+  "loginWithEmailAllowed": true,
+  "duplicateEmailsAllowed": false,
+  "resetPasswordAllowed": true,
+  "roles": {
+    "realm": [
+      {
+        "name": "organisation_admin",
+        "description": "Manages organisation users, teams, configuration, and permitted operational information.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "support_lead",
+        "description": "Oversees support team queues, routing, priorities, approvals, and operational work.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "support_agent",
+        "description": "Handles assigned support tickets and reviews applicable AI and resolution recommendations.",
+        "composite": false,
+        "clientRole": false
+      },
+      {
+        "name": "requester",
+        "description": "Submits tickets and views permitted updates on their own tickets.",
+        "composite": false,
+        "clientRole": false
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "organisation-admins",
+      "path": "/organisation-admins"
+    },
+    {
+      "name": "support-leads",
+      "path": "/support-leads"
+    },
+    {
+      "name": "support-agents",
+      "path": "/support-agents"
+    },
+    {
+      "name": "requesters",
+      "path": "/requesters"
+    }
+  ],
+  "clients": [
+    {
+      "clientId": "support-api",
+      "name": "Support API audience",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "bearerOnly": true,
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": false
+    },
+    {
+      "clientId": "support-admin-service",
+      "name": "Support user management service",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": false,
+      "clientAuthenticatorType": "client-secret",
+      "standardFlowEnabled": false,
+      "serviceAccountsEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "protocolMappers": [
+        {
+          "name": "support-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "support-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    },
+    {
+      "clientId": "support-web",
+      "name": "Support web application",
+      "enabled": true,
+      "protocol": "openid-connect",
+      "publicClient": true,
+      "standardFlowEnabled": true,
+      "directAccessGrantsEnabled": false,
+      "redirectUris": ["http://localhost:3002/*", "http://127.0.0.1:3002/*"],
+      "webOrigins": ["http://localhost:3002", "http://127.0.0.1:3002"],
+      "attributes": {"pkce.code.challenge.method": "S256"},
+      "protocolMappers": [
+        {
+          "name": "support-api audience",
+          "protocol": "openid-connect",
+          "protocolMapper": "oidc-audience-mapper",
+          "config": {
+            "included.client.audience": "support-api",
+            "access.token.claim": "true",
+            "id.token.claim": "false"
+          }
+        }
+      ]
+    }
+  ]
+}

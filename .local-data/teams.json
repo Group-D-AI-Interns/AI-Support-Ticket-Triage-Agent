@@ -1,0 +1,13 @@
+{
+  "schemaVersion": 1,
+  "records": [
+    {
+      "id": "team_6dd049fe-c437-4fab-aa1b-6c4dab5f1f06",
+      "organisationId": "org_c89fe3a7-5b0d-4ca9-80c8-4bea36a8fc7a",
+      "departmentId": null,
+      "name": "Tier 1 Support",
+      "createdAt": "2026-11-20T11:43:15.152Z",
+      "updatedAt": "2026-11-20T11:43:15.152Z"
+    }
+  ]
+}

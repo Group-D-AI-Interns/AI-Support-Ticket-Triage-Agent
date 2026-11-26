@@ -1,0 +1,6 @@
+$kind: http-request
+url: http://{{keycloakHost}}:{{keycloakPort}}/realms/{{realm}}/.well-known/openid-configuration
+method: GET
+auth:
+  type: noauth
+order: 4000

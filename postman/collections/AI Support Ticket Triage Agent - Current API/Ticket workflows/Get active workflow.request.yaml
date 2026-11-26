@@ -1,0 +1,6 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/ticket-workflows/active
+method: GET
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+order: 2000

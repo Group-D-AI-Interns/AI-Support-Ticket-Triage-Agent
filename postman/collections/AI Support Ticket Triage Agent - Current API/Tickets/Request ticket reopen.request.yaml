@@ -1,0 +1,18 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/tickets/{{ticketId}}/reopen-requests
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"reason":"The issue is still occurring."}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{requesterToken}}"
+scripts:
+  - type: afterResponse
+    code: if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('reopenRequestId', result.data.id); }
+    language: text/javascript
+order: 6000

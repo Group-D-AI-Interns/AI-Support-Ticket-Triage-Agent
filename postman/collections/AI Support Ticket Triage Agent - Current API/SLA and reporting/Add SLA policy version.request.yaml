@@ -1,0 +1,18 @@
+$kind: http-request
+url: http://{{baseHost}}:{{basePort}}/api/v1/sla-policies/{{slaPolicyId}}/versions
+method: POST
+headers:
+  X-Organisation-ID: "{{organisationId}}"
+  Content-Type: application/json
+body:
+  type: json
+  content: '{"effectiveFrom":"2027-01-01T00:00:00.000Z","effectiveTo":null,"payload":{"calendar":{"timeZone":"Africa/Johannesburg","weeklySchedule":{"monday":[{"startMinute":540,"endMinute":1020}]},"holidays":[]},"targetsByPriority":{"high":{"firstResponseMinutes":60,"resolutionMinutes":240}},"pausedStatuses":["PENDING"],"resolvedStatuses":["RESOLVED"],"riskAtPercent":75}}'
+auth:
+  type: bearer
+  credentials:
+    token: "{{adminToken}}"
+scripts:
+  - type: afterResponse
+    code: if (pm.response.code === 201) { const result = pm.response.json(); pm.collectionVariables.set('slaVersionId', result.data.version.id); }
+    language: text/javascript
+order: 3000
