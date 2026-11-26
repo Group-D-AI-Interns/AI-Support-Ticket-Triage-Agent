@@ -1058,7 +1058,7 @@
           "AI triage"
         ],
         "summary": "Run full LangGraph triage and persist combined recommendations",
-        "description": "Requires an active tenant membership and current ticket/source access. No ticket lifecycle changes.",
+        "description": "Requires tickets.resolution.review and current ticket/source access. Reuses a valid tenant-scoped saved recommendation by default. Set regenerate=true to explicitly create a new immutable history version. A concurrent generation returns 409 AI_EXECUTION_IN_PROGRESS. No ticket lifecycle changes.",
         "security": [
           {
             "AiBearer": []
@@ -1100,7 +1100,7 @@
             "description": "Resource inaccessible or not found"
           },
           "409": {
-            "description": "Missing verified evidence, changed ticket or immutable decision"
+            "description": "Missing verified evidence, changed ticket, immutable decision or recommendation generation already in progress"
           },
           "503": {
             "description": "AI or storage is unavailable"
@@ -1113,10 +1113,13 @@
               "schema": {
                 "type": "object",
                 "additionalProperties": false,
-                "properties": {},
+                "properties": {
+                  "regenerate": { "type": "boolean", "default": false },
+                  "reason": { "type": "string", "maxLength": 2000, "description": "Optional audit reason for explicit regeneration." }
+                },
                 "required": []
               },
-              "example": {}
+              "example": { "regenerate": true, "reason": "Reviewer requested a fresh recommendation." }
             }
           }
         }
@@ -3069,7 +3072,10 @@
         "additionalProperties": false,
         "required": [
           "title",
-          "description"
+          "description",
+          "affectedUsers",
+          "businessImpact",
+          "urgency"
         ],
         "properties": {
           "title": {
@@ -3091,7 +3097,18 @@
               "string",
               "null"
             ]
-          }
+          },
+          "affectedUsers": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["scope"],
+            "properties": {
+              "scope": { "type": "string", "enum": ["one_user", "small_group", "multiple_users_one_department", "multiple_departments", "organisation_wide"] },
+              "count": { "type": "integer", "minimum": 1 }
+            }
+          },
+          "businessImpact": { "type": "string", "enum": ["critical", "high", "medium", "low"] },
+          "urgency": { "type": "string", "enum": ["immediate", "high", "medium", "low"] }
         }
       },
       "UpdateTicketRequest": {

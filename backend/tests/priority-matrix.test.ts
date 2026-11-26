@@ -25,11 +25,38 @@ test('missing evidence never defaults to low priority', () => {
   assert.equal(result.status, 'insufficient_information');
   assert.deepEqual(result.missingInformation, ['impact']);
 });
+test('legacy matrices never downgrade critical impact or immediate urgency when their axes are unsupported', () => {
+  const result = previewPriority(candidate, { impact: 'critical', urgency: 'immediate' });
+  assert.equal(result.priority, null);
+  assert.equal(result.status, 'insufficient_information');
+  assert.deepEqual(result.missingInformation, ['The active policy version does not define this impact/urgency combination.']);
+  assert.ok(result.warnings.includes('POLICY_MATRIX_AXIS_UNSUPPORTED: no fallback or urgency downgrade was applied.'));
+});
+test('current matrix explicitly maps critical and immediate inputs using configured cells', () => {
+  const current = validatePriorityCandidate({
+    schemaVersion: 2, status: 'active', requiresHumanReview: true, source: candidate.source,
+    matrix: {
+      critical: { immediate: 'P1', high: 'P1', medium: 'P1', low: 'P2' },
+      high: { immediate: 'P1', high: 'P2', medium: 'P2', low: 'P3' },
+      medium: { immediate: 'P2', high: 'P2', medium: 'P3', low: 'P4' },
+      low: { immediate: 'P3', high: 'P3', medium: 'P4', low: 'P4' },
+    },
+  });
+  for (const [impact, urgency, expected] of [
+    ['critical', 'immediate', 'P1'], ['high', 'high', 'P2'],
+    ['medium', 'medium', 'P3'], ['low', 'low', 'P4'],
+  ] as const) {
+    const result = previewPriority(current, { impact, urgency });
+    assert.equal(result.priority, expected);
+    assert.equal(result.status, 'recommendation');
+    assert.equal(result.requiresHumanReview, true);
+  }
+});
 test('rejects invalid factors, permission/client overrides, incomplete matrices and approval claims', () => {
-  for (const input of [{ impact: 'critical', urgency: 'high' }, { impact: 'high', urgency: 'high', clientTier: 'bronze' }, { impact: 'high', urgency: 'high', roles: ['organisation_admin'] }]) {
+  for (const input of [{ impact: 'urgent', urgency: 'high' }, { impact: 'high', urgency: 'urgent' }, { impact: 'high', urgency: 'high', clientTier: 'bronze' }, { impact: 'high', urgency: 'high', roles: ['organisation_admin'] }]) {
     assert.throws(() => previewPriority(candidate, input));
   }
-  assert.throws(() => validatePriorityCandidate({ ...candidate, status: 'active' }));
+  assert.throws(() => validatePriorityCandidate({ ...candidate, requiresHumanReview: false }));
   assert.throws(() => validatePriorityCandidate({ ...candidate, matrix: { high: { high: 'P1' } } }));
 });
 test('reference catalogue and candidates point to unchanged source bytes', async () => {

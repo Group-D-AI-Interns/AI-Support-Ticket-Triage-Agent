@@ -923,6 +923,9 @@ export function isTicketRecord(value: unknown): value is TicketRecord {
   if (
     (value.workflowId !== undefined &&
       (typeof value.workflowId !== 'string' || !value.workflowId)) ||
+    (value.affectedUsers !== undefined && !isAffectedUsers(value.affectedUsers)) ||
+    (value.businessImpact !== undefined && !['critical', 'high', 'medium', 'low'].includes(String(value.businessImpact))) ||
+    (value.urgency !== undefined && !['immediate', 'high', 'medium', 'low'].includes(String(value.urgency))) ||
     (value.reopenRequests !== undefined &&
       (!Array.isArray(value.reopenRequests) ||
         value.reopenRequests.some((request) => !isReopenRequest(request)))) ||
@@ -960,6 +963,12 @@ export function isTicketRecord(value: unknown): value is TicketRecord {
     return false;
   }
   return true;
+}
+
+function isAffectedUsers(value: unknown): boolean {
+  if (!isRecord(value) || Object.keys(value).some(key => key !== 'scope' && key !== 'count')) return false;
+  if (!['one_user', 'small_group', 'multiple_users_one_department', 'multiple_departments', 'organisation_wide'].includes(String(value.scope))) return false;
+  return value.count === undefined || (typeof value.count === 'number' && Number.isSafeInteger(value.count) && value.count > 0);
 }
 
 function isEscalation(value: unknown): value is TicketEscalation {

@@ -55,6 +55,17 @@ test('routing uses only one unambiguous approved rule and permitted team; never 
   ]) assert.equal((await recommendRouting(tenant, ticket, ['ACCESS'], { async getAuthorizedRoutingContext() { return { ...context, rules: [rule] }; } })).teamId, null);
 });
 
+test('routing adapter receives the authorized requester impact context alongside configured category rules', async () => {
+  const enriched = { ...ticket, product: 'Network Monitoring System', affectedService: 'Core Network Infrastructure',
+    affectedUsers: { scope: 'multiple_departments' as const, count: 150 }, businessImpact: 'critical' as const, urgency: 'immediate' as const };
+  const received: { value: typeof enriched | null } = { value: null };
+  const result = await recommendRouting(tenant, enriched, ['ACCESS'], { async getAuthorizedRoutingContext(_tenant, input) { received.value = input as typeof enriched; return context; } });
+  assert.equal(result.teamId, 'team-access');
+  assert.deepEqual(received.value?.affectedUsers, { scope: 'multiple_departments', count: 150 });
+  assert.equal(received.value?.businessImpact, 'critical');
+  assert.equal(received.value?.urgency, 'immediate');
+});
+
 test('routing reports absent/ambiguous data honestly and rejects foreign tenant context', async () => {
   assert.equal((await recommendRouting(tenant, ticket, ['ACCESS'])).status, 'unavailable');
   const competing = { ...context, eligibleTeams: [...context.eligibleTeams, { id: 'team-other', name: 'Other', organisationId: tenant.organisationId }],

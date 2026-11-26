@@ -30,6 +30,7 @@ export class AiExecutionError extends Error {
     super(message);
     this.name = 'AiExecutionError';
   }
+
 }
 
 export class AiExecutionRunner {
@@ -48,6 +49,17 @@ export class AiExecutionRunner {
       throw new Error('AI maxRetries must be a non-negative integer.');
     }
     if (options.outputValidationRetries !== undefined && ![0, 1].includes(options.outputValidationRetries)) throw new Error('outputValidationRetries must be 0 or 1.');
+  }
+
+  /** Non-secret inputs that determine which provider/model configuration produced cached guidance. */
+  cacheIdentity(): { providerAdapter: string; model: string } {
+    const provider = this.provider as StructuredGenerationProvider & { cacheIdentity?: () => string; options?: { name?: string; baseUrl?: string } };
+    return { providerAdapter: provider.cacheIdentity?.() ?? `${this.provider.constructor.name}:${provider.options?.name ?? 'unknown'}:${provider.options?.baseUrl ?? 'configured'}`, model: this.options.model };
+  }
+
+  generationLeaseMs(): number {
+    const validationPasses = this.options.outputValidationRetries === 1 ? 2 : 1;
+    return Math.max(10 * 60_000, this.options.timeoutMs * validationPasses + 60_000);
   }
 
   async execute<T>(

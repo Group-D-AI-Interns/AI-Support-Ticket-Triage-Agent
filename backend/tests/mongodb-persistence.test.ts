@@ -187,6 +187,7 @@ describe('MongoDB persistence configuration', () => {
     const ticket = {
       _id: 'ticket-a', id: 'ticket-a', organisationId: 'org-a', requesterId: 'requester-a',
       title: 'Synthetic ticket', createdAt: '2026-01-01T00:00:00.000Z', updatedAt: '2026-01-01T00:00:00.000Z',
+      affectedUsers: { scope: 'multiple_departments', count: 150 }, businessImpact: 'critical', urgency: 'immediate',
     };
     let listFilter: Record<string, unknown> | undefined;
     let detailFilter: Record<string, unknown> | undefined;
@@ -209,7 +210,9 @@ describe('MongoDB persistence configuration', () => {
 
     assert.deepEqual((await store.listTickets(tenant)).map(record => record.id), ['ticket-a']);
     assert.deepEqual(listFilter, { organisationId: 'org-a' });
-    assert.equal((await store.findTicket(tenant, 'ticket-a'))?.id, 'ticket-a');
+    assert.deepEqual((await store.findTicket(tenant, 'ticket-a'))?.affectedUsers, { scope: 'multiple_departments', count: 150 });
+    assert.equal((await store.findTicket(tenant, 'ticket-a'))?.businessImpact, 'critical');
+    assert.equal((await store.findTicket(tenant, 'ticket-a'))?.urgency, 'immediate');
     assert.deepEqual(detailFilter, { _id: 'ticket-a', organisationId: 'org-a' });
     assert.equal(await store.findTicket({ ...tenant, organisationId: 'org-b' }, 'ticket-a'), null);
   });
@@ -268,7 +271,7 @@ describe('MongoDB persistence configuration', () => {
     assert.equal(options?.limit, 10);
     assert.deepEqual(options?.projection, {
       _id: 1, id: 1, organisationId: 1, requesterId: 1, teamId: 1, title: 1,
-      description: 1, product: 1, affectedService: 1, status: 1, priority: 1,
+      description: 1, product: 1, affectedService: 1, affectedUsers: 1, businessImpact: 1, urgency: 1, status: 1, priority: 1,
       source: 1, createdAt: 1, updatedAt: 1,
     });
   });
@@ -675,6 +678,19 @@ describe('MongoDB persistence integration', { skip: !mongoUri ? 'Set MONGODB_TES
       assert.deepEqual((await tickets.listTickets(tenant)).map(ticket => ticket.id), ['ticket-org-a']);
       assert.equal(await tickets.findTicket(tenant, 'ticket-org-a') !== null, true);
       assert.equal(await tickets.findTicket(tenant, 'ticket-org-b'), null);
+      const created = await tickets.createTicket({
+        organisationId: tenant.organisationId, requesterId: tenant.userId, title: 'Impact persistence check',
+        description: 'Synthetic isolated MongoDB integration fixture.',
+        affectedUsers: { scope: 'multiple_departments', count: 150 }, businessImpact: 'critical', urgency: 'immediate',
+      }, tenant);
+      const retrieved = await new MongoTicketStore(database).findTicket(tenant, created.id);
+      assert.deepEqual(retrieved?.affectedUsers, { scope: 'multiple_departments', count: 150 });
+      assert.equal(retrieved?.businessImpact, 'critical');
+      assert.equal(retrieved?.urgency, 'immediate');
+      const legacy = await tickets.findTicket(tenant, 'ticket-org-a');
+      assert.equal(legacy?.affectedUsers, undefined);
+      assert.equal(legacy?.businessImpact, undefined);
+      assert.equal(legacy?.urgency, undefined);
       assert.deepEqual(await workflows.list(tenant), []);
     } finally {
       await database.db.dropDatabase().catch(() => undefined);

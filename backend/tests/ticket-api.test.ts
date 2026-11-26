@@ -162,7 +162,7 @@ async function createTicket(
 ): Promise<{ id: string }> {
   const response = await fixture.request('/api/v1/tickets', {
     method: 'POST',
-    body: JSON.stringify({ title, description: 'Synthetic ticket used by API test.' }),
+    body: JSON.stringify({ title, description: 'Synthetic ticket used by API test.', affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' }),
   });
   assert.equal(response.status, 201);
   return (await response.json()).data as { id: string };
@@ -192,6 +192,9 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
         description: 'The sign-in page returns an error.',
         product: 'Customer Portal',
         affectedService: 'Authentication',
+        affectedUsers: { scope: 'multiple_departments', count: 150 },
+        businessImpact: 'critical',
+        urgency: 'immediate',
         organisationId: 'org_attacker',
       }),
     });
@@ -207,6 +210,9 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
         description: 'The sign-in page returns an error.',
         product: 'Customer Portal',
         affectedService: 'Authentication',
+        affectedUsers: { scope: 'multiple_departments', count: 150 },
+        businessImpact: 'critical',
+        urgency: 'immediate',
       }),
     });
     const createdResult = await created.json();
@@ -221,6 +227,9 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
     assert.equal(createdResult.data.status, 'new');
     assert.equal(createdResult.data.product, 'Customer Portal');
     assert.equal(createdResult.data.affectedService, 'Authentication');
+    assert.deepEqual(createdResult.data.affectedUsers, { scope: 'multiple_departments', count: 150 });
+    assert.equal(createdResult.data.businessImpact, 'critical');
+    assert.equal(createdResult.data.urgency, 'immediate');
     assert.equal(createdResult.data.createdAt, createdResult.data.updatedAt);
     assert.ok(Number.isFinite(Date.parse(createdResult.data.createdAt)));
     assert.equal(saved.schemaVersion, 1);
@@ -228,7 +237,46 @@ test('creates tickets using the authenticated tenant and stores the existing JSO
     assert.equal(saved.records[0].requesterId, 'user_requester_1');
     assert.equal(saved.records[0].product, 'Customer Portal');
     assert.equal(saved.records[0].affectedService, 'Authentication');
+    assert.deepEqual(saved.records[0].affectedUsers, { scope: 'multiple_departments', count: 150 });
+    assert.equal(saved.records[0].businessImpact, 'critical');
+    assert.equal(saved.records[0].urgency, 'immediate');
     assert.equal(saved.records[0].createdAt, createdResult.data.createdAt);
+
+    const retrieved = await fixture.request(`/api/v1/tickets/${createdResult.data.id}`);
+    const retrievedTicket = (await retrieved.json()).data;
+    assert.equal(retrieved.status, 200);
+    assert.deepEqual(retrievedTicket.affectedUsers, { scope: 'multiple_departments', count: 150 });
+    assert.equal(retrievedTicket.businessImpact, 'critical');
+    assert.equal(retrievedTicket.urgency, 'immediate');
+  } finally {
+    await fixture.close();
+  }
+});
+
+test('ticket intake requires valid impact fields and rejects invalid scope, enums, and user counts', async () => {
+  const fixture = await createFixture();
+  try {
+    const valid = { title: 'Synthetic incident', description: 'Synthetic details.', affectedUsers: { scope: 'small_group' }, businessImpact: 'high', urgency: 'immediate' };
+    const cases = [
+      { ...valid, urgency: undefined },
+      { ...valid, businessImpact: 'urgent' },
+      { ...valid, urgency: 'critical' },
+      { ...valid, affectedUsers: { scope: 'everyone' } },
+      { ...valid, affectedUsers: { scope: 'small_group', count: 0 } },
+      { ...valid, affectedUsers: { scope: 'small_group', count: -2 } },
+      { ...valid, affectedUsers: { scope: 'small_group', count: 1.5 } },
+    ];
+    for (const body of cases) {
+      const response = await fixture.request('/api/v1/tickets', { method: 'POST', body: JSON.stringify(body) });
+      assert.equal(response.status, 400);
+      assert.equal((await response.json()).error.code, 'VALIDATION_ERROR');
+    }
+    await assert.rejects(
+      readFile(join(fixture.root, 'tickets.json'), 'utf8'),
+      (error: unknown) =>
+        error instanceof Error && 'code' in error && error.code === 'ENOENT',
+      'invalid intake must fail before creating ticket storage',
+    );
   } finally {
     await fixture.close();
   }
@@ -450,6 +498,7 @@ test('requires pause and resolution evidence on SLA-governed status transitions'
       body: JSON.stringify({
         title: 'SLA evidence transition test',
         description: 'Exercise evidence-aware SLA status transitions.',
+        affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium',
       }),
     });
     const ticket = (await created.json()).data;
@@ -635,6 +684,7 @@ test('ticket workflow drafts require organisation-admin approval and stay tenant
       body: JSON.stringify({
         title: 'Ticket before workflow approval',
         description: 'The draft must not affect ticket behavior.',
+        affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium',
       }),
     });
     const preApprovalTicket = (await createdBeforeApproval.json()).data;
@@ -739,6 +789,7 @@ test('enforces tenant workflow transitions, reopening approval, role limits, and
       body: JSON.stringify({
         title: 'Workflow test',
         description: 'Exercise tenant-approved status transitions.',
+        affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium',
       }),
     });
     const ticket = (await created.json()).data;
@@ -1039,7 +1090,12 @@ test('P1 and staff-created escalations appear in the scoped lead queue with audi
     assert.equal(manual.status, 201);
     assert.equal(manualResult.data.reasonCode, 'SLA_AT_RISK');
 
-    const duplicate = await leadFixture.request(`/api/v1/tickets/${ticketId}/escalations`, {
+    const leadCannotSubmit = await leadFixture.request(`/api/v1/tickets/${ticketId}/escalations`, {
+      method: 'POST',
+      body: JSON.stringify({ reasonCode: 'OTHER', handoverNotes: 'Duplicate active handover.' }),
+    });
+    assert.equal(leadCannotSubmit.status, 403, 'support leads receive escalations but cannot submit as the escalating agent');
+    const duplicate = await agentFixture.request(`/api/v1/tickets/${ticketId}/escalations`, {
       method: 'POST',
       body: JSON.stringify({ reasonCode: 'OTHER', handoverNotes: 'Duplicate active handover.' }),
     });
@@ -1564,7 +1620,7 @@ test('authentication fails closed, validates input, and reports corrupt storage'
     );
     const storageError = await fixture.request('/api/v1/tickets', {
       method: 'POST',
-      body: JSON.stringify({ title: 'Synthetic support ticket', description: 'Storage failure check.' }),
+      body: JSON.stringify({ title: 'Synthetic support ticket', description: 'Storage failure check.', affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' }),
     });
 
     assert.equal(unavailable.status, 503);

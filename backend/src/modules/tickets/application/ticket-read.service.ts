@@ -12,6 +12,9 @@ export type TicketReadModel = Pick<
   | 'description'
   | 'product'
   | 'affectedService'
+  | 'affectedUsers'
+  | 'businessImpact'
+  | 'urgency'
   | 'status'
   | 'priority'
   | 'source'
@@ -95,6 +98,9 @@ function toTicketReadModel(ticket: TicketRecord): TicketReadModel {
     description,
     product,
     affectedService,
+    affectedUsers,
+    businessImpact,
+    urgency,
     status,
     priority,
     source,
@@ -110,6 +116,9 @@ function toTicketReadModel(ticket: TicketRecord): TicketReadModel {
     ...(description === undefined ? {} : { description }),
     ...(product === undefined ? {} : { product }),
     ...(affectedService === undefined ? {} : { affectedService }),
+    ...(affectedUsers === undefined ? {} : { affectedUsers }),
+    ...(businessImpact === undefined ? {} : { businessImpact }),
+    ...(urgency === undefined ? {} : { urgency }),
     ...(status === undefined ? {} : { status }),
     ...(priority === undefined ? {} : { priority }),
     ...(source === undefined ? {} : { source }),

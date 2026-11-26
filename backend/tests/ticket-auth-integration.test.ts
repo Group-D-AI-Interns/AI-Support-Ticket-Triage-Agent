@@ -101,6 +101,12 @@ test('unified server authenticates tickets and enforces active organisation memb
     const administratorRole = roleBody.data.find((role) => role.id === 'organisation_admin');
     assert.ok(administratorRole?.permissions.some((permission) => permission.id === 'policies.candidates.review'));
     assert.ok(administratorRole?.permissions.some((permission) => permission.id === 'policies.activate'));
+    const agentRole = roleBody.data.find((role) => role.id === 'support_agent');
+    const leadRole = roleBody.data.find((role) => role.id === 'support_lead');
+    assert.ok(agentRole?.permissions.some((permission) => permission.id === 'tickets.escalate'));
+    assert.ok(!agentRole?.permissions.some((permission) => permission.id === 'tickets.escalations.read'));
+    assert.ok(leadRole?.permissions.some((permission) => permission.id === 'tickets.escalations.read'));
+    assert.ok(!leadRole?.permissions.some((permission) => permission.id === 'tickets.escalate'));
     const deniedActivation = await fetch(`${baseUrl}/api/v1/sla-policies/policy-a/versions/version-a/activate`, {
       method: 'POST',
       headers: { authorization: 'Bearer valid-user-a', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
@@ -114,13 +120,13 @@ test('unified server authenticates tickets and enforces active organisation memb
     const requesterCreate = await fetch(`${baseUrl}/api/v1/tickets`, {
       method: 'POST',
       headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
-      body: JSON.stringify({ title: 'Requester ticket', description: 'Created by requester' }),
+      body: JSON.stringify({ title: 'Requester ticket', description: 'Created by requester', affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' }),
     });
     assert.equal(requesterCreate.status, 201, 'requester has tickets.create.own');
     const agentCreate = await fetch(`${baseUrl}/api/v1/tickets`, {
       method: 'POST',
       headers: { authorization: 'Bearer valid-user-a', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
-      body: JSON.stringify({ title: 'Agent ticket', description: 'Should be denied' }),
+      body: JSON.stringify({ title: 'Agent ticket', description: 'Should be denied', affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' }),
     });
     assert.equal(agentCreate.status, 403, 'support agent is denied requester-only create permission');
 
@@ -148,6 +154,12 @@ test('unified server authenticates tickets and enforces active organisation memb
       body: JSON.stringify({ userId: 'lead', role: 'support_lead', status: 'active' }),
     });
     assert.equal(memberResponse.status, 200);
+    const agentMemberResponse = await fetch(`${baseUrl}/api/v1/teams/${team.id}/members`, {
+      method: 'PUT',
+      headers: { authorization: 'Bearer admin', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ userId: 'user-a', role: 'support_agent', status: 'active' }),
+    });
+    assert.equal(agentMemberResponse.status, 200);
     const ticketAssignment = await fetch(`${baseUrl}/api/v1/tickets/ticket-org-a`, {
       method: 'PATCH',
       headers: { authorization: 'Bearer admin', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
@@ -172,6 +184,41 @@ test('unified server authenticates tickets and enforces active organisation memb
       body: JSON.stringify({ teamId: outsideTeam.id }),
     });
     assert.equal(outOfScopeAssignment.status, 403, 'support leads cannot route tickets outside their active teams');
+
+    const createEscalation = await fetch(`${baseUrl}/api/v1/tickets/ticket-org-a/escalations`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer valid-user-a', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ reasonCode: 'BEYOND_AGENT_AUTHORITY', handoverNotes: 'Synthetic agent handover: troubleshooting completed; lead review requested.' }),
+    });
+    assert.equal(createEscalation.status, 201, 'support agent can escalate an accessible team ticket');
+    const agentEscalationQueue = await request('/api/v1/ticket-escalations', 'Bearer valid-user-a');
+    assert.equal(agentEscalationQueue.status, 403, 'support agent cannot inspect the lead escalation queue');
+    const leadEscalationQueue = await request('/api/v1/ticket-escalations', 'Bearer lead');
+    assert.equal(leadEscalationQueue.status, 200, 'support lead can read the escalation queue');
+    const escalationQueueBody = await leadEscalationQueue.json() as { data: Array<{ ticket: { id: string }; escalation: { escalatedBy: string; handoverNotes: string } }> };
+    assert.equal(escalationQueueBody.data.length, 1);
+    assert.equal(escalationQueueBody.data[0]?.ticket.id, 'ticket-org-a');
+    assert.equal(escalationQueueBody.data[0]?.escalation.escalatedBy, 'user-a');
+    assert.match(escalationQueueBody.data[0]?.escalation.handoverNotes ?? '', /Synthetic agent handover/);
+    const leadCannotEscalate = await fetch(`${baseUrl}/api/v1/tickets/ticket-org-a/escalations`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer lead', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ reasonCode: 'OTHER', handoverNotes: 'Lead should manage, not submit agent escalations.' }),
+    });
+    assert.equal(leadCannotEscalate.status, 403, 'support lead receives escalations rather than submitting them');
+    const escalationId = (await createEscalation.json() as { data: { id: string } }).data.id;
+    const resolvedEscalation = await fetch(`${baseUrl}/api/v1/tickets/ticket-org-a/escalations/${escalationId}/resolve`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer lead', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ resolutionNotes: 'Synthetic lead follow-up recorded.' }),
+    });
+    assert.equal(resolvedEscalation.status, 200, 'support lead can record follow-up and resolve an escalation');
+    const closedByAgent = await fetch(`${baseUrl}/api/v1/tickets/ticket-org-a/escalations/${escalationId}/resolve`, {
+      method: 'POST',
+      headers: { authorization: 'Bearer valid-user-a', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
+      body: JSON.stringify({ resolutionNotes: 'Agent cannot close lead escalation.' }),
+    });
+    assert.equal(closedByAgent.status, 403, 'support agent cannot close a lead-managed escalation');
 
     const reportFrom = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
     const reportTo = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
@@ -232,14 +279,14 @@ test('unified server authenticates tickets and enforces active organisation memb
       const repeatedCreate = await fetch(`${baseUrl}/api/v1/tickets`, {
         method: 'POST',
         headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
-        body: JSON.stringify({ title: `Rate limit ticket ${attempt}`, description: 'Synthetic rate-limit coverage' }),
+        body: JSON.stringify({ title: `Rate limit ticket ${attempt}`, description: 'Synthetic rate-limit coverage', affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' }),
       });
       assert.equal(repeatedCreate.status, 201);
     }
     const createLimited = await fetch(`${baseUrl}/api/v1/tickets`, {
       method: 'POST',
       headers: { authorization: 'Bearer requester', 'x-organisation-id': 'org-a', 'content-type': 'application/json' },
-      body: JSON.stringify({ title: 'Over-limit ticket', description: 'Must be rejected before persistence' }),
+      body: JSON.stringify({ title: 'Over-limit ticket', description: 'Must be rejected before persistence', affectedUsers: { scope: 'one_user' }, businessImpact: 'medium', urgency: 'medium' }),
     });
     assert.equal(createLimited.status, 429, 'ticket creation is limited per authenticated user and tenant');
     assert.ok(Number(createLimited.headers.get('retry-after')) > 0);

@@ -95,7 +95,7 @@ test('priority rules are versioned, tenant-scoped, source-verified, approved, an
   try {
     f.deps.prioritySource = async (tenant, documentId, versionId) => tenant.organisationId === 'org-a' && documentId === 'policy-doc' && versionId === 'policy-v1' ? { sha256: 'a'.repeat(64) } : null;
     const input = { sourceDocumentId: 'policy-doc', sourceDocumentVersionId: 'policy-v1', reason: 'Reviewed tenant policy', matrix: {
-      high: { high: 'P1', medium: 'P1', low: 'P2' }, medium: { high: 'P2', medium: 'P3', low: 'P3' }, low: { high: 'P3', medium: 'P4', low: 'P4' },
+      critical: { immediate: 'P1', high: 'P1', medium: 'P1', low: 'P2' }, high: { immediate: 'P1', high: 'P1', medium: 'P2', low: 'P2' }, medium: { immediate: 'P2', high: 'P2', medium: 'P3', low: 'P3' }, low: { immediate: 'P3', high: 'P3', medium: 'P4', low: 'P4' },
     } };
     const first = await f.ops.createPriorityPolicy(f.tenant, input);
     assert.equal(first.data.version, 1); assert.equal(first.data.status, 'draft');

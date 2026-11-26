@@ -126,9 +126,10 @@ function createService(options?: {
 }) {
   const logger = new TestLogger();
   const repository = options?.repository ?? new TestAnalysisRepository();
+  const inputs: Array<{ task: string; input: unknown }> = [];
   const provider = new DeterministicFakeProvider({
-    ticket_classification: () => options?.classification ?? classificationOutput,
-    ticket_summarization: () => options?.summary ?? summaryOutput,
+    ticket_classification: (input) => { inputs.push({ task: 'ticket_classification', input }); return options?.classification ?? classificationOutput; },
+    ticket_summarization: (input) => { inputs.push({ task: 'ticket_summarization', input }); return options?.summary ?? summaryOutput; },
   });
   const runner = new AiExecutionRunner(provider, logger, {
     model: 'test-model',
@@ -141,7 +142,7 @@ function createService(options?: {
     new TicketSummarizer(runner),
     repository,
   );
-  return { service, logger, repository };
+  return { service, logger, repository, inputs };
 }
 
 test('analyzes an authorized ticket with configured categories and saves one read-only result', async () => {
@@ -165,6 +166,22 @@ test('analyzes an authorized ticket with configured categories and saves one rea
   assert.equal((await service.listAnalyses(tenant, ticket.id)).length, 1);
   assert.equal(logger.events.length, 2);
   assert.ok(logger.events.every((event) => event.status === 'completed'));
+});
+
+test('classification and summarisation receive requester impact fields in the authorized ticket projection', async () => {
+  const context: TicketAiView = { ...ticket, product: 'Network Monitoring System', affectedService: 'Core Network Infrastructure',
+    affectedUsers: { scope: 'multiple_departments', count: 150 }, businessImpact: 'critical', urgency: 'immediate' };
+  const { service, inputs } = createService({ ticketView: context });
+  await service.analyze({ tenant, ticketId: context.id, categories });
+  for (const call of inputs) {
+    const ticketInput = (call.input as { ticket: Record<string, unknown> }).ticket;
+    assert.deepEqual(ticketInput.affectedUsers, { scope: 'multiple_departments', count: 150 });
+    assert.equal(ticketInput.businessImpact, 'critical');
+    assert.equal(ticketInput.urgency, 'immediate');
+    assert.equal(ticketInput.product, 'Network Monitoring System');
+    assert.equal(ticketInput.affectedService, 'Core Network Infrastructure');
+  }
+  assert.deepEqual(inputs.map(call => call.task), ['ticket_classification', 'ticket_summarization']);
 });
 
 test('summary requires a distinct affected-functionality field and accepts unknown as null', () => {

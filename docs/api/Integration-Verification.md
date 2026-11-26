@@ -322,8 +322,9 @@ ticket/triage data and authenticated agent, lead, requester and administrator in
 remains unverified; existing synthetic provider verification above is separate evidence.
 
 Escalation behavior is backed by ticket history: changing internal priority to P1 opens an
-escalation; support staff can manually escalate with a reason and handover note; only support
-leads and organisation administrators can record follow-up and close it. `GET /api/v1/ticket-escalations` returns only open records on tickets visible to the caller.
+escalation; support agents can manually escalate with a reason and handover note; only support
+leads and organisation administrators can read the queue, record follow-up, and close an item.
+`GET /api/v1/ticket-escalations` returns only open records on tickets visible to the caller.
 The focused `ticket-api.test.ts` regression covers P1 auto-open, agent manual escalation,
 lead queue visibility, requester denial, single-open conflict, closure and audit events.
 The source SLA document says its target table is illustrative and subject to management
@@ -924,3 +925,97 @@ integration checks were **5/5** in Phase 10. These are prior phase records, not 
 for this documentation-only update. Docker image builds and browser E2E remain unverified.
 See [`production-readiness.md`](../deployment/production-readiness.md) for Atlas, storage,
 scanning, workers, access, retention, telemetry and release blockers.
+
+#### Requester impact-aware ticket intake (25 November 2026)
+
+Extended authenticated ticket creation to capture the requester-selected affected-user scope,
+optional positive whole-number user count, business impact, and urgency. The API validates the
+documented enums and count without inferring missing counts; the saved ticket and ticket
+read/AI projections retain these values, including through the Mongo ticket adapter. The
+requester form submits the selected values and shows them on ticket details. Legacy records
+without the new attributes remain readable.
+
+The AI classifier and summarizer receive these structured fields alongside the original ticket
+text. Priority factors are evidence-validated against the ticket fields, and the priority is
+still determined only by a configured active matrix. A critical/immediate combination can map
+to P1 when that active matrix says so; a legacy matrix without those axes returns
+`insufficient_information` instead of downgrading it. Recommendations remain review-required,
+and no requester-selected field triggers an automatic priority mutation. Routing receives the
+expanded authorized ticket context while still applying only configured category/team rules.
+SLA remains governed by the approved policy and persisted ticket priority; this change does not
+invent SLA targets or calendar behavior.
+
+Focused synthetic checks passed **95/95** across ticket API, priority recommendation/matrix,
+AI-context propagation, routing context, and Mongo adapter suites. Frontend integration tests
+passed **6/6**; frontend type-check, backend type-check/build, and `git diff --check` passed.
+The compiled backend suite passed **259/261**; two integrated-app SLA evaluation assertions
+still return `unavailable` and remain open. The standard `tsx` runner could not start because
+the sandbox denied its child process with `spawn EPERM`, so backend tests were compiled and
+executed directly. Mongo adapter unit tests passed, but Atlas persistence was not exercised:
+`MONGODB_TEST_URI` is not configured, and the production `MONGODB_URI` was not used for test
+writes. No live provider calls or real-ticket changes were made.
+
+#### Support lead escalation access correction (25 November 2026)
+
+The unified server did not dispatch `/api/v1/ticket-escalations` to the ticket module, so the
+Support Lead screen received HTTP 404 despite the route existing in the module. Fixed route
+dispatch and separated the escalation permissions: agents may submit a handover with
+`tickets.escalate`; leads and administrators may read the team/tenant-scoped queue and resolve
+it with `tickets.escalations.read`. The Support Lead no longer sees the agent's escalation
+form. Handover, actor and time remain persisted on the ticket, with follow-up recorded in
+ticket audit history. Priority override continues to require reason and business justification,
+and existing ticket updates continue to enqueue SLA reevaluation against the active approved
+policy. The support dashboard now displays open/in-progress counts, P1-P4 totals, unassigned
+work, and (for leads) open escalations from role-scoped live API data.
+
+Synthetic HTTP verification passed for agent submission, lead queue visibility, role denial in
+both directions, and lead resolution. Frontend integration tests passed **11/11**; backend
+source-and-test type-check, source type-check, and build passed. The backend test files were
+compiled and executed directly because the `tsx` runner was blocked by sandbox `spawn EPERM`;
+the focused unified-auth integration test passed **1/1** and the ticket API suite passed **18/18**.
+The Vodacom escalation thresholds still require an approved SLA policy
+version and a configured IT Operations Manager recipient; no default target, calendar, or
+external notification was installed. Atlas and browser E2E were not used for this synthetic
+verification.
+
+#### Support Lead AI persistence and resolution recommendation reuse (25 November 2026)
+
+The local backend logs associated with `req_d13996da-67bd-486f-98c4-76123db959f8` (Analyse
+Ticket) and `req_24febd07-290b-495a-a38d-a8600e4a037e` (Full AI Triage) show that each request
+completed classification and summarisation with the Inception adapter, then returned HTTP 503
+with `STORAGE_INVALID_SCHEMA`. The request path and error category point to AI workflow metadata
+persistence rather than an LLM failure or missing ticket. Mongo stores workflow records with a
+storage `id`; the repository validated that full record using a strict domain schema that rejects
+unknown keys, so its Mongo-specific persisted-run validator could never accept a valid stored
+record. The repository now validates the storage ID separately from the strict workflow body and
+accepts both Mongo-shaped records and legacy JSON records on reads. Safe storage logs now include
+request ID, method, route, error category, and operation classification without logging ticket or
+provider output.
+
+Resolution recommendations now persist in the existing tenant-scoped `ai-operations` collection
+(kind `resolution_recommendation`). The validity key includes the complete authorized ticket
+projection, current authorized/effective retrieved evidence, resolution prompt version, configured
+provider identity and model. Completed structured results can be reused; failed or generating
+records cannot. A lease based on the configured maximum generation duration prevents concurrent
+duplicate provider calls. JSON storage coordinates tenant writes atomically; Mongo additionally
+uses a unique partial index on tenant, ticket and cache key for `generating` records, covering
+cross-process races. Other callers receive HTTP 409 `AI_EXECUTION_IN_PROGRESS`. Explicit regeneration uses
+`{ "regenerate": true, "reason": "..." }`, preserves earlier records, records the actor and
+optional reason, and increments the recommendation version. The frontend displays whether a saved
+recommendation was reused, its generated time/version/execution ID, and offers explicit
+regeneration. Full triage shares the same persistent resolution service.
+
+Focused compiled synthetic tests passed **28/28** across workflow persistence, retrieval,
+resolution validation, cache reuse after a service restart, explicit regeneration/history,
+concurrent duplicate prevention, invalid-cache retry, tenant scoping, Analyse Ticket API and Full
+AI Triage API. The API-level cache test confirms the same execution ID is returned on reopen, a
+new version is persisted only on explicit regeneration, and the cached result is still reused
+after the test server restarts. Backend source type-check and build passed; frontend integration
+tests passed **12/12**, with frontend type-check and lint passing. No Atlas writes, real ticket
+changes, live provider calls or browser-based Support Lead workflow were performed. The
+request-ID failures are explained by a deterministic strict-schema/storage-ID mismatch and fixed
+by a direct Mongo-shaped regression, but the original requests have not been re-run against the
+running Atlas-backed application. Live Atlas durability and real provider-call savings remain
+unverified. The full backend suite was not run; a compiled broad integrated-app pass has unrelated
+missing compiled fixture/OpenAPI paths and two SLA assertions returning `unavailable`, so only the
+focused relevant tests are counted here.

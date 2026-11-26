@@ -16,5 +16,12 @@ export async function loadAuthorizedTicket(source: AuthorizedTicketAnalysisSourc
   if (ticket.id !== ticketId || typeof ticket.title !== 'string' || !ticket.title.trim() || typeof ticket.description !== 'string') {
     throw new TicketAiAnalysisError('INVALID_TICKET_DATA', 'Ticket source returned an invalid AI ticket projection.');
   }
-  return { id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: ticket.description };
+  return {
+    id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: ticket.description,
+    ...(ticket.product === undefined ? {} : { product: ticket.product }),
+    ...(ticket.affectedService === undefined ? {} : { affectedService: ticket.affectedService }),
+    ...(ticket.affectedUsers === undefined ? {} : { affectedUsers: structuredClone(ticket.affectedUsers) }),
+    ...(ticket.businessImpact === undefined ? {} : { businessImpact: ticket.businessImpact }),
+    ...(ticket.urgency === undefined ? {} : { urgency: ticket.urgency }),
+  };
 }

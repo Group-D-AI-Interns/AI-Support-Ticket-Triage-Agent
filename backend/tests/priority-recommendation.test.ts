@@ -7,7 +7,7 @@ import { LlmProviderError, type StructuredGenerationProvider, type StructuredGen
 import { PriorityRecommender } from '../src/modules/ai/components/priority-recommender.js';
 import { PriorityRecommendationService } from '../src/modules/ai/priority-recommendation.service.js';
 import type { AiExecutionLogEvent } from '../src/modules/ai/ports.js';
-import type { TicketEvidence } from '../src/modules/ai/priority-contracts.js';
+import { validatePriorityFactors, type TicketEvidence } from '../src/modules/ai/priority-contracts.js';
 
 const policy = JSON.parse(await readFile(new URL('../data/reference/candidates/priority-policy.json', import.meta.url), 'utf8'));
 const tenant = { organisationId: 'org-a', userId: 'agent', roles: ['support_agent'] };
@@ -57,24 +57,89 @@ test('missing, uncertain and low-confidence evidence produces no priority', asyn
   }
 });
 
+test('priority agent applies the explicitly active four-axis policy to the requester selected impact and urgency', async () => {
+  const activeCandidate = {
+    ...policy,
+    schemaVersion: 2,
+    status: 'active',
+    matrix: {
+      critical: { immediate: 'P1', high: 'P1', medium: 'P1', low: 'P2' },
+      high: { immediate: 'P1', high: 'P2', medium: 'P2', low: 'P3' },
+      medium: { immediate: 'P2', high: 'P2', medium: 'P3', low: 'P4' },
+      low: { immediate: 'P3', high: 'P3', medium: 'P4', low: 'P4' },
+    },
+  };
+  const scenarios = [
+    { impact: 'critical', urgency: 'immediate', scope: 'multiple_departments', count: 150, description: 'Critical operations are unavailable with no workaround.', expected: 'P1' },
+    { impact: 'high', urgency: 'high', scope: 'multiple_users_one_department', count: 10, description: 'An important department service is disrupted.', expected: 'P2' },
+    { impact: 'medium', urgency: 'medium', scope: 'one_user', description: 'One user is affected and a temporary workaround is available.', expected: 'P3' },
+    { impact: 'low', urgency: 'low', scope: 'one_user', description: 'Minor inconvenience for one user.', expected: 'P4' },
+  ] as const;
+  for (const scenario of scenarios) {
+    const issue = { ...ticket, title: `Scenario ${scenario.expected}`, description: scenario.description,
+      affectedUsers: { scope: scenario.scope, ...('count' in scenario ? { count: scenario.count } : {}) },
+      businessImpact: scenario.impact, urgency: scenario.urgency };
+    const fake = new DeterministicFakeProvider({ ticket_priority_factors(input) {
+      const source = (input as { ticket: { id: string; title: string; businessImpact: string; urgency: string } }).ticket;
+      const cited = { ticketId: source.id, field: 'title', start: 0, end: source.title.length, excerpt: source.title };
+      const factor = (value: string) => ({ value, reason: `Requester selected ${value}; narrative is consistent.`, confidence: 0.95, evidence: [cited] });
+      return { impact: factor(source.businessImpact), urgency: factor(source.urgency), missingInformation: [], warnings: [] };
+    } });
+    const runner = new AiExecutionRunner(fake, { async record() {} }, { model: 'scenario-test', timeoutMs: 50, maxRetries: 0 });
+    const recommender = new PriorityRecommender(runner, null, 0.75, async () => ({ candidate: activeCandidate, status: 'active' }));
+    const result = await recommender.recommend(issue, tenant);
+    assert.equal(result.priority, scenario.expected);
+    assert.equal(result.status, 'recommendation');
+    assert.equal(result.policyStatus, 'active');
+    assert.equal(result.requiresHumanReview, true);
+    assert.match(result.factors.impact.reason, /selected/);
+  }
+});
+
+test('a provider contradiction with requester urgency becomes explicit uncertainty instead of a downgrade', () => {
+  const submitted = { ...ticket, businessImpact: 'high' as const, urgency: 'immediate' as const };
+  const result = validatePriorityFactors(output(), submitted);
+  assert.equal(result.impact.value, 'high');
+  assert.equal(result.urgency.value, null);
+  assert.equal(result.urgency.confidence, null);
+  assert.deepEqual(result.urgency.evidence, []);
+  assert.ok(result.missingInformation.some(item => item.includes('requester-selected urgency')));
+  assert.ok(result.warnings.includes('STRUCTURED_URGENCY_CONFLICT'));
+});
+
 test('supplies exact evidence offsets for Unicode, repeated sentences and whitespace without trusting model arithmetic', async () => {
   const snapshot = { ...ticket, description: '  😀 Users blocked.\n Users blocked. Users blocked.  No workaround exists!  ' };
   // Existing response deliberately declines; this test inspects the input contract.
   const declined = fixture({ impact: assessment(null), urgency: assessment(null), missingInformation: ['Business impact'], warnings: [] });
   await declined.recommender.recommend(snapshot);
   const request = declined.requests[0]!;
-  const input = request.input as { ticket: { title: string; description: string }; evidenceOptions: TicketEvidence[] };
+  const input = request.input as { ticket: Record<string, unknown>; evidenceOptions: TicketEvidence[] };
   assert.match(request.instructions, /Copy a relevant evidence option verbatim/);
   assert.ok(input.evidenceOptions.length > 1);
   for (const option of input.evidenceOptions) {
     assert.equal(option.ticketId, snapshot.id);
-    assert.equal(input.ticket[option.field].slice(option.start, option.end), option.excerpt);
+    assert.equal(String(input.ticket[option.field]).slice(option.start, option.end), option.excerpt);
     assert.ok(option.excerpt.trim());
   }
   const repeated = input.evidenceOptions.filter(option => option.excerpt === 'Users blocked.');
   assert.equal(repeated.length, 2);
   assert.notEqual(repeated[0]!.start, repeated[1]!.start);
   assert.equal(input.evidenceOptions.find(option => option.excerpt.startsWith('😀'))?.start, 2);
+});
+
+test('exposes requester impact and scope as exact priority evidence options', async () => {
+  const snapshot = { ...ticket, product: 'Network Monitoring System', affectedService: 'Core Network Infrastructure',
+    affectedUsers: { scope: 'multiple_departments' as const, count: 150 }, businessImpact: 'critical' as const, urgency: 'immediate' as const };
+  const f = fixture({ ...output(), impact: assessment(null), urgency: { ...assessment(null), value: null, evidence: [] }, missingInformation: ['Narrative review'], warnings: [] });
+  await f.recommender.recommend(snapshot);
+  const options = (f.requests[0]!.input as { evidenceOptions: TicketEvidence[] }).evidenceOptions;
+  for (const [field, excerpt] of [
+    ['product', 'Network Monitoring System'], ['affectedService', 'Core Network Infrastructure'],
+    ['affectedUsers.scope', 'multiple_departments'], ['affectedUsers.count', '150'],
+    ['businessImpact', 'critical'], ['urgency', 'immediate'],
+  ] as const) {
+    assert.ok(options.some(option => option.field === field && option.excerpt === excerpt));
+  }
 });
 
 test('rejects fabricated, cross-ticket, out-of-range and unsupported evidence', async () => {

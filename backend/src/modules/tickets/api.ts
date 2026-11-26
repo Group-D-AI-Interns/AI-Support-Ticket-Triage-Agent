@@ -44,7 +44,7 @@ import {
   KnowledgeRetriever,
   type AuthorizedKnowledgeSource,
 } from '../knowledge/retrieval.js';
-import { ResolutionRecommendationService } from '../ai/resolution-recommendation.service.js';
+import { ResolutionGenerationInProgressError, ResolutionRecommendationService } from '../ai/resolution-recommendation.service.js';
 import type { AuthorizedRoutingSource, VerifiedSlaInsightSource } from '../ai/team-capability-ports.js';
 import { AiOperationsStore } from '../ai/operations-store.js';
 import { AiOperationsService, AiOperationsError } from '../ai/operations-service.js';
@@ -384,6 +384,11 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         organisationId: ticket.organisationId,
         title: ticket.title,
         description: descriptionText(ticket.description),
+        ...(ticket.product === undefined ? {} : { product: ticket.product }),
+        ...(ticket.affectedService === undefined ? {} : { affectedService: ticket.affectedService }),
+        ...(ticket.affectedUsers === undefined ? {} : { affectedUsers: structuredClone(ticket.affectedUsers) }),
+        ...(ticket.businessImpact === undefined ? {} : { businessImpact: ticket.businessImpact }),
+        ...(ticket.urgency === undefined ? {} : { urgency: ticket.urgency }),
       };
     },
   };
@@ -406,6 +411,8 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   const priorityConfidence = priorityConfig?.minimumConfidence ?? priorityMinimumConfidence();
   const resolutionRunner = options.resolutionRunner ?? ticketAiRuntime?.priorityRunner;
   const baseKnowledge = options.knowledgeSource ?? new GovernedKnowledgeSource(policyRepository, tenantStore, authorization);
+  const operationFiles = options.fileStore ?? new JsonFileStore(dataDirectory);
+  const aiOperationStore = new AiOperationsStore(operationFiles);
   let operations: AiOperationsService;
   const knowledgeSource: AuthorizedKnowledgeSource = { async listAuthorizedDocuments(tenant) {
     return [...await baseKnowledge.listAuthorizedDocuments(tenant), ...await operations.listAuthorizedDocuments(tenant)];
@@ -417,6 +424,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         knowledgeSource,
       ),
       resolutionRunner,
+      aiOperationStore,
     )
     : null;
 
@@ -429,8 +437,6 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         revision: createHash('sha256').update(JSON.stringify(ticket)).digest('hex'),
         domain: { createdAt: ticket.createdAt, ...(ticket.priority === undefined ? {} : { priority: ticket.priority }), ...(ticket.teamId === undefined ? {} : { teamId: ticket.teamId }) } };
     }, tenant => authorization.permissionsFor(tenant.roles).has('configuration.manage'));
-  const operationFiles = options.fileStore ?? new JsonFileStore(dataDirectory);
-  const aiOperationStore = new AiOperationsStore(operationFiles);
   const operationTeams = new JsonTeamRepository(operationFiles);
   const canRunAi = (tenant: TenantContext) => ['tickets.ai.review', 'tickets.resolution.review'].every(permission =>
     authorization.permissionsFor(tenant.roles).has(permission as Permission));
@@ -447,7 +453,10 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       const caller = tenant as DevelopmentPrincipal;
       return ticket && Array.isArray(caller.teamIds) && canAccessTicket(caller, ticket) ? ticket : null;
     },
-    project: ticket => ({ id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: descriptionText(ticket.description) }),
+    project: ticket => ({ id: ticket.id, organisationId: ticket.organisationId, title: ticket.title, description: descriptionText(ticket.description),
+      ...(ticket.product === undefined ? {} : { product: ticket.product }), ...(ticket.affectedService === undefined ? {} : { affectedService: ticket.affectedService }),
+      ...(ticket.affectedUsers === undefined ? {} : { affectedUsers: structuredClone(ticket.affectedUsers) }),
+      ...(ticket.businessImpact === undefined ? {} : { businessImpact: ticket.businessImpact }), ...(ticket.urgency === undefined ? {} : { urgency: ticket.urgency }) }),
     teams: tenant => operationTeams.listTeams(tenant),
     can: (tenant, permission) => authorization.permissionsFor(tenant.roles).has(permission),
     teamIds: tenant => (tenant as DevelopmentPrincipal).teamIds ?? [],
@@ -474,13 +483,14 @@ export function createTicketApp(options: TicketAppOptions = {}) {
     ? new PriorityRecommender(priorityRunner, priorityConfig?.candidate ?? null, priorityConfidence, async tenant => {
       const record = await operations.activePriorityPolicy(tenant);
       if (!record) return priorityConfig ? { candidate: priorityConfig.candidate, status: 'draft' as const } : null;
-      return { status: 'active' as const, candidate: { schemaVersion: 1, status: 'draft', requiresHumanReview: true,
+      return { status: 'active' as const, candidate: { schemaVersion: Object.hasOwn(record.data.matrix, 'critical') ? 2 as const : 1 as const, status: 'active', requiresHumanReview: true,
         source: { documentId: record.data.sourceDocumentId, version: record.data.sourceDocumentVersionId,
           path: `tenant-document:${record.data.sourceDocumentId}`, sha256: record.data.sourceChecksumSha256, section: `Approved tenant priority policy v${record.data.version}` },
         matrix: record.data.matrix } };
     }) : null;
   const priorityService = dynamicPriorityRecommender ? new PriorityRecommendationService(ticketAiSource, dynamicPriorityRecommender) : null;
   const triageService = ticketAiRuntime?.createTriageService({ knowledge: knowledgeSource, sla: slaInsightSource,
+    ...(resolutionRunner ? { resolutionOperations: aiOperationStore } : {}),
     ...(resolutionRunner ? { resolutionRunner } : {}), ...(dynamicPriorityRecommender ? { priority: dynamicPriorityRecommender } : {}),
     routing: options.routingSource ?? { getAuthorizedRoutingContext: (tenant, ticket) => operations.getAuthorizedRoutingContext(tenant, ticket) },
   });
@@ -1314,11 +1324,17 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       'description',
       'product',
       'affectedService',
+      'affectedUsers',
+      'businessImpact',
+      'urgency',
     ]);
     const title = requiredText(body, 'title');
     const description = requiredText(body, 'description');
     const product = optionalText(body, 'product');
     const affectedService = optionalText(body, 'affectedService');
+    const affectedUsers = parseAffectedUsers(body.affectedUsers);
+    const businessImpact = enumValue(body, 'businessImpact', ['critical', 'high', 'medium', 'low'] as const);
+    const urgency = enumValue(body, 'urgency', ['immediate', 'high', 'medium', 'low'] as const);
     const activeWorkflow = await workflowStore.getActive(authenticated);
     const ticket = await store.createTicket(
       {
@@ -1334,6 +1350,9 @@ export function createTicketApp(options: TicketAppOptions = {}) {
         description,
         ...(product !== undefined ? { product } : {}),
         ...(affectedService !== undefined ? { affectedService } : {}),
+        affectedUsers,
+        businessImpact,
+        urgency,
       },
       authenticated,
     );
@@ -1377,7 +1396,9 @@ export function createTicketApp(options: TicketAppOptions = {}) {
   app.post('/api/v1/tickets/:ticketId/recommend-resolution', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
     requireSharedPermission(authenticated, authorization, 'tickets.resolution.review');
-    parseObjectBody(request.body ?? {}, []);
+    const body = parseObjectBody(request.body ?? {}, ['regenerate', 'reason']);
+    if (body.regenerate !== undefined && typeof body.regenerate !== 'boolean') throw validationError('regenerate', 'Regenerate must be a boolean.');
+    if (body.reason !== undefined && (typeof body.reason !== 'string' || body.reason.length > 2000)) throw validationError('reason', 'Reason must be at most 2000 characters.');
     response.setHeader('Cache-Control', 'no-store');
     if (!resolutionService) {
       throw new ApiError(
@@ -1390,9 +1411,13 @@ export function createTicketApp(options: TicketAppOptions = {}) {
       const result = await resolutionService.recommend(
         authenticated,
         routeParam(request, 'ticketId'),
+        { regenerate: body.regenerate === true, ...(typeof body.reason === 'string' ? { reason: body.reason } : {}) },
       );
       response.json({ data: result, requestId: requestId(response) });
     } catch (error) {
+      if (error instanceof ResolutionGenerationInProgressError) {
+        throw new ApiError(409, 'AI_EXECUTION_IN_PROGRESS', 'A resolution recommendation is already being generated. Try again shortly.');
+      }
       throw ticketAiApiError(error);
     }
   });
@@ -1544,7 +1569,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.get('/api/v1/ticket-escalations', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    if (!isSupportStaff(authenticated)) throw new ApiError(403, 'FORBIDDEN', 'Support staff access is required.');
+    requireSharedPermission(authenticated, authorization, 'tickets.escalations.read');
     const escalationStore = store as JsonTicketStore & {
       listOpenEscalatedTickets?: (tenant: TenantContext, scope: TicketReadScope) => Promise<TicketRecord[]>;
     };
@@ -1561,7 +1586,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.post('/api/v1/tickets/:ticketId/escalations', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    if (!isSupportStaff(authenticated)) throw new ApiError(403, 'FORBIDDEN', 'Support staff access is required.');
+    requireSharedPermission(authenticated, authorization, 'tickets.escalate');
     const ticket = await findAccessibleTicket(store, authenticated, routeParam(request, 'ticketId'));
     const body = parseObjectBody(request.body, ['reasonCode', 'handoverNotes']);
     const reasonCode = body.reasonCode;
@@ -1581,7 +1606,7 @@ export function createTicketApp(options: TicketAppOptions = {}) {
 
   app.post('/api/v1/tickets/:ticketId/escalations/:escalationId/resolve', async (request, response) => {
     const authenticated = authenticatedPrincipal(request, principal);
-    requireEscalationManager(authenticated);
+    requireEscalationManager(authenticated, authorization);
     const ticket = await findAccessibleTicket(store, authenticated, routeParam(request, 'ticketId'));
     const body = parseObjectBody(request.body, ['resolutionNotes']);
     const resolutionNotes = requiredText(body, 'resolutionNotes').trim();
@@ -2535,6 +2560,9 @@ function ticketResponse(
     ...(ticket.affectedService !== undefined
       ? { affectedService: ticket.affectedService }
       : {}),
+    ...('affectedUsers' in ticket && ticket.affectedUsers !== undefined ? { affectedUsers: ticket.affectedUsers } : {}),
+    ...('businessImpact' in ticket && ticket.businessImpact !== undefined ? { businessImpact: ticket.businessImpact } : {}),
+    ...('urgency' in ticket && ticket.urgency !== undefined ? { urgency: ticket.urgency } : {}),
     ...(ticket.teamId !== undefined ? { teamId: ticket.teamId } : {}),
     ...(ticket.status !== undefined ? { status: ticket.status } : {}),
     ...(ticket.priority !== undefined ? { priority: ticket.priority } : {}),
@@ -2652,6 +2680,29 @@ function optionalText(
   return value;
 }
 
+function enumValue<const T extends readonly string[]>(body: Record<string, unknown>, field: string, allowed: T): T[number] {
+  const value = body[field];
+  if (typeof value !== 'string' || !allowed.includes(value)) {
+    throw validationError(field, `Choose one of: ${allowed.join(', ')}.`);
+  }
+  return value;
+}
+
+function parseAffectedUsers(value: unknown): { scope: 'one_user' | 'small_group' | 'multiple_users_one_department' | 'multiple_departments' | 'organisation_wide'; count?: number } {
+  if (!isRecord(value)) throw validationError('affectedUsers', 'Affected-user scope is required.');
+  const unsupported = Object.keys(value).find(key => key !== 'scope' && key !== 'count');
+  if (unsupported) throw validationError(`affectedUsers.${unsupported}`, 'This field is not permitted.');
+  const scope = value.scope;
+  if (typeof scope !== 'string' || !['one_user', 'small_group', 'multiple_users_one_department', 'multiple_departments', 'organisation_wide'].includes(scope)) {
+    throw validationError('affectedUsers.scope', 'Choose a supported affected-user scope.');
+  }
+  const count = value.count;
+  if (count !== undefined && (typeof count !== 'number' || !Number.isSafeInteger(count) || count < 1)) {
+    throw validationError('affectedUsers.count', 'Enter a positive whole number of affected users, or leave it empty if unknown.');
+  }
+  return { scope: scope as 'one_user' | 'small_group' | 'multiple_users_one_department' | 'multiple_departments' | 'organisation_wide', ...(count === undefined ? {} : { count: count as number }) };
+}
+
 function queryString(request: Request, key: string): string | undefined {
   const value = request.query[key];
   if (value === undefined) {
@@ -2734,10 +2785,11 @@ function requireSlaEvidenceManager(principal: DevelopmentPrincipal): void {
   }
 }
 
-function requireEscalationManager(principal: DevelopmentPrincipal): void {
-  if (!principal.roles.includes('support_lead') && !principal.roles.includes('organisation_admin')) {
-    throw new ApiError(403, 'FORBIDDEN', 'Only a support lead or organisation administrator can close an escalation.');
-  }
+function requireEscalationManager(
+  principal: DevelopmentPrincipal,
+  authorization: RolePermissionPolicy,
+): void {
+  requireSharedPermission(principal, authorization, 'tickets.escalations.read');
 }
 
 function requireSharedPermission(
@@ -2957,7 +3009,7 @@ function isAiOperationRequest(request: Request): boolean {
 
 const errorHandler: ErrorRequestHandler = (
   error: unknown,
-  _request,
+  request,
   response,
   _next,
 ) => {
@@ -2974,11 +3026,21 @@ const errorHandler: ErrorRequestHandler = (
     return;
   }
   if (error instanceof JsonStorageError) {
-    console.error('Application data storage error', { code: error.code });
-    response.status(503).json({
+    const caller = (request as Request & { integratedPrincipal?: DevelopmentPrincipal }).integratedPrincipal;
+    const transient = error.code === 'STORAGE_IO_ERROR';
+    console.error('Application data storage error', {
+      requestId: id,
+      method: request.method,
+      path: request.path,
+      organisationId: caller?.organisationId ?? null,
+      ticketId: typeof request.params.ticketId === 'string' ? request.params.ticketId : null,
+      category: error.code === 'STORAGE_INVALID_SCHEMA' ? 'schema_validation' : error.code === 'STORAGE_INVALID_JSON' ? 'invalid_json' : 'storage_io',
+      operation: request.path.includes('/analyze') ? 'ticket_analysis_persistence' : request.path.includes('/triage') ? 'triage_persistence' : 'request_persistence',
+    });
+    response.status(transient ? 503 : 500).json({
       error: {
         code: error.code,
-        message: 'The application data store is temporarily unavailable.',
+        message: transient ? 'The application data store is temporarily unavailable.' : 'The request could not be completed because stored data failed validation.',
         requestId: id,
         fields: [],
       },

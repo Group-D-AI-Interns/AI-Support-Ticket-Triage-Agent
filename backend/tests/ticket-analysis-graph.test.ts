@@ -120,6 +120,32 @@ test('workflow metadata reads recheck source access after permission revocation'
   await assert.rejects(service.listAnalyses(tenant, ticket.id));
 });
 
+test('Mongo-shaped workflow documents retain their storage id and remain valid on save and read', async () => {
+  const byCollection = new Map<string, Record<string, unknown>[]>();
+  const store = {
+    rootDir: '.',
+    async updateTenant(name: string, organisationId: string, validate: (value: unknown) => value is { id: string; organisationId: string }, mutate: (records: { id: string; organisationId: string }[]) => unknown) {
+      const collection = byCollection.get(name) ?? [];
+      const tenantRecords = collection.filter(record => record.organisationId === organisationId);
+      assert.ok(tenantRecords.every(validate));
+      const result = mutate(tenantRecords as { id: string; organisationId: string }[]);
+      byCollection.set(name, [...collection.filter(record => record.organisationId !== organisationId), ...tenantRecords]);
+      return result;
+    },
+    async findRecords(name: string, validate: (value: unknown) => value is unknown, query: Record<string, unknown>) {
+      return (byCollection.get(name) ?? []).filter(record => validate(record) && Object.entries(query).every(([key, value]) => record[key] === value));
+    },
+  } as unknown as import('../src/infrastructure/persistence/json/json-file-store.js').JsonFileStorePort;
+  const repository = new JsonAiAnalysisRepository(store);
+  const f = fixture();
+  const service = new TicketAiAnalysisService({ async getAuthorizedTicket() { return ticket; } }, f.classifier, f.summarizer, repository);
+  const analysis = await service.analyze({ tenant, ticketId: ticket.id, categories });
+  const stored = byCollection.get('ai-workflow-runs.json')?.[0];
+  assert.equal(stored?.id, analysis.orchestration?.runId);
+  assert.equal((await repository.listWorkflowRuns(tenant, ticket.id)).length, 1);
+  assert.equal((await repository.listWorkflowRuns({ ...tenant, organisationId: 'org-b' }, ticket.id)).length, 0);
+});
+
 test('JSON history preserves legacy analyses and persists safe failed-run metadata with tenant isolation', async () => {
   const root = await mkdtemp(join(tmpdir(), 'ai-graph-history-'));
   try {

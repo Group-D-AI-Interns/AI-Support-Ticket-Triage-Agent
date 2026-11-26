@@ -7,6 +7,8 @@ import { AiExecutionRunner, AiExecutionError } from '../src/modules/ai/ai-execut
 import { DeterministicFakeProvider } from '../src/infrastructure/llm/deterministic-fake-provider.js';
 import { LlmProviderError } from '../src/infrastructure/llm/structured-generation-provider.js';
 import { JsonPolicyRepository } from '../src/modules/policies/repositories/json-policy.repository.js';
+import { AiOperationsStore } from '../src/modules/ai/operations-store.js';
+import { ResolutionGenerationInProgressError } from '../src/modules/ai/resolution-recommendation.service.js';
 import { createJsonTenantStore } from '../src/infrastructure/persistence/json/json-store.js';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -110,6 +112,70 @@ test('provider failures preserve safe runner errors and do not log ticket/eviden
   const f = fixture([document], 'failure');
   await assert.rejects(f.service.recommend(tenant, ticket.id), (error: unknown) => error instanceof AiExecutionError && !error.message.includes('secret'));
   assert.equal(JSON.stringify(f.events).includes(document.content), false);
+});
+
+test('recommendation is stored, reused across service restart, and regenerated as a new history row only on request', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'resolution-cache-'));
+  try {
+    const operations = new AiOperationsStore(new (await import('../src/infrastructure/persistence/json/json-file-store.js')).JsonFileStore(root));
+    const f = fixture();
+    const sourceAdapter = { async getAuthorizedTicket() { return ticket; } };
+    const firstService = new ResolutionRecommendationService(sourceAdapter, new KnowledgeRetriever(source()), f.runner, operations);
+    const first = await firstService.recommend(tenant, ticket.id);
+    assert.equal(first.cacheHit, false);
+    assert.equal(first.recommendationVersion, 1);
+    assert.equal(f.calls(), 1);
+
+    const second = await firstService.recommend(tenant, ticket.id);
+    assert.equal(second.cacheHit, true);
+    assert.equal(second.execution?.executionId, first.execution?.executionId);
+    assert.equal(f.calls(), 1);
+
+    const restarted = new ResolutionRecommendationService(sourceAdapter, new KnowledgeRetriever(source()), f.runner,
+      new AiOperationsStore(new (await import('../src/infrastructure/persistence/json/json-file-store.js')).JsonFileStore(root)));
+    assert.equal((await restarted.recommend(tenant, ticket.id)).cacheHit, true);
+    assert.equal(f.calls(), 1);
+
+    const regenerated = await restarted.recommend(tenant, ticket.id, { regenerate: true, reason: 'Reviewer requested a fresh recommendation.' });
+    assert.equal(regenerated.cacheHit, false);
+    assert.equal(regenerated.recommendationVersion, 2);
+    assert.equal(f.calls(), 2);
+    const history = (await operations.list(tenant.organisationId, 'resolution_recommendation')).filter(row => row.data.ticketId === ticket.id);
+    assert.equal(history.length, 2);
+    assert.ok(history.every(row => row.data.status === 'completed'));
+    assert.equal(history[1]?.data.regenerationReason, 'Reviewer requested a fresh recommendation.');
+    assert.equal((await operations.list('other-org', 'resolution_recommendation')).length, 0);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('concurrent opens share one in-flight generation and invalid failed cache rows are not reused', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'resolution-cache-concurrent-'));
+  try {
+    const { JsonFileStore } = await import('../src/infrastructure/persistence/json/json-file-store.js');
+    const operations = new AiOperationsStore(new JsonFileStore(root));
+    let calls = 0; let release!: () => void;
+    const gate = new Promise<void>(resolve => { release = resolve; });
+    const provider = new DeterministicFakeProvider({ async ticket_resolution(input) {
+      calls++; await gate;
+      const passage = (input as { evidence: Array<{ passageId: string; excerpt: string }> }).evidence[0]!;
+      return { summary: 'Review the runbook.', steps: [{ instruction: 'Verify account ownership.', citations: [{ passageId: passage.passageId, excerpt: passage.excerpt }] }], missingInformation: [], warnings: [] };
+    } });
+    const runner = new AiExecutionRunner(provider, { async record() {} }, { model: 'fixture-model', timeoutMs: 1000, maxRetries: 0 });
+    const service = new ResolutionRecommendationService({ async getAuthorizedTicket() { return ticket; } }, new KnowledgeRetriever(source()), runner, operations);
+    const first = service.recommend(tenant, ticket.id);
+    await new Promise(resolve => setTimeout(resolve, 15));
+    await assert.rejects(service.recommend(tenant, ticket.id), ResolutionGenerationInProgressError);
+    assert.equal(calls, 1);
+    release(); await first;
+    const completed = (await operations.list(tenant.organisationId, 'resolution_recommendation'))[0]!;
+    await operations.changeForOrganisation(tenant.organisationId, rows => {
+      const row = rows.find(item => item.id === completed.id)!;
+      if (row.kind === 'resolution_recommendation') { row.data.status = 'failed'; row.data.result = null; row.data.leaseUntil = null; }
+    });
+    const retried = await service.recommend(tenant, ticket.id);
+    assert.equal(retried.cacheHit, false);
+    assert.equal(calls, 2);
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 test('default policy source requires actual approval and current administrator visibility', async () => {
   const root = await mkdtemp(join(tmpdir(), 'policy-retrieval-'));
